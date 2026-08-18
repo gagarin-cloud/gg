@@ -1,0 +1,172 @@
+package main
+
+// Onboarding, from the CLI's side.
+//
+// `gg signup` and `gg auth` exist so a human never has to copy a secret and an
+// agent never has to hold one. The agent runs both; the human's only action
+// happens in their inbox.
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+)
+
+func cmdSignup(args []string) error {
+	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
+		return fmt.Errorf("usage: gg signup EMAIL\n" +
+			"  ask your human for their address — do not guess it")
+	}
+	var out struct {
+		Claim     string `json:"claim"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	body := map[string]string{"email": args[0], "client": clientName()}
+	if err := callAnon("POST", "/v1/signup", body, &out); err != nil {
+		return err
+	}
+	fmt.Printf(`asked %s to approve this machine.
+
+Tell your human to click the button in the email we just sent. It shows code %s,
+which should match this one. That single click creates the account and grants
+this machine access.
+
+Then run:
+  gg auth --claim %s
+`, args[0], out.Claim, out.Claim)
+	return nil
+}
+
+func cmdAuth(args []string) error {
+	claim := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-claim", "--claim":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--claim needs the code the signup call returned")
+			}
+			i++
+			claim = args[i]
+		default:
+			// Accept a bare code too: an agent that read the instructions may well
+			// try `gg auth ABCD-1234`, and refusing on syntax would be pedantry.
+			if claim == "" && !strings.HasPrefix(args[i], "-") {
+				claim = args[i]
+				continue
+			}
+			return fmt.Errorf("unknown flag %q", args[i])
+		}
+	}
+	if claim == "" {
+		// No code: say what to do rather than what is missing.
+		if creds, err := loadCredentials(); err == nil && creds.Credential != "" {
+			fmt.Printf("this machine already acts as %s (%s)\n", creds.Account, creds.Client)
+			fmt.Printf("to authorise it again: gg signup %s\n", creds.Account)
+			return nil
+		}
+		return fmt.Errorf("usage: gg auth --claim CODE\n" +
+			"  get a code first: gg signup <your human's email>")
+	}
+
+	fmt.Printf("waiting for a human to approve %s ...\n", claim)
+	// Polling, not a webhook: the CLI runs on a laptop behind NAT, and an agent
+	// harness will not host a callback. The control plane tells us how long to
+	// wait between attempts so the cadence is its decision, not ours.
+	deadline := time.Now().Add(12 * time.Minute)
+	for {
+		var out struct {
+			Status     string   `json:"status"`
+			Credential string   `json:"credential"`
+			Account    string   `json:"account"`
+			Client     string   `json:"client"`
+			Scopes     []string `json:"scopes"`
+			ExpiresAt  string   `json:"expires_at"`
+			API        string   `json:"api"`
+			RetryAfter int      `json:"retry_after"`
+		}
+		err := callAnon("POST", "/v1/claim", map[string]string{"claim": claim}, &out)
+		if err != nil {
+			return err
+		}
+		if out.Status == "approved" {
+			api := out.API
+			if api == "" {
+				api = apiBase()
+			}
+			path, err := saveCredentials(&credentials{
+				API:        api,
+				Credential: out.Credential,
+				Account:    out.Account,
+				Client:     out.Client,
+				Scopes:     out.Scopes,
+				ExpiresAt:  out.ExpiresAt,
+			})
+			if err != nil {
+				return fmt.Errorf("approved, but the credential could not be saved: %w", err)
+			}
+			fmt.Printf("\nthis machine now acts as %s\n", out.Account)
+			fmt.Printf("  credential stored in %s\n", path)
+			fmt.Printf("  it can %s — deleting anything needs a fresh approval\n",
+				strings.Join(out.Scopes, ", "))
+			fmt.Printf("\nnothing to export. try: gg status\n")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("nobody approved %s in time\n  ask your human to check their inbox, then: gg signup <email>", claim)
+		}
+		wait := time.Duration(out.RetryAfter) * time.Second
+		if wait <= 0 {
+			wait = 2 * time.Second
+		}
+		time.Sleep(wait)
+	}
+}
+
+func cmdWhoami() error {
+	var out struct {
+		Account    string   `json:"account"`
+		Client     string   `json:"client"`
+		Can        []string `json:"can"`
+		BaseDomain string   `json:"base_domain"`
+		Registry   string   `json:"registry"`
+		Platform   string   `json:"platform"`
+	}
+	if err := call("GET", "/v1/whoami", nil, &out); err != nil {
+		return err
+	}
+	fmt.Printf("account   %s\n", out.Account)
+	fmt.Printf("client    %s\n", out.Client)
+	fmt.Printf("can       %s\n", strings.Join(out.Can, ", "))
+	fmt.Printf("registry  %s\n", out.Registry)
+	fmt.Printf("platform  %s\n", out.Platform)
+	return nil
+}
+
+// clientName is what the approval email will call this machine. Named honestly:
+// the human is about to make a security decision from this string, so it should
+// say what is really asking, and where.
+func clientName() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "an unknown machine"
+	}
+	// Agent harnesses advertise themselves in the environment. Using that means
+	// the email says "Claude Code on viktor-mbp" rather than "gg".
+	for _, key := range []string{"CLAUDECODE", "CLAUDE_CODE", "CURSOR_AGENT", "AIDER", "GITHUB_ACTIONS"} {
+		if os.Getenv(key) == "" {
+			continue
+		}
+		switch key {
+		case "CLAUDECODE", "CLAUDE_CODE":
+			return "Claude Code on " + host
+		case "CURSOR_AGENT":
+			return "Cursor on " + host
+		case "AIDER":
+			return "Aider on " + host
+		case "GITHUB_ACTIONS":
+			return "GitHub Actions"
+		}
+	}
+	return "gg on " + host
+}

@@ -1,0 +1,38 @@
+# Release binaries for every platform a developer or CI runner is likely to use.
+#
+# The point of publishing binaries at all is the machine with no Go toolchain:
+# `go install` covers everyone else, and an agent told to install gg must have a
+# route that does not depend on what happens to be on the box.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    # Trim paths and drop the symbol table: nothing here needs a debugger, and a
+    # smaller binary is a faster install.
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "gg_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+# Checksums are not decoration. The install instructions tell agents to verify
+# them rather than trust a download, so they have to exist for every release.
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
