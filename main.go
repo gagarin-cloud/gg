@@ -220,12 +220,33 @@ func cmdInit(args []string) error {
 	if len(args) > 0 && args[0] != "" {
 		name = args[0]
 	}
-	var p struct{ Name string }
+	var p project
 	if err := call("POST", "/v1/projects", map[string]string{"name": name}, &p); err != nil {
 		return err
 	}
-	fmt.Printf("project %s created\n", p.Name)
+	// The id is printed because it is not cosmetic: image paths and hostnames are
+	// built from it, so a human reading this output has seen the thing they will
+	// meet again in a URL.
+	fmt.Printf("project %s created (id %s)\n", p.Name, p.ID)
 	return nil
+}
+
+// project is what the control plane calls a project. The name is the label a
+// human chose and is unique only within one account; the id is generated, global,
+// and what everything addressable is built from.
+type project struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+// resolveProject turns whatever the user typed — a name or an id — into the
+// project itself. The API accepts either in a URL, but a push has to happen
+// before anything is registered, and the registry path needs the id.
+func resolveProject(ref string) (project, error) {
+	var p project
+	err := call("GET", "/v1/projects/"+ref, nil, &p)
+	return p, err
 }
 
 type deployFlags struct {
@@ -343,7 +364,14 @@ func cmdDeploy(args []string) error {
 		return fmt.Errorf("no image registry: the control plane did not report one and GAGARIN_REGISTRY is not set")
 	}
 
-	tag := fmt.Sprintf("%s/%s/%s:%d", strings.TrimRight(registry, "/"), f.project, f.name, time.Now().Unix())
+	// The id, not the name: names are unique only within an account, so a registry
+	// path built from one would collide between tenants — and the control plane
+	// refuses an image that is not under this project's id.
+	p, err := resolveProject(f.project)
+	if err != nil {
+		return err
+	}
+	tag := fmt.Sprintf("%s/%s/%s:%d", strings.TrimRight(registry, "/"), p.ID, f.name, time.Now().Unix())
 
 	fmt.Printf("→ building %s for %s\n", tag, who.Platform)
 	if err := run("docker", "build", "--platform", who.Platform, "-t", tag, "."); err != nil {
@@ -389,8 +417,9 @@ func cmdDeploy(args []string) error {
 }
 
 type statusResp struct {
-	Project  string `json:"project"`
-	Services []struct {
+	Project   string `json:"project"`
+	ProjectID string `json:"project_id"`
+	Services  []struct {
 		Name     string `json:"name"`
 		Image    string `json:"image"`
 		Port     int    `json:"port"`
@@ -443,7 +472,7 @@ func cmdStatus(args []string) error {
 	if err := call("GET", "/v1/projects/"+project+"/status", nil, &st); err != nil {
 		return err
 	}
-	fmt.Printf("project %s\n\n", st.Project)
+	fmt.Printf("project %s (id %s)\n\n", st.Project, st.ProjectID)
 	if len(st.Services) == 0 {
 		fmt.Println("  no services yet")
 		return nil

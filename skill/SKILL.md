@@ -11,7 +11,10 @@ call the API. There is no manifest file, no config file, and nothing to commit.
 
 ## The model
 
-- A **project** owns everything. One project per application.
+- A **project** owns everything. One project per application. It has a **name**
+  you chose, unique only within your account, and an **id** gagarin generated —
+  eight characters — which is what image paths and public hostnames are built
+  from. Commands take either.
 - A project owns **services**. A service is a container image that runs.
   - `public` services get an HTTPS URL automatically.
   - private services get no URL, but are reachable from other services in the
@@ -189,9 +192,11 @@ Act on the `code`, not the prose.
 | `invalid_role` | roles are `editor` and `viewer` | `owner` cannot be granted — it is the account that pays |
 | `owner_not_a_member` | that address already owns the project | nothing to do; they have full access |
 | `member_not_found` | that address has no access to remove | `gg members <project>` to see who does |
-| `project_exists` | name taken | deploy into it, or pick another name |
-| `invalid_name` | not a valid DNS label | lowercase letters, digits, hyphens; start with a letter; 2–30 chars |
+| `project_exists` | you already have a project with that name | deploy into it, or pick another name; names only have to be unique within your own account |
+| `invalid_name` | not a usable name | lowercase letters, digits, hyphens; start with a letter; 2–30 chars |
 | `image_required` | no image given | push an image first |
+| `image_not_yours` | the image is not in this project's registry space | push to this project and deploy that; `gg deploy` handles the path for you |
+| `invalid_digest` | the digest is not a sha256 one | pass what `docker push` reported, or leave it out |
 | `invalid_port` | port out of range | set the port the container actually listens on |
 | `apply_failed` | desired state saved, cluster update failed | retry the same command; it is idempotent |
 | `cluster_error` | gagarin could not reach infrastructure | not your fault; report it to the user |
