@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -93,7 +92,8 @@ func usage() {
   gg unshare EMAIL [project]     take that access away
   gg members [project]           who can reach a project, and as what
   gg destroy [project]           delete the project and everything in it
-  gg registry-login              log docker in to the gagarin registry
+  gg registry-login              log docker in to the gagarin registry, using
+                                 the credential this machine already holds
   gg skill install               install the agent skill (Claude Code) so your
                                  agent knows how to use gagarin
   gg version                     which gg this is
@@ -104,7 +104,7 @@ nothing to export.
 Environment (overrides the file; meant for CI):
   GAGARIN_API      control plane URL (default %s)
   GAGARIN_TOKEN    a credential, for CI where no human can click a link
-  GAGARIN_REGISTRY registry prefix, e.g. cr.yandex/crpsduigtkk4qgrcvjgu
+  GAGARIN_REGISTRY registry host, e.g. registry.gagarin.cloud
 `, defaultAPI)
 }
 
@@ -641,36 +641,36 @@ func cmdRegistryLogin() error {
 		return fmt.Errorf("no image registry: the control plane did not report one and GAGARIN_REGISTRY is not set")
 	}
 	host := strings.SplitN(registry, "/", 2)[0]
-	// A local registry needs no login, and docker trusts localhost over plain HTTP
-	// already. Saying so and succeeding is better than failing on a missing `yc`:
-	// this step is in the instructions an agent follows, and an error here reads as
-	// "gagarin is broken" when in fact there is nothing to do.
-	if isLocalRegistry(host) {
-		fmt.Printf("%s is a local registry; docker needs no login for it\n", host)
-		return nil
-	}
-	tok, err := runCapture("yc", "iam", "create-token")
+
+	// The gagarin credential IS the registry credential.
+	//
+	// This used to shell out to `yc iam create-token` and log in as `iam`, which
+	// meant pushing required the user's own Yandex Cloud account — so it worked
+	// for exactly one person, and not at all for anybody who signed up with an
+	// email address. gagarin runs its own registry now and gagarind is its auth
+	// realm: docker presents this credential, the token server exchanges it for a
+	// short-lived token scoped to the projects this account can reach, and
+	// nothing in the path knows what a Yandex is.
+	//
+	// There used to be a special case here that skipped login for a localhost
+	// registry, on the grounds that the dev harness had no accounts in it. It
+	// does now — it runs the same registry with the same auth — so the special
+	// case described a configuration that no longer exists.
+	_, secret, err := resolveAuth()
 	if err != nil {
-		return fmt.Errorf("could not mint a registry token: %w", err)
+		return err
 	}
-	cmd := exec.Command("docker", "login", "--username", "iam", "--password-stdin", host)
-	cmd.Stdin = strings.NewReader(strings.TrimSpace(tok))
+
+	// The username is not an identity: gagarin authenticates the password alone.
+	// docker requires one anyway, and a constant reads better than a blank.
+	cmd := exec.Command("docker", "login", "--username", "gagarin", "--password-stdin", host)
+	cmd.Stdin = strings.NewReader(secret)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		return err
+		return fmt.Errorf("docker login to %s failed: %w\n  hint: if it says the credential is not valid, run `gg auth`", host, err)
 	}
 	fmt.Printf("docker logged in to %s\n", host)
 	return nil
-}
-
-// isLocalRegistry reports whether a registry host is one docker already treats as
-// insecure-by-default, which is exactly the set that needs no credentials.
-func isLocalRegistry(host string) bool {
-	h, _, err := net.SplitHostPort(host)
-	if err != nil {
-		h = host
-	}
-	return h == "localhost" || h == "127.0.0.1" || h == "::1"
 }
 
 // ---- shell helpers ------------------------------------------------------

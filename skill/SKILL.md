@@ -74,9 +74,9 @@ delete anything**: see "Destroying things" below.
 You never handle the credential yourself, and you should not read that file or
 echo it anywhere. If a command needs authorisation it will say so.
 
-Then `gg registry-login` once per machine, so `docker` can push. Against a local
-registry it will tell you there is nothing to log in to; that is success, not a
-failure to work around.
+Then `gg registry-login` once per machine, so `docker` can push. It uses the
+credential this machine already holds — there is no second account, and nothing
+to type. If it reports that the credential is not valid, run `gg auth`.
 
 ## Deploying a project
 
