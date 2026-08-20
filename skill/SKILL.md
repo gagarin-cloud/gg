@@ -136,6 +136,13 @@ ordinary environment variable.
 
 ## Reading state
 
+`gg projects` lists every project this account can reach — its own and those
+shared with it — with the role held on each: `owner`, `editor` or `viewer`. Run
+it before assuming a project exists or that you may deploy to it; a `viewer`
+role means deploys will be refused, and that is worth knowing before the
+attempt, not after. Names are unique only within one account, so two rows can
+share a name — the id column is what tells them apart.
+
 `gg status` reports **desired state and actual cluster state side by side**. A
 service marked `*` agrees; one marked `!` does not. Trust `gg status` over your
 own memory of what you deployed — it reads the cluster, not just the database.

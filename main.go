@@ -35,6 +35,8 @@ func main() {
 		err = cmdWhoami()
 	case "init":
 		err = cmdInit(os.Args[2:])
+	case "projects":
+		err = cmdProjects()
 	case "deploy":
 		err = cmdDeploy(os.Args[2:])
 	case "status":
@@ -74,6 +76,7 @@ func usage() {
   gg auth --claim CODE           wait for that approval and store credentials
   gg whoami                      which account this machine acts as
   gg init [project]              create a project (defaults to directory name)
+  gg projects                    every project you can reach, and your role on it
   gg deploy [flags]              build, push, and run the current directory
       -project NAME              project to deploy into (default: directory name)
       -name NAME                 service name (default: directory name)
@@ -238,6 +241,30 @@ type project struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Role string `json:"role"`
+}
+
+func cmdProjects() error {
+	var out struct {
+		Projects []project `json:"projects"`
+	}
+	if err := call("GET", "/v1/projects", nil, &out); err != nil {
+		return err
+	}
+	if len(out.Projects) == 0 {
+		fmt.Println("no projects yet; `gg init` creates one")
+		return nil
+	}
+	// The id is not cosmetic: names are unique only within one account, so a
+	// project somebody shared can carry the same name as your own — the id is
+	// what tells them apart, and what image paths and hostnames are built from.
+	for _, p := range out.Projects {
+		role := p.Role
+		if role == "owner" {
+			role = "owner (pays for it)"
+		}
+		fmt.Printf("%-30s  %-10s  %s\n", p.Name, p.ID, role)
+	}
+	return nil
 }
 
 // resolveProject turns whatever the user typed — a name or an id — into the
