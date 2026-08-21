@@ -21,7 +21,10 @@ call the API. There is no manifest file, no config file, and nothing to commit.
     same project by name: `http://worker:8080`.
 - A project owns **resources** (databases and similar). Not yet available.
 - Gagarin runs images **only from its own registry**. Pushing an image never
-  deploys it — those are separate steps on purpose.
+  deploys it — those are separate steps on purpose. To run something you did not
+  build — postgres, redis, anything public — copy it in first:
+  `gg registry copy postgres:17-alpine`. Do not write a one-line Dockerfile that
+  only says `FROM`; that is the same thing, worse.
 
 Gagarin itself holds the source of truth for all of this. Do not try to write
 config into the repository; it will not be read.
@@ -74,7 +77,7 @@ delete anything**: see "Destroying things" below.
 You never handle the credential yourself, and you should not read that file or
 echo it anywhere. If a command needs authorisation it will say so.
 
-Then `gg registry-login` once per machine, so `docker` can push. It uses the
+Then `gg registry login` once per machine, so `docker` can push. It uses the
 credential this machine already holds — there is no second account, and nothing
 to type. If it reports that the credential is not valid, run `gg auth`.
 

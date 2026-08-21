@@ -50,6 +50,11 @@ func main() {
 		err = cmdMembers(os.Args[2:])
 	case "destroy":
 		err = cmdDestroy(os.Args[2:])
+	case "registry":
+		err = cmdRegistry(os.Args[2:])
+	// The old spelling, kept working and kept out of the help. The published
+	// agent skill in the wild still says it, and a skill is not something we can
+	// update on somebody else's machine.
 	case "registry-login":
 		err = cmdRegistryLogin()
 	case "skill":
@@ -84,6 +89,10 @@ func usage() {
       -env K=V                   set an env var (repeatable)
       -env-file PATH             read KEY=VALUE lines from a file (repeatable;
                                  later files win, -env flags win over all files)
+      -volume PATH               keep this directory across restarts, e.g.
+                                 /var/lib/postgresql/data. Set once, at the first
+                                 deploy; a later deploy cannot move or resize it
+      -volume-size GB            how big it may get (default 10)
   gg status [project]            desired vs actual state for every service
   gg logs SERVICE [project]      recent logs
   gg share EMAIL [project]       give somebody access to a project
@@ -92,8 +101,13 @@ func usage() {
   gg unshare EMAIL [project]     take that access away
   gg members [project]           who can reach a project, and as what
   gg destroy [project]           delete the project and everything in it
-  gg registry-login              log docker in to the gagarin registry, using
+  gg registry login              log docker in to the gagarin registry, using
                                  the credential this machine already holds
+  gg registry copy IMAGE         copy a public image into this project's space,
+                                 so gagarin can run it
+      -project NAME              project to copy into (default: directory name)
+      -name NAME                 repository to copy it to (default: the image's
+                                 own name)
   gg skill install               install the agent skill (Claude Code) so your
                                  agent knows how to use gagarin
   gg version                     which gg this is
@@ -282,6 +296,12 @@ type deployFlags struct {
 	port    int
 	private bool
 	env     map[string]string
+	// A directory that survives a restart, and how big it may get. Set once, when
+	// the service is created; gagarin refuses to change it on a later deploy,
+	// because moving a volume abandons the data at the old path and resizing one
+	// can destroy a filesystem.
+	volumePath   string
+	volumeSizeGB int
 }
 
 func parseDeploy(args []string) (*deployFlags, error) {
@@ -316,6 +336,14 @@ func parseDeploy(args []string) (*deployFlags, error) {
 			}
 		case "-private", "--private":
 			f.private = true
+		case "-volume", "--volume":
+			if v, err = next(); err == nil {
+				f.volumePath = v
+			}
+		case "-volume-size", "--volume-size":
+			if v, err = next(); err == nil {
+				_, err = fmt.Sscanf(v, "%d", &f.volumeSizeGB)
+			}
 		case "-env", "--env":
 			if v, err = next(); err == nil {
 				k, val, ok := strings.Cut(v, "=")
@@ -408,7 +436,7 @@ func cmdDeploy(args []string) error {
 	fmt.Printf("→ pushing\n")
 	pushOut, err := runCapture("docker", "push", tag)
 	if err != nil {
-		return fmt.Errorf("docker push failed: %w\n  hint: run `gg registry-login` first", err)
+		return fmt.Errorf("docker push failed: %w\n  hint: run `gg registry login` first", err)
 	}
 	digest := parseDigest(pushOut)
 
@@ -419,6 +447,14 @@ func cmdDeploy(args []string) error {
 		"port":   f.port,
 		"public": !f.private,
 		"env":    f.env,
+	}
+	// Only sent when asked for. An absent volume and a volume of zero size are
+	// different requests, and the control plane refuses the second.
+	if f.volumePath != "" {
+		body["volume_path"] = f.volumePath
+		if f.volumeSizeGB > 0 {
+			body["volume_size_gb"] = f.volumeSizeGB
+		}
 	}
 	var svc struct {
 		Name string `json:"name"`
