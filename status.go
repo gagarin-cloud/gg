@@ -153,7 +153,7 @@ func printStatusTable(st statusResp) {
 		notes = append(notes, "◐ starting")
 	}
 	if seen["out-of-sync"] {
-		notes = append(notes, "○ not what was asked for")
+		notes = append(notes, "○ failing")
 	}
 	fmt.Printf("\n  %s\n", strings.Join(notes, "   "))
 

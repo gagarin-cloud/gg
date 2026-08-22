@@ -43,7 +43,17 @@ function style() {
         shape: "round-rectangle",
         width: 162, height: 58,
         "background-color": css("--panel"),
-        "border-width": 1.5,
+        // A broken border is the default because private is the default. Colour
+        // says how the service is doing; the border style says who can reach it.
+        // Keeping those on two independent channels is what lets one glance
+        // answer both.
+        //
+        // An explicit pattern rather than the `dotted` preset, whose dots are
+        // short enough at this weight to read as stippling instead of as a line
+        // deliberately broken up.
+        "border-width": 2,
+        "border-style": "dashed",
+        "border-dash-pattern": [7, 5],
         "border-color": (n) => colourOf[n.data("state")](),
         label: (n) => n.data("label"),
         "text-wrap": "wrap",
@@ -55,19 +65,20 @@ function style() {
       },
     },
     {
-      // Dashed border for a service that is not doing what it was told. Colour
-      // alone would leave the distinction invisible to a good number of readers.
-      selector: 'node[state = "out-of-sync"]',
-      style: { "border-style": "dashed" },
-    },
-    {
+      // Solid means the internet can reach it. An unbroken line for something
+      // exposed and a broken one for something enclosed is the way round that
+      // needs no explaining.
       selector: "node.public",
-      style: { "background-color": css("--panel2") },
+      style: { "border-style": "solid" },
     },
     {
-      selector: "node:selected",
-      style: { "border-width": 3, "overlay-opacity": 0 },
+      // Border style is spoken for, so a failing service is called out by weight
+      // instead. Colour alone would put this beyond a fair number of readers,
+      // and it is the one state nobody can afford to miss.
+      selector: 'node[state = "out-of-sync"]',
+      style: { "border-width": 3 },
     },
+    { selector: "node:selected", style: { "overlay-opacity": 0 } },
     {
       selector: "edge",
       style: {
@@ -264,16 +275,29 @@ function wire() {
   document.getElementById("fit").onclick = fit;
 }
 
+// Two keys, because there are two channels and conflating them in one row is
+// what makes a legend look like a list of unrelated facts. Only states actually
+// on screen are named — a key explaining a colour nobody can see is how readers
+// learn to skip keys.
 function legend(st) {
-  const seen = new Set((st.services || []).map(stateOf));
-  const bits = [];
+  const svcs = st.services || [];
+  const seen = new Set(svcs.map(stateOf));
   const chip = (v, label) => '<span><i style="background:' + v + '"></i>' + label + "</span>";
-  if (seen.has("running")) bits.push(chip(css("--ok"), "running"));
-  if (seen.has("starting")) bits.push(chip(css("--warn"), "starting"));
-  if (seen.has("out-of-sync")) bits.push(chip(css("--bad"), "not what was asked for"));
-  bits.push("<span>→ reaches</span>");
-  bits.push("<span>hover a service · click a public one</span>");
-  document.getElementById("legend").innerHTML = bits.join("");
+
+  const health = [];
+  if (seen.has("running")) health.push(chip(css("--ok"), "running"));
+  if (seen.has("starting")) health.push(chip(css("--warn"), "starting"));
+  if (seen.has("out-of-sync")) health.push(chip(css("--bad"), "failing"));
+
+  const reach = [];
+  if (svcs.some((s) => s.public)) reach.push('<span><b class="k solid"></b>public</span>');
+  if (svcs.some((s) => !s.public)) reach.push('<span><b class="k dotted"></b>private</span>');
+  reach.push("<span>→ reaches</span>");
+
+  const grp = (inner) => '<div class="grp">' + inner + '</div>';
+  document.getElementById("legend").innerHTML =
+    grp(health.join("")) + grp(reach.join("")) +
+    grp('<span>hover a service · click a public one</span>');
 }
 
 function setLive(cls, txt) {

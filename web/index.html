@@ -61,6 +61,18 @@
     backdrop-filter:blur(6px); padding:8px 12px; border-radius:8px; border:1px solid var(--line);
   }
   .legend i { width:9px; height:9px; border-radius:2px; display:inline-block; margin-right:6px; }
+  /* The border key draws the thing it describes rather than naming it, so the
+     reader matches a shape to a shape instead of holding a word in their head. */
+  .legend .k {
+    width:16px; height:0; display:inline-block; margin-right:7px;
+    vertical-align:middle; border-top-width:2px; border-top-color:var(--dim);
+  }
+  .legend .k.solid  { border-top-style:solid; }
+  .legend .k.dotted { border-top-style:dashed; }
+  /* Groups read as separate keys, divided rather than run together — one long
+     row of chips looks like a list of unrelated facts. */
+  .legend .grp { display:flex; gap:14px; align-items:center; }
+  .legend .grp + .grp { padding-left:14px; border-left:1px solid var(--line); }
   /* One line at any sane window width. It was three ragged right-aligned lines
      with "hangs." orphaned on the last one, which read as a layout fault and
      drew the eye for the wrong reason. balance keeps it even if it ever does
