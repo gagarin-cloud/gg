@@ -202,9 +202,15 @@ role means deploys will be refused, and that is worth knowing before the
 attempt, not after. Names are unique only within one account, so two rows can
 share a name — the id column is what tells them apart.
 
-`gg status` reports **desired state and actual cluster state side by side**. A
-service marked `*` agrees; one marked `!` does not. Trust `gg status` over your
-own memory of what you deployed — it reads the cluster, not just the database.
+`gg status` reports **desired state and actual cluster state side by side**, one
+row per service, ending with what each one reaches. A service marked `●` agrees
+with what was asked for; one marked `○` does not, and the cluster's own
+explanation is printed underneath. Trust `gg status` over your own memory of what
+you deployed — it reads the cluster, not just the database.
+
+`gg status -visual` opens the same thing in a browser as a dependency graph. That
+is for the human, not for you: offer it when someone is trying to understand how
+their services fit together, and read the plain output yourself.
 
 Describe services to the user at the same altitude gagarin does: "web is a
 public service on port 8080, reachable at <url>; worker is private." Do not

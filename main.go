@@ -98,6 +98,8 @@ func usage() {
                                  deploy; a later deploy cannot move or resize it
       -volume-size GB            how big it may get (default 10)
   gg status [project]            desired vs actual state for every service
+      -visual                    draw it instead: opens a browser on a live
+                                 dependency graph of the project
   gg logs SERVICE [project]      recent logs
   gg share EMAIL [project]       give somebody access to a project
       -role editor|viewer        editor deploys and manages but cannot delete
@@ -498,23 +500,31 @@ func cmdDeploy(args []string) error {
 }
 
 type statusResp struct {
-	Project   string `json:"project"`
-	ProjectID string `json:"project_id"`
-	Services  []struct {
-		Name     string `json:"name"`
-		Image    string `json:"image"`
-		Port     int    `json:"port"`
-		Public   bool   `json:"public"`
-		URL      string `json:"url"`
-		InSync   bool   `json:"in_sync"`
-		Sentence string `json:"sentence"`
-		Actual   struct {
-			Exists  bool   `json:"exists"`
-			Ready   int32  `json:"ready_replicas"`
-			Desired int32  `json:"desired_replicas"`
-			Message string `json:"message"`
-		} `json:"actual"`
-	} `json:"services"`
+	Project   string          `json:"project"`
+	ProjectID string          `json:"project_id"`
+	Services  []serviceStatus `json:"services"`
+}
+
+// Named rather than anonymous so the renderers in status.go can take one.
+type serviceStatus struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	Port  int    `json:"port"`
+	// What this service is allowed to reach. Server-side truth: it is the same
+	// list that decides whether the packets arrive, not a description of it.
+	Needs        []string `json:"needs"`
+	Public       bool     `json:"public"`
+	URL          string   `json:"url"`
+	VolumePath   string   `json:"volume_path"`
+	VolumeSizeGB int      `json:"volume_size_gb"`
+	InSync       bool     `json:"in_sync"`
+	Sentence     string   `json:"sentence"`
+	Actual       struct {
+		Exists  bool   `json:"exists"`
+		Ready   int32  `json:"ready_replicas"`
+		Desired int32  `json:"desired_replicas"`
+		Message string `json:"message"`
+	} `json:"actual"`
 }
 
 func waitReady(project, service string, d time.Duration) error {
@@ -545,33 +555,28 @@ func waitReady(project, service string, d time.Duration) error {
 }
 
 func cmdStatus(args []string) error {
-	project := defaultName()
-	if len(args) > 0 && args[0] != "" {
-		project = args[0]
+	visual := false
+	rest := make([]string, 0, len(args))
+	for _, a := range args {
+		if a == "-visual" || a == "--visual" {
+			visual = true
+			continue
+		}
+		rest = append(rest, a)
 	}
+	project := defaultName()
+	if len(rest) > 0 && rest[0] != "" {
+		project = rest[0]
+	}
+	if visual {
+		return serveVisual(project)
+	}
+
 	var st statusResp
 	if err := call("GET", "/v1/projects/"+project+"/status", nil, &st); err != nil {
 		return err
 	}
-	fmt.Printf("project %s (id %s)\n\n", st.Project, st.ProjectID)
-	if len(st.Services) == 0 {
-		fmt.Println("  no services yet")
-		return nil
-	}
-	for _, s := range st.Services {
-		mark := "!"
-		if s.InSync {
-			mark = "*"
-		}
-		fmt.Printf("  %s %s\n", mark, s.Sentence)
-		fmt.Printf("      image   %s\n", s.Image)
-		fmt.Printf("      cluster %d/%d ready", s.Actual.Ready, s.Actual.Desired)
-		if s.Actual.Message != "" {
-			fmt.Printf("  (%s)", s.Actual.Message)
-		}
-		fmt.Println()
-	}
-	fmt.Println()
+	printStatusTable(st)
 	return nil
 }
 
