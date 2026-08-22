@@ -10,11 +10,11 @@ and nothing about your deployment lives in your repository.
 ## Install
 
 ```
-go install github.com/vikar-ltd/gg@latest
+go install github.com/gagarin-cloud/gg@latest
 ```
 
 Or take a binary for your platform from
-[releases](https://github.com/vikar-ltd/gg/releases). Every release publishes
+[releases](https://github.com/gagarin-cloud/gg/releases). Every release publishes
 checksums; verify them. There is deliberately no `curl | bash` one-liner.
 
 Then, if you use an agent:
