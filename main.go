@@ -89,6 +89,10 @@ func usage() {
       -env K=V                   set an env var (repeatable)
       -env-file PATH             read KEY=VALUE lines from a file (repeatable;
                                  later files win, -env flags win over all files)
+      -needs NAME                another service in this project that this one
+                                 calls (repeatable). Nothing else can reach it.
+                                 Replaced on every deploy, like -env: pass every
+                                 service you still call, or the call stops working
       -volume PATH               keep this directory across restarts, e.g.
                                  /var/lib/postgresql/data. Set once, at the first
                                  deploy; a later deploy cannot move or resize it
@@ -101,6 +105,8 @@ func usage() {
   gg unshare EMAIL [project]     take that access away
   gg members [project]           who can reach a project, and as what
   gg destroy [project]           delete the project and everything in it
+      -service NAME              delete just this one service instead. Refused
+                                 while another service still -needs it
   gg registry login              log docker in to the gagarin registry, using
                                  the credential this machine already holds
   gg registry copy IMAGE         copy a public image into this project's space,
@@ -302,6 +308,11 @@ type deployFlags struct {
 	// can destroy a filesystem.
 	volumePath   string
 	volumeSizeGB int
+	// The services this one calls. Nothing else in the project can reach it, so
+	// an undeclared dependency does not fail loudly — it times out. Replaced
+	// wholesale on every deploy, exactly like env: a redeploy that omits a name
+	// withdraws it.
+	needs []string
 }
 
 func parseDeploy(args []string) (*deployFlags, error) {
@@ -336,6 +347,10 @@ func parseDeploy(args []string) (*deployFlags, error) {
 			}
 		case "-private", "--private":
 			f.private = true
+		case "-needs", "--needs":
+			if v, err = next(); err == nil {
+				f.needs = append(f.needs, v)
+			}
 		case "-volume", "--volume":
 			if v, err = next(); err == nil {
 				f.volumePath = v
@@ -447,6 +462,9 @@ func cmdDeploy(args []string) error {
 		"port":   f.port,
 		"public": !f.private,
 		"env":    f.env,
+		// Always sent, even when empty, because empty is a meaningful request:
+		// it withdraws whatever this service used to reach.
+		"needs": f.needs,
 	}
 	// Only sent when asked for. An absent volume and a volume of zero size are
 	// different requests, and the control plane refuses the second.
@@ -651,10 +669,38 @@ func cmdMembers(args []string) error {
 }
 
 func cmdDestroy(args []string) error {
-	project := defaultName()
-	if len(args) > 0 && args[0] != "" {
-		project = args[0]
+	// -service narrows the blast radius rather than changing what a bare
+	// `gg destroy` means: without it this still destroys the whole project, which
+	// is what every existing script and every habit expects.
+	var service string
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-service", "--service":
+			if i+1 >= len(args) {
+				return fmt.Errorf("-service needs a value")
+			}
+			i++
+			service = args[i]
+		default:
+			rest = append(rest, args[i])
+		}
 	}
+
+	project := defaultName()
+	if len(rest) > 0 && rest[0] != "" {
+		project = rest[0]
+	}
+
+	if service != "" {
+		path := fmt.Sprintf("/v1/projects/%s/services/%s", project, service)
+		if err := call("DELETE", path, nil, nil); err != nil {
+			return err
+		}
+		fmt.Printf("service %s destroyed\n", service)
+		return nil
+	}
+
 	if err := call("DELETE", "/v1/projects/"+project, nil, nil); err != nil {
 		return err
 	}

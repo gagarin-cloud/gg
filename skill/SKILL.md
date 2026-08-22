@@ -95,11 +95,14 @@ to type. If it reports that the credential is not valid, run `gg auth`.
    ```
 
 3. **Deploy each service.** Deploy private services *before* the public ones
-   that depend on them, so the dependency exists when the caller starts:
+   that call them — `-needs` can only name a service that already exists:
    ```
    gg deploy -project <project> -name worker -port 8080 -private
-   gg deploy -project <project> -name web -port 8080 -env WORKER_URL=http://worker:8080
+   gg deploy -project <project> -name web -port 8080 -needs worker -env WORKER_URL=http://worker:8080
    ```
+   `-needs` is not documentation: without it `web` cannot reach `worker` at all.
+   See "Wiring services together" below — including why a missing `-needs` hangs
+   instead of failing.
    `gg deploy` builds the image in the current directory, pushes it, registers
    the service, and prints the URL. Run it from the directory containing that
    service's Dockerfile.
@@ -133,9 +136,62 @@ holds that itself and the only way to set it is the flags above.
 
 ## Wiring services together
 
-There is no service-discovery magic. A private service is reachable at
-`http://<service-name>:<port>` from inside the same project. Pass that as an
-ordinary environment variable.
+A private service is reachable at `http://<service-name>:<port>` from inside the
+same project — but **only by the services that declared they call it.**
+
+Declare that with `-needs`, on the service doing the calling:
+
+```
+gg deploy -name api -needs db -env DATABASE_URL=postgres://user:pass@db:5432/app
+```
+
+`db` now accepts connections from `api` and from nothing else. Deploy `api`
+without `-needs db` and the address still resolves, the connection is simply
+never answered.
+
+**This is the part that will waste your time if you skip it.** A call nobody
+declared is not refused — it is dropped. So it does not fail fast with
+"connection refused"; it **hangs until the client's timeout**, which for a
+database driver can be 30 seconds or forever. A hang is the symptom of a missing
+`-needs` far more often than it is a bug in the application.
+
+So when a service hangs talking to another one, check `gg status` *first*. It
+ends every service's line with what that service can reach:
+
+```
+api is a private service on port 4000, reaching db.
+web is a public service on port 8080, reachable at https://…, reaching nothing else.
+```
+
+`reaching nothing else` is a statement of fact, not a warning — most services
+legitimately need nothing. But if you expected a name there and it is missing,
+that is your hang, and the fix is **a redeploy** of the caller with the
+`-needs` it was missing. There is no separate command to connect two services
+after the fact, because the deploy is the only place deployment structure is set.
+
+**`-needs` is replaced wholesale on every deploy, exactly like `-env`.** If `api`
+calls both `db` and `cache`, every future deploy of `api` must pass both:
+
+```
+gg deploy -name api -needs db -needs cache
+```
+
+Pass only `-needs db` next time and `api` stops being able to reach `cache` —
+same trap as forgetting an environment variable, same fix. Read the current set
+out of `gg status` before redeploying something you did not deploy yourself.
+
+Two consequences worth knowing:
+
+- **The direction matters.** `-needs` goes on the *caller*. If `api` queries `db`,
+  it is `api` that is deployed with `-needs db`, never the other way round.
+- **Public URLs are not covered by this.** If one service calls another's public
+  `https://` address, that arrives the same way a stranger's browser does and is
+  allowed. The guarantee is about private, in-project addresses: *a private
+  service is unreachable unless something declared it needs it.*
+
+To take a service away entirely, `gg destroy -service <name>`. It is refused
+while anything still needs it, and names what does — redeploy that service
+without the `-needs` first.
 
 ## Reading state
 
