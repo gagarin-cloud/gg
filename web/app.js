@@ -148,6 +148,14 @@ function shapeOf(el) {
     el.edges.map((e) => e.data.id).sort().join(",");
 }
 
+// The card is built as HTML, and everything in it — service names, image
+// references, whatever the container runtime chose to say — is server data
+// rather than ours. Escaped rather than trusted.
+function esc(v) {
+  return String(v).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
 function tipHTML(s, projectID) {
   const a = s.actual || {};
   const rows = [];
@@ -156,9 +164,10 @@ function tipHTML(s, projectID) {
   rows.push(["reaches", (s.needs || []).length ? s.needs.join(", ") : "nothing else"]);
   if (s.volume_path) rows.push(["volume", s.volume_size_gb + "GB at " + s.volume_path]);
   rows.push([s.public ? "url" : "access", s.public ? s.url : "private — in-project only"]);
-  if (stateOf(s) === "out-of-sync" && a.message) rows.push(["cluster", a.message]);
-  return "<b>" + s.name + "</b>" +
-    rows.map((r) => '<div class="row">' + r[0] + " <span>" + r[1] + "</span></div>").join("");
+  if (stateOf(s) === "out-of-sync" && a.message) rows.push(["cluster", a.message, "clamp"]);
+  return "<b>" + esc(s.name) + "</b>" +
+    rows.map((r) => '<div class="row ' + (r[2] || "") + '">' + r[0] +
+      " <span>" + esc(r[1]) + "</span></div>").join("");
 }
 
 function render(st) {

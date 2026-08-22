@@ -78,6 +78,14 @@
   #tip b { font-weight:650; }
   #tip .row { color:var(--dim); margin-top:3px; }
   #tip .row span { color:var(--text); }
+  /* A container runtime error runs to several hundred characters and repeats the
+     image reference three times, which turned the card into a wall and buried
+     the rows above it. Three lines is enough to recognise the failure; the whole
+     message is in `gg status`, where it can be read and copied. */
+  #tip .row.clamp span {
+    display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;
+    overflow:hidden; margin-top:1px;
+  }
 </style>
 </head>
 <body>
