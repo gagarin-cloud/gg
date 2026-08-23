@@ -413,6 +413,9 @@ type statusResp struct {
 
 // Named rather than anonymous so the renderers in status.go can take one.
 type serviceStatus struct {
+	// Kind distinguishes a service from a resource. Absent from an older control
+	// plane, which had only services.
+	Kind  string `json:"kind"`
 	Name  string `json:"name"`
 	Image string `json:"image"`
 	Port  int    `json:"port"`
@@ -550,7 +553,7 @@ func cmdMembers(project string) error {
 // service narrows the blast radius rather than changing what a bare
 // `gg destroy` means: without it this still destroys the whole project, which
 // is what every existing script and every habit expects.
-func cmdDestroy(project, service string) error {
+func cmdDestroy(project, service, resource string) error {
 	if project == "" {
 		project = defaultName()
 	}
@@ -561,6 +564,19 @@ func cmdDestroy(project, service string) error {
 			return err
 		}
 		fmt.Printf("service %s destroyed\n", service)
+		return nil
+	}
+
+	// The same verb, a different noun. Naming it separately rather than letting
+	// --service take either is what makes the API able to refuse a wrong guess:
+	// a resource deleted through the service path is a caller who thinks a
+	// database is a container, and being told so is worth more than succeeding.
+	if resource != "" {
+		path := fmt.Sprintf("/v1/projects/%s/resources/%s", project, resource)
+		if err := call("DELETE", path, nil, nil); err != nil {
+			return err
+		}
+		fmt.Printf("resource %s destroyed, and everything in it\n", resource)
 		return nil
 	}
 

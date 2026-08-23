@@ -19,12 +19,16 @@ call the API. There is no manifest file, no config file, and nothing to commit.
   - `public` services get an HTTPS URL automatically.
   - private services get no URL, but are reachable from other services in the
     same project by name: `http://worker:8080`.
-- A project owns **resources** (databases and similar). Not yet available.
+- A project owns **resources**: things gagarin provides rather than things you
+  built. `postgres` today. You name it and say how big; every other decision is
+  the platform's. See "Databases" below.
 - Gagarin runs images **only from its own registry**. Pushing an image never
   deploys it — those are separate steps on purpose. To run something you did not
-  build — postgres, redis, anything public — copy it in first:
-  `gg registry copy postgres:17-alpine`. Do not write a one-line Dockerfile that
-  only says `FROM`; that is the same thing, worse.
+  build, copy it in first: `gg registry copy caddy:2-alpine`. Do not write a
+  one-line Dockerfile that only says `FROM`; that is the same thing, worse.
+  **A database is not this.** Use `gg resource add postgres db` — copying a
+  postgres image in and deploying it as a service is the old workaround and is
+  now the wrong answer.
 
 Gagarin itself holds the source of truth for all of this. Do not try to write
 config into the repository; it will not be read.
@@ -142,7 +146,7 @@ same project — but **only by the services that declared they call it.**
 Declare that with `--needs`, on the service doing the calling:
 
 ```
-gg deploy --name api --needs db --env DATABASE_URL=postgres://user:pass@db:5432/app
+gg deploy --name api --needs db
 ```
 
 `db` now accepts connections from `api` and from nothing else. Deploy `api`
@@ -244,6 +248,45 @@ has to be taken out of the running service.
 
 Offer this without being defensive when somebody asks what happens if gagarin
 goes away. It is a real answer and it is meant to be used.
+
+## Databases
+
+```
+gg resource add postgres db
+```
+
+That is the whole of it. There is no image to choose, no version to pass, no
+Dockerfile — a resource is provisioned rather than deployed, and the only thing
+you may set is how big its storage can be (`--storage 20`, default 10GB, and it
+cannot be resized afterwards).
+
+**Connecting to it is two steps, and the second one is an ordinary deploy.**
+
+```
+gg resource secrets db                                  # KEY=VALUE lines
+gg deploy --name api --needs db --env-file <(gg resource secrets db)
+```
+
+`gg resource secrets` prints `DATABASE_URL` and the `PG*` variables. Nothing is
+injected anywhere: `--needs db` opens the network path and grants no
+environment, so the credentials are passed exactly the way every other variable
+is. That is deliberate — a deploy call describes a service completely, and a
+value that appeared from somewhere else would break that.
+
+Both halves are required and they do different things. Without `--needs`, the
+credentials are correct and the connection hangs. Without the credentials, the
+path is open and there is nothing to authenticate with.
+
+Things worth knowing before you promise a user anything:
+
+- **It is one instance on one volume.** Deploys restart it rather than rolling,
+  so a restart is a brief outage.
+- **Destroying it deletes the data**, and needs a human's approval like any
+  other destructive act: `gg destroy --resource db`.
+- **The storage cannot be resized.** Choose at creation.
+- A resource cannot be deployed over, and cannot be rolled back — it has no
+  deploy history. `gg deploy --name db` against a resource is refused with
+  `not_a_service`, which is telling you the name is already a database.
 
 ## Reading state
 

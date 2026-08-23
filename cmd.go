@@ -64,6 +64,7 @@ Environment (overrides the file; meant for CI):
 		newHistoryCmd(),
 		newRollbackCmd(),
 		newEjectCmd(),
+		newResourceCmd(),
 		newRegistryCmd(),
 		newSkillCmd(),
 		newVersionCmd(),
@@ -244,7 +245,7 @@ func newMembersCmd() *cobra.Command {
 }
 
 func newDestroyCmd() *cobra.Command {
-	var service string
+	var service, resource string
 	cmd := &cobra.Command{
 		Use:   "destroy [project]",
 		Short: "delete the project and everything in it",
@@ -254,11 +255,69 @@ func newDestroyCmd() *cobra.Command {
 			if len(args) > 0 {
 				project = args[0]
 			}
-			return cmdDestroy(project, service)
+			if service != "" && resource != "" {
+				return errors.New("pass --service or --resource, not both\n" +
+					"  hint: `gg status` says which of the two a name is")
+			}
+			return cmdDestroy(project, service, resource)
 		},
 	}
+	// One command destroys things, whatever they are. A second verb would be a
+	// second place to audit and a second habit to have, and the approval flow
+	// lives in the API's answer rather than here either way.
 	cmd.Flags().StringVar(&service, "service", "",
 		"delete just this one service instead. Refused while another service\nstill --needs it")
+	cmd.Flags().StringVar(&resource, "resource", "",
+		"delete just this one resource instead, and everything in it. Refused\nwhile a service still --needs it")
+	return cmd
+}
+
+func newResourceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "resource",
+		Short: "databases and the like: what a project has, rather than what it runs",
+	}
+	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd())
+	return cmd
+}
+
+func newResourceAddCmd() *cobra.Command {
+	var project string
+	var storage int
+	cmd := &cobra.Command{
+		Use:   "add TYPE NAME",
+		Short: "provision a resource, e.g. `gg resource add postgres db`",
+		Args: usageArgs(2, 2, "usage: gg resource add TYPE NAME\n"+
+			"  the types that exist are: postgres"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourceAdd(args[0], args[1], project, storage)
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "project to add it to (default: directory name)")
+	// The only knob, and it is honoured: it is the size of the volume. Anything
+	// else about how a resource runs is the platform's decision.
+	cmd.Flags().IntVar(&storage, "storage", 0, "how big its storage may get, in GB (default 10).\nSet once, at creation; it cannot be resized afterwards")
+	return cmd
+}
+
+func newResourceSecretsCmd() *cobra.Command {
+	var project, format string
+	cmd := &cobra.Command{
+		Use:   "secrets NAME",
+		Short: "the credentials for connecting to a resource",
+		Long: `Prints what a service needs to connect, and nothing else.
+
+Nothing is injected anywhere: --needs opens the network path and grants no
+environment, so these are passed to a deploy like any other variable.
+
+  gg deploy --name api --needs db --env-file <(gg resource secrets db)`,
+		Args: usageArgs(1, 1, "usage: gg resource secrets NAME"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourceSecrets(args[0], project, format)
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "project it belongs to (default: directory name)")
+	cmd.Flags().StringVar(&format, "format", "env", "env (KEY=VALUE lines, for --env-file) or json")
 	return cmd
 }
 

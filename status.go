@@ -74,13 +74,23 @@ func printStatusTable(st statusResp) {
 	// an always-present column of dashes is noise that makes the real columns
 	// harder to find.
 	anyVolume := false
+	// Likewise a kind column: it only earns its place once a project has
+	// something in it that is not a service.
+	anyResource := false
 	for _, s := range st.Services {
 		if s.VolumePath != "" {
 			anyVolume = true
 		}
+		if isResourceKind(s.Kind) {
+			anyResource = true
+		}
 	}
 
-	head := []string{"", "SERVICE", "READY", "PORT", "REACHES", "IMAGE"}
+	head := []string{"", "SERVICE"}
+	if anyResource {
+		head = append(head, "KIND")
+	}
+	head = append(head, "READY", "PORT", "REACHES", "IMAGE")
 	if anyVolume {
 		head = append(head, "VOLUME")
 	}
@@ -97,12 +107,15 @@ func printStatusTable(st statusResp) {
 		if url == "" {
 			url = "— private"
 		}
-		row := []string{
-			mark, s.Name,
+		row := []string{mark, s.Name}
+		if anyResource {
+			row = append(row, kindLabel(s.Kind))
+		}
+		row = append(row,
 			fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired),
 			fmt.Sprintf("%d", s.Port),
 			reaches, shortImage(s.Image, st.ProjectID),
-		}
+		)
 		if anyVolume {
 			v := "—"
 			if s.VolumePath != "" {
@@ -244,4 +257,20 @@ func openBrowser(url string) {
 		return
 	}
 	go func() { _ = cmd.Wait() }()
+}
+
+// A resource's kind is namespaced — "resource:postgres" — so that telling one
+// from a service is a property of the value rather than a list to keep in step
+// with the control plane.
+func isResourceKind(kind string) bool { return strings.HasPrefix(kind, "resource:") }
+
+// kindLabel is what the table shows. "service" rather than "container": this
+// table is at human altitude, and container is the word the platform uses to
+// itself. An empty kind is a service too — that is what an older control plane
+// returns.
+func kindLabel(kind string) string {
+	if isResourceKind(kind) {
+		return strings.TrimPrefix(kind, "resource:")
+	}
+	return "service"
 }

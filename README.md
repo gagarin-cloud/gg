@@ -34,6 +34,8 @@ gg signup you@example.com      # a human clicks a button in an email; that is th
 gg auth --claim ABCD-1234      # waits for that click, stores credentials
 gg init myapp                  # create a project
 gg deploy --port 8080          # build, push, run the current directory
+gg resource add postgres db    # a database; you choose the name and the size, nothing else
+gg resource secrets db         # its credentials, to pass to a deploy like any other env
 gg status                      # what gagarin intends, and what the cluster is actually doing
 gg logs web
 gg share teammate@example.com  # editors deploy and manage; viewers read
