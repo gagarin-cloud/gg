@@ -50,6 +50,12 @@ func main() {
 		err = cmdMembers(os.Args[2:])
 	case "destroy":
 		err = cmdDestroy(os.Args[2:])
+	case "history":
+		err = cmdHistory(os.Args[2:])
+	case "rollback":
+		err = cmdRollback(os.Args[2:])
+	case "eject":
+		err = cmdEject(os.Args[2:])
 	case "registry":
 		err = cmdRegistry(os.Args[2:])
 	// The old spelling, kept working and kept out of the help. The published
@@ -109,6 +115,13 @@ func usage() {
   gg destroy [project]           delete the project and everything in it
       -service NAME              delete just this one service instead. Refused
                                  while another service still -needs it
+  gg history SERVICE [project]   every deploy of a service, newest first
+  gg rollback SERVICE [project]  put the previous deploy back
+      -to REVISION               a particular one instead (see gg history).
+                                 Refused across a change of -volume
+  gg eject [project]             the Kubernetes manifests for this project, so
+                                 you can run it somewhere else. Owner only
+      -o PATH                    write to a file instead of stdout
   gg registry login              log docker in to the gagarin registry, using
                                  the credential this machine already holds
   gg registry copy IMAGE         copy a public image into this project's space,
@@ -214,6 +227,39 @@ func callTo(base, token, method, path string, body any, out any) error {
 		return json.Unmarshal(raw, out)
 	}
 	return nil
+}
+
+// callYAML fetches something that is a file rather than a response — `gg eject`
+// is the only such endpoint. Errors still arrive in the JSON envelope, so the
+// failure path is shared with call() and only the success path differs.
+func callYAML(method, path string) (string, error) {
+	base, token, err := resolveAuth()
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequest(method, base+path, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/yaml")
+	req.Header.Set("User-Agent", clientName())
+
+	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot reach control plane at %s: %w", base, err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode >= 400 {
+		var wrap struct{ Error apiError }
+		if json.Unmarshal(raw, &wrap) == nil && wrap.Error.Code != "" {
+			return "", wrap.Error
+		}
+		return "", fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(raw)))
+	}
+	return string(raw), nil
 }
 
 // ---- commands -----------------------------------------------------------

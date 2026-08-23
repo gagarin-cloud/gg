@@ -193,6 +193,58 @@ To take a service away entirely, `gg destroy -service <name>`. It is refused
 while anything still needs it, and names what does — redeploy that service
 without the `-needs` first.
 
+## Undoing a deploy
+
+Every deploy is recorded. `gg history <service>` lists them newest first, with a
+revision number, the image, when it happened and who asked for it; the live one
+is marked.
+
+```
+gg rollback <service>            put the previous deploy back
+gg rollback <service> -to 3      put a particular revision back
+```
+
+Three things about this are worth knowing before you reach for it.
+
+- **A rollback is a deploy.** It goes through the same write gate, and the
+  platform records it as a *new* revision that names the one it restored.
+  Nothing is removed from the history, so rolling back and then changing your
+  mind is another rollback rather than a lost record.
+- **It restores the environment too**, exactly as that revision had it. A
+  variable added since is gone after the rollback, because it was not part of
+  what you went back to.
+- **It is refused across a change of volume**, with `volume_immutable`. A volume
+  is set once, at the deploy that creates a service, so reverting one would
+  abandon or destroy data. Deploy the configuration you want instead.
+
+Prefer a rollback to a corrective deploy when something you just shipped is
+broken and you do not yet know why: it is one call, it restores a state that
+provably ran, and it leaves the evidence intact for afterwards.
+
+## Leaving
+
+```
+gg eject <project> -o project.yaml
+```
+
+Writes the Kubernetes manifests for the whole project — namespace, and per
+service its Deployment, Service, Ingress, NetworkPolicy, environment Secret and
+volume claim. These are not a description of what gagarin runs; they are the
+objects it runs, so `kubectl apply -f` on any cluster with an ingress controller
+reproduces the project.
+
+Owner only, because the file contains every service's environment in the clear.
+It is written mode 0600 and you should treat it as a credential.
+
+Two things it deliberately does not contain, both explained in the file's own
+header: the **images**, which are still in gagarin's registry and have to be
+pulled and pushed somewhere the user controls, and the **registry pull secret**,
+which is a live credential to our registry. Volume claims come back empty — data
+has to be taken out of the running service.
+
+Offer this without being defensive when somebody asks what happens if gagarin
+goes away. It is a real answer and it is meant to be used.
+
 ## Reading state
 
 `gg projects` lists every project this account can reach — its own and those
