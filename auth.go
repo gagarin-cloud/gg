@@ -13,8 +13,8 @@ import (
 	"time"
 )
 
-func cmdSignup(args []string) error {
-	if len(args) < 1 || strings.TrimSpace(args[0]) == "" {
+func cmdSignup(email string) error {
+	if strings.TrimSpace(email) == "" {
 		return fmt.Errorf("usage: gg signup EMAIL\n" +
 			"  ask your human for their address — do not guess it")
 	}
@@ -22,7 +22,7 @@ func cmdSignup(args []string) error {
 		Claim     string `json:"claim"`
 		ExpiresIn int    `json:"expires_in"`
 	}
-	body := map[string]string{"email": args[0], "client": clientName()}
+	body := map[string]string{"email": email, "client": clientName()}
 	if err := callAnon("POST", "/v1/signup", body, &out); err != nil {
 		return err
 	}
@@ -34,30 +34,11 @@ this machine access.
 
 Then run:
   gg auth --claim %s
-`, args[0], out.Claim, out.Claim)
+`, email, out.Claim, out.Claim)
 	return nil
 }
 
-func cmdAuth(args []string) error {
-	claim := ""
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-claim", "--claim":
-			if i+1 >= len(args) {
-				return fmt.Errorf("--claim needs the code the signup call returned")
-			}
-			i++
-			claim = args[i]
-		default:
-			// Accept a bare code too: an agent that read the instructions may well
-			// try `gg auth ABCD-1234`, and refusing on syntax would be pedantry.
-			if claim == "" && !strings.HasPrefix(args[i], "-") {
-				claim = args[i]
-				continue
-			}
-			return fmt.Errorf("unknown flag %q", args[i])
-		}
-	}
+func cmdAuth(claim string) error {
 	if claim == "" {
 		// No code: say what to do rather than what is missing.
 		if creds, err := loadCredentials(); err == nil && creds.Credential != "" {

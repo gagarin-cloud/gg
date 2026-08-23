@@ -33,7 +33,7 @@ binary, so it never disagrees with the CLI you have.
 gg signup you@example.com      # a human clicks a button in an email; that is the whole signup
 gg auth --claim ABCD-1234      # waits for that click, stores credentials
 gg init myapp                  # create a project
-gg deploy -port 8080           # build, push, run the current directory
+gg deploy --port 8080          # build, push, run the current directory
 gg status                      # what gagarin intends, and what the cluster is actually doing
 gg logs web
 gg share teammate@example.com  # editors deploy and manage; viewers read
@@ -59,7 +59,7 @@ go build -o gg .
 go test ./...
 ```
 
-Only the standard library. No code generation, no build tags, no vendored tree.
+No code generation, no build tags, no vendored tree.
 
 ## Licence
 

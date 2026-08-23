@@ -11,7 +11,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -30,14 +29,9 @@ type deployment struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-func cmdHistory(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: gg history SERVICE [project]")
-	}
-	service := args[0]
-	project := defaultName()
-	if len(args) > 1 {
-		project = args[1]
+func cmdHistory(service, project string) error {
+	if project == "" {
+		project = defaultName()
 	}
 
 	var out struct {
@@ -77,32 +71,12 @@ func cmdHistory(args []string) error {
 
 // ---- rollback -------------------------------------------------------------
 
-func cmdRollback(args []string) error {
-	to := 0
-	rest := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-to", "--to":
-			if i+1 >= len(args) {
-				return fmt.Errorf("-to needs a revision number, e.g. -to 3")
-			}
-			n, err := strconv.Atoi(args[i+1])
-			if err != nil || n <= 0 {
-				return fmt.Errorf("%q is not a revision number; see `gg history SERVICE`", args[i+1])
-			}
-			to = n
-			i++
-		default:
-			rest = append(rest, args[i])
-		}
+func cmdRollback(service, project string, to int) error {
+	if project == "" {
+		project = defaultName()
 	}
-	if len(rest) < 1 {
-		return fmt.Errorf("usage: gg rollback SERVICE [project] [-to REVISION]")
-	}
-	service := rest[0]
-	project := defaultName()
-	if len(rest) > 1 {
-		project = rest[1]
+	if to < 0 {
+		return fmt.Errorf("%d is not a revision number; see `gg history SERVICE`", to)
 	}
 
 	body := map[string]any{}
@@ -127,20 +101,9 @@ func cmdRollback(args []string) error {
 
 // ---- eject ----------------------------------------------------------------
 
-func cmdEject(args []string) error {
-	project := defaultName()
-	outPath := ""
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-o", "-out", "--out":
-			if i+1 >= len(args) {
-				return fmt.Errorf("-o needs a file path")
-			}
-			outPath = args[i+1]
-			i++
-		default:
-			project = args[i]
-		}
+func cmdEject(project, outPath string) error {
+	if project == "" {
+		project = defaultName()
 	}
 
 	// Raw rather than through call(): what comes back is a YAML file, not the

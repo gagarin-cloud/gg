@@ -17,130 +17,15 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/spf13/pflag"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
-	}
-	var err error
-	switch os.Args[1] {
-	case "auth":
-		err = cmdAuth(os.Args[2:])
-	case "signup":
-		err = cmdSignup(os.Args[2:])
-	case "whoami":
-		err = cmdWhoami()
-	case "init":
-		err = cmdInit(os.Args[2:])
-	case "projects":
-		err = cmdProjects()
-	case "deploy":
-		err = cmdDeploy(os.Args[2:])
-	case "status":
-		err = cmdStatus(os.Args[2:])
-	case "logs":
-		err = cmdLogs(os.Args[2:])
-	case "share":
-		err = cmdShare(os.Args[2:])
-	case "unshare":
-		err = cmdUnshare(os.Args[2:])
-	case "members":
-		err = cmdMembers(os.Args[2:])
-	case "destroy":
-		err = cmdDestroy(os.Args[2:])
-	case "history":
-		err = cmdHistory(os.Args[2:])
-	case "rollback":
-		err = cmdRollback(os.Args[2:])
-	case "eject":
-		err = cmdEject(os.Args[2:])
-	case "registry":
-		err = cmdRegistry(os.Args[2:])
-	// The old spelling, kept working and kept out of the help. The published
-	// agent skill in the wild still says it, and a skill is not something we can
-	// update on somebody else's machine.
-	case "registry-login":
-		err = cmdRegistryLogin()
-	case "skill":
-		err = cmdSkill(os.Args[2:])
-	case "version", "--version", "-v":
-		err = cmdVersion()
-	case "-h", "--help", "help":
-		usage()
-		return
-	default:
-		err = fmt.Errorf("unknown command %q", os.Args[1])
-	}
-	if err != nil {
+	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "gg: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func usage() {
-	fmt.Fprintf(os.Stderr, `gg - gagarin CLI
-
-  gg signup EMAIL                ask for an account; a human approves by email
-  gg auth --claim CODE           wait for that approval and store credentials
-  gg whoami                      which account this machine acts as
-  gg init [project]              create a project (defaults to directory name)
-  gg projects                    every project you can reach, and your role on it
-  gg deploy [flags]              build, push, and run the current directory
-      -project NAME              project to deploy into (default: directory name)
-      -name NAME                 service name (default: directory name)
-      -port N                    port the container listens on (default 8080)
-      -private                   do not expose a public URL
-      -env K=V                   set an env var (repeatable)
-      -env-file PATH             read KEY=VALUE lines from a file (repeatable;
-                                 later files win, -env flags win over all files)
-      -needs NAME                another service in this project that this one
-                                 calls (repeatable). Nothing else can reach it.
-                                 Replaced on every deploy, like -env: pass every
-                                 service you still call, or the call stops working
-      -volume PATH               keep this directory across restarts, e.g.
-                                 /var/lib/postgresql/data. Set once, at the first
-                                 deploy; a later deploy cannot move or resize it
-      -volume-size GB            how big it may get (default 10)
-  gg status [project]            desired vs actual state for every service
-      -visual                    draw it instead: opens a browser on a live
-                                 dependency graph of the project
-  gg logs SERVICE [project]      recent logs
-  gg share EMAIL [project]       give somebody access to a project
-      -role editor|viewer        editor deploys and manages but cannot delete
-                                 the project; viewer reads (default: editor)
-  gg unshare EMAIL [project]     take that access away
-  gg members [project]           who can reach a project, and as what
-  gg destroy [project]           delete the project and everything in it
-      -service NAME              delete just this one service instead. Refused
-                                 while another service still -needs it
-  gg history SERVICE [project]   every deploy of a service, newest first
-  gg rollback SERVICE [project]  put the previous deploy back
-      -to REVISION               a particular one instead (see gg history).
-                                 Refused across a change of -volume
-  gg eject [project]             the Kubernetes manifests for this project, so
-                                 you can run it somewhere else. Owner only
-      -o PATH                    write to a file instead of stdout
-  gg registry login              log docker in to the gagarin registry, using
-                                 the credential this machine already holds
-  gg registry copy IMAGE         copy a public image into this project's space,
-                                 so gagarin can run it
-      -project NAME              project to copy into (default: directory name)
-      -name NAME                 repository to copy it to (default: the image's
-                                 own name)
-  gg skill install               install the agent skill (Claude Code) so your
-                                 agent knows how to use gagarin
-  gg version                     which gg this is
-
-Credentials live in ~/.config/gagarin/credentials.json after "gg auth". There is
-nothing to export.
-
-Environment (overrides the file; meant for CI):
-  GAGARIN_API      control plane URL (default %s)
-  GAGARIN_TOKEN    a credential, for CI where no human can click a link
-  GAGARIN_REGISTRY registry host, e.g. registry.gagarin.cloud
-`, defaultAPI)
 }
 
 // ---- API plumbing -------------------------------------------------------
@@ -286,10 +171,9 @@ func sanitize(s string) string {
 	return s
 }
 
-func cmdInit(args []string) error {
-	name := defaultName()
-	if len(args) > 0 && args[0] != "" {
-		name = args[0]
+func cmdInit(name string) error {
+	if name == "" {
+		name = defaultName()
 	}
 	var p project
 	if err := call("POST", "/v1/projects", map[string]string{"name": name}, &p); err != nil {
@@ -363,97 +247,73 @@ type deployFlags struct {
 	needs []string
 }
 
-func parseDeploy(args []string) (*deployFlags, error) {
-	f := &deployFlags{port: 8080, env: map[string]string{}}
-	// Files are collected and applied first, then -env flags on top, so
-	// precedence does not depend on the order the flags happen to appear in.
-	var envFiles []string
-	envFlags := map[string]string{}
+// deployFlagVars holds the pflag.FlagSet destinations that need post-processing
+// once parsing is done: env vars and env files both feed the same map, and
+// precedence must not depend on the order they appeared in.
+type deployFlagVars struct {
+	f        *deployFlags
+	env      []string
+	envFiles []string
+}
 
-	for i := 0; i < len(args); i++ {
-		next := func() (string, error) {
-			if i+1 >= len(args) {
-				return "", fmt.Errorf("%s needs a value", args[i])
-			}
-			i++
-			return args[i], nil
-		}
-		var err error
-		var v string
-		switch args[i] {
-		case "-project", "--project":
-			if v, err = next(); err == nil {
-				f.project = v
-			}
-		case "-name", "--name":
-			if v, err = next(); err == nil {
-				f.name = v
-			}
-		case "-port", "--port":
-			if v, err = next(); err == nil {
-				_, err = fmt.Sscanf(v, "%d", &f.port)
-			}
-		case "-private", "--private":
-			f.private = true
-		case "-needs", "--needs":
-			if v, err = next(); err == nil {
-				f.needs = append(f.needs, v)
-			}
-		case "-volume", "--volume":
-			if v, err = next(); err == nil {
-				f.volumePath = v
-			}
-		case "-volume-size", "--volume-size":
-			if v, err = next(); err == nil {
-				_, err = fmt.Sscanf(v, "%d", &f.volumeSizeGB)
-			}
-		case "-env", "--env":
-			if v, err = next(); err == nil {
-				k, val, ok := strings.Cut(v, "=")
-				if !ok {
-					err = fmt.Errorf("-env expects K=V, got %q", v)
-				} else {
-					envFlags[k] = val
-				}
-			}
-		case "-env-file", "--env-file":
-			if v, err = next(); err == nil {
-				envFiles = append(envFiles, v)
-			}
-		default:
-			err = fmt.Errorf("unknown flag %q", args[i])
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
+// bindDeployFlags registers every `gg deploy` flag on fs, so the cobra command
+// and the standalone parser below define them exactly once.
+func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
+	v := &deployFlagVars{f: &deployFlags{port: 8080, env: map[string]string{}}}
+	fs.StringVar(&v.f.project, "project", "", "project to deploy into (default: directory name)")
+	fs.StringVar(&v.f.name, "name", "", "service name (default: directory name)")
+	fs.IntVar(&v.f.port, "port", 8080, "port the container listens on")
+	fs.BoolVar(&v.f.private, "private", false, "do not expose a public URL")
+	fs.StringArrayVar(&v.env, "env", nil, "set an env var K=V (repeatable)")
+	fs.StringArrayVar(&v.envFiles, "env-file", nil, "read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)")
+	fs.StringArrayVar(&v.f.needs, "needs", nil, "another service in this project that this one calls\n(repeatable). Nothing else can reach it. Replaced on\nevery deploy, like --env: pass every service you still\ncall, or the call stops working")
+	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
+	fs.IntVar(&v.f.volumeSizeGB, "volume-size", 0, "how big the volume may get, in GB (default 10)")
+	return v
+}
 
-	for _, path := range envFiles {
+// finish applies env-file/-env precedence and directory-name defaults once
+// flags have been parsed.
+func (v *deployFlagVars) finish() (*deployFlags, error) {
+	for _, path := range v.envFiles {
 		vals, err := parseEnvFile(path)
 		if err != nil {
 			return nil, err
 		}
-		for k, v := range vals {
-			f.env[k] = v
+		for k, val := range vals {
+			v.f.env[k] = val
 		}
 	}
-	for k, v := range envFlags {
-		f.env[k] = v
+	for _, kv := range v.env {
+		k, val, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, fmt.Errorf("--env expects K=V, got %q", kv)
+		}
+		v.f.env[k] = val
 	}
-	if f.name == "" {
-		f.name = defaultName()
+	if v.f.name == "" {
+		v.f.name = defaultName()
 	}
-	if f.project == "" {
-		f.project = defaultName()
+	if v.f.project == "" {
+		v.f.project = defaultName()
 	}
-	return f, nil
+	return v.f, nil
 }
 
-func cmdDeploy(args []string) error {
-	f, err := parseDeploy(args)
-	if err != nil {
-		return err
+// parseDeploy parses `gg deploy` flags on their own, outside of cobra. It
+// exists for tests: it defines the identical flag set newDeployCmd binds to
+// its cobra.Command.
+func parseDeploy(args []string) (*deployFlags, error) {
+	fs := pflag.NewFlagSet("deploy", pflag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	v := bindDeployFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return nil, err
 	}
+	return v.finish()
+}
+
+func cmdDeploy(f *deployFlags) error {
 	if _, err := os.Stat("Dockerfile"); err != nil {
 		return fmt.Errorf("no Dockerfile in the current directory\n  hint: gagarin deploys images, so the repo needs a Dockerfile it can build")
 	}
@@ -600,19 +460,9 @@ func waitReady(project, service string, d time.Duration) error {
 	return fmt.Errorf("timed out waiting for readiness")
 }
 
-func cmdStatus(args []string) error {
-	visual := false
-	rest := make([]string, 0, len(args))
-	for _, a := range args {
-		if a == "-visual" || a == "--visual" {
-			visual = true
-			continue
-		}
-		rest = append(rest, a)
-	}
-	project := defaultName()
-	if len(rest) > 0 && rest[0] != "" {
-		project = rest[0]
+func cmdStatus(project string, visual bool) error {
+	if project == "" {
+		project = defaultName()
 	}
 	if visual {
 		return serveVisual(project)
@@ -626,14 +476,9 @@ func cmdStatus(args []string) error {
 	return nil
 }
 
-func cmdLogs(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: gg logs SERVICE [project]")
-	}
-	service := args[0]
-	project := defaultName()
-	if len(args) > 1 {
-		project = args[1]
+func cmdLogs(service, project string) error {
+	if project == "" {
+		project = defaultName()
 	}
 	var out struct{ Logs string }
 	if err := call("GET", "/v1/projects/"+project+"/services/"+service+"/logs", nil, &out); err != nil {
@@ -649,25 +494,12 @@ func cmdLogs(args []string) error {
 // editors and viewers. You cannot hand over ownership here, because ownership is
 // the bill; and for the same reason nobody but the owner can delete a project.
 
-func cmdShare(args []string) error {
-	role := "editor"
-	rest := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		if args[i] == "-role" || args[i] == "--role" {
-			if i+1 >= len(args) {
-				return fmt.Errorf("-role needs a value: editor or viewer")
-			}
-			role, i = args[i+1], i+1
-			continue
-		}
-		rest = append(rest, args[i])
+func cmdShare(email, project, role string) error {
+	if role == "" {
+		role = "editor"
 	}
-	if len(rest) < 1 {
-		return fmt.Errorf("usage: gg share EMAIL [project] [-role editor|viewer]")
-	}
-	email, project := rest[0], defaultName()
-	if len(rest) > 1 {
-		project = rest[1]
+	if project == "" {
+		project = defaultName()
 	}
 
 	if err := call("PUT", "/v1/projects/"+project+"/members",
@@ -682,13 +514,9 @@ func cmdShare(args []string) error {
 	return nil
 }
 
-func cmdUnshare(args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("usage: gg unshare EMAIL [project]")
-	}
-	email, project := args[0], defaultName()
-	if len(args) > 1 {
-		project = args[1]
+func cmdUnshare(email, project string) error {
+	if project == "" {
+		project = defaultName()
 	}
 	if err := call("DELETE", "/v1/projects/"+project+"/members/"+url.PathEscape(email), nil, nil); err != nil {
 		return err
@@ -697,10 +525,9 @@ func cmdUnshare(args []string) error {
 	return nil
 }
 
-func cmdMembers(args []string) error {
-	project := defaultName()
-	if len(args) > 0 && args[0] != "" {
-		project = args[0]
+func cmdMembers(project string) error {
+	if project == "" {
+		project = defaultName()
 	}
 	var out struct {
 		Owner   string `json:"owner"`
@@ -719,28 +546,13 @@ func cmdMembers(args []string) error {
 	return nil
 }
 
-func cmdDestroy(args []string) error {
-	// -service narrows the blast radius rather than changing what a bare
-	// `gg destroy` means: without it this still destroys the whole project, which
-	// is what every existing script and every habit expects.
-	var service string
-	var rest []string
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-service", "--service":
-			if i+1 >= len(args) {
-				return fmt.Errorf("-service needs a value")
-			}
-			i++
-			service = args[i]
-		default:
-			rest = append(rest, args[i])
-		}
-	}
-
-	project := defaultName()
-	if len(rest) > 0 && rest[0] != "" {
-		project = rest[0]
+// cmdDestroy destroys a project, or one service within it if service is set.
+// service narrows the blast radius rather than changing what a bare
+// `gg destroy` means: without it this still destroys the whole project, which
+// is what every existing script and every habit expects.
+func cmdDestroy(project, service string) error {
+	if project == "" {
+		project = defaultName()
 	}
 
 	if service != "" {

@@ -29,37 +29,12 @@ var skillTargets = map[string]string{
 	"claude": filepath.Join(".claude", "skills", "gagarin", "SKILL.md"),
 }
 
-func cmdSkill(args []string) error {
-	action := "install"
-	if len(args) > 0 && args[0] != "" {
-		action = args[0]
-	}
-	switch action {
-	case "install":
-		return installSkill(args[1:])
-	case "show":
-		fmt.Print(skillMarkdown)
-		return nil
-	default:
-		return fmt.Errorf("unknown skill command %q\n  usage: gg skill install [-dir PATH] | gg skill show", action)
-	}
+func cmdSkillShow() error {
+	fmt.Print(skillMarkdown)
+	return nil
 }
 
-func installSkill(args []string) error {
-	var dir string
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-dir", "--dir":
-			if i+1 >= len(args) {
-				return fmt.Errorf("-dir needs a path")
-			}
-			i++
-			dir = args[i]
-		default:
-			return fmt.Errorf("unknown flag %q", args[i])
-		}
-	}
-
+func installSkill(dir string) error {
 	path := dir
 	if path == "" {
 		home, err := os.UserHomeDir()

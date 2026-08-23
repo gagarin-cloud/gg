@@ -4,26 +4,11 @@ package main
 // that somebody else built into a project's own space.
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"regexp"
 	"strings"
 )
-
-func cmdRegistry(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("gg registry needs a subcommand: login, copy")
-	}
-	switch args[0] {
-	case "login":
-		return cmdRegistryLogin()
-	case "copy":
-		return cmdRegistryCopy(args[1:])
-	default:
-		return fmt.Errorf("unknown registry subcommand %q: try login or copy", args[0])
-	}
-}
 
 // repoRe is the shape a repository name may take inside a project's space. It
 // mirrors the check the control plane applies before it will run an image
@@ -32,33 +17,10 @@ func cmdRegistry(args []string) error {
 // while the user is still looking at it, rather than after a long upload.
 var repoRe = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 
-func cmdRegistryCopy(args []string) error {
-	fs := flag.NewFlagSet("registry copy", flag.ContinueOnError)
-	project := fs.String("project", defaultName(), "project to copy the image into")
-	name := fs.String("name", "", "repository to copy it to (default: the image's own name)")
-	// Flags may come before or after the image. Go's flag package stops at the
-	// first non-flag argument, so `copy postgres:17 -project x` would silently
-	// ignore the project — and that is exactly how a person, or an agent, writes
-	// it. Parse in rounds instead, setting the positional aside each time.
-	var positional []string
-	rest := args
-	for {
-		if err := fs.Parse(rest); err != nil {
-			return err
-		}
-		if fs.NArg() == 0 {
-			break
-		}
-		positional = append(positional, fs.Arg(0))
-		rest = fs.Args()[1:]
+func cmdRegistryCopy(project, name, source string) error {
+	if project == "" {
+		project = defaultName()
 	}
-	if len(positional) == 0 {
-		return fmt.Errorf("which image? e.g. gg registry copy postgres:17-alpine")
-	}
-	if len(positional) > 1 {
-		return fmt.Errorf("one image at a time; got %v", positional)
-	}
-	source := positional[0]
 
 	var who struct {
 		Registry string `json:"registry"`
@@ -75,12 +37,12 @@ func cmdRegistryCopy(args []string) error {
 		return fmt.Errorf("no image registry: the control plane did not report one and GAGARIN_REGISTRY is not set")
 	}
 
-	repo, tag, err := splitSource(source, *name)
+	repo, tag, err := splitSource(source, name)
 	if err != nil {
 		return err
 	}
 
-	p, err := resolveProject(*project)
+	p, err := resolveProject(project)
 	if err != nil {
 		return err
 	}
@@ -109,7 +71,7 @@ func cmdRegistryCopy(args []string) error {
 	if d := imageDigest(target); d != "" {
 		fmt.Printf("  %s\n", d)
 	}
-	fmt.Printf("\nDeploy it with:\n  gg deploy -project %s -name %s -port <port>\n", *project, repo)
+	fmt.Printf("\nDeploy it with:\n  gg deploy --project %s --name %s --port <port>\n", project, repo)
 	return nil
 }
 

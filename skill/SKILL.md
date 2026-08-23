@@ -95,13 +95,13 @@ to type. If it reports that the credential is not valid, run `gg auth`.
    ```
 
 3. **Deploy each service.** Deploy private services *before* the public ones
-   that call them — `-needs` can only name a service that already exists:
+   that call them — `--needs` can only name a service that already exists:
    ```
-   gg deploy -project <project> -name worker -port 8080 -private
-   gg deploy -project <project> -name web -port 8080 -needs worker -env WORKER_URL=http://worker:8080
+   gg deploy --project <project> --name worker --port 8080 --private
+   gg deploy --project <project> --name web --port 8080 --needs worker --env WORKER_URL=http://worker:8080
    ```
-   `-needs` is not documentation: without it `web` cannot reach `worker` at all.
-   See "Wiring services together" below — including why a missing `-needs` hangs
+   `--needs` is not documentation: without it `web` cannot reach `worker` at all.
+   See "Wiring services together" below — including why a missing `--needs` hangs
    instead of failing.
    `gg deploy` builds the image in the current directory, pushes it, registers
    the service, and prints the URL. Run it from the directory containing that
@@ -117,13 +117,13 @@ to type. If it reports that the credential is not valid, run `gg auth`.
 Set them individually, or read them from a plain `KEY=VALUE` file:
 
 ```
-gg deploy -project <project> -name web -port 8080 -env-file .env
-gg deploy -project <project> -name web -port 8080 -env-file .env -env DEBUG=false
+gg deploy --project <project> --name web --port 8080 --env-file .env
+gg deploy --project <project> --name web --port 8080 --env-file .env --env DEBUG=false
 ```
 
-- `-env-file` is **not** picked up automatically. If the user has a `.env` and
+- `--env-file` is **not** picked up automatically. If the user has a `.env` and
   wants it used, pass the flag; never assume a file should be read.
-- `-env` flags override any file. Later `-env-file` flags override earlier ones.
+- `--env` flags override any file. Later `--env-file` flags override earlier ones.
 - There is **no interpolation**: `B=${A}` sets `B` to the literal text `${A}`.
 - Env is part of a service's desired state and is **replaced** on each deploy, not
   merged. To remove a variable, deploy again without it. To keep a variable, keep
@@ -139,21 +139,21 @@ holds that itself and the only way to set it is the flags above.
 A private service is reachable at `http://<service-name>:<port>` from inside the
 same project — but **only by the services that declared they call it.**
 
-Declare that with `-needs`, on the service doing the calling:
+Declare that with `--needs`, on the service doing the calling:
 
 ```
-gg deploy -name api -needs db -env DATABASE_URL=postgres://user:pass@db:5432/app
+gg deploy --name api --needs db --env DATABASE_URL=postgres://user:pass@db:5432/app
 ```
 
 `db` now accepts connections from `api` and from nothing else. Deploy `api`
-without `-needs db` and the address still resolves, the connection is simply
+without `--needs db` and the address still resolves, the connection is simply
 never answered.
 
 **This is the part that will waste your time if you skip it.** A call nobody
 declared is not refused — it is dropped. So it does not fail fast with
 "connection refused"; it **hangs until the client's timeout**, which for a
 database driver can be 30 seconds or forever. A hang is the symptom of a missing
-`-needs` far more often than it is a bug in the application.
+`--needs` far more often than it is a bug in the application.
 
 So when a service hangs talking to another one, check `gg status` *first*. It
 ends every service's line with what that service can reach:
@@ -166,32 +166,32 @@ web is a public service on port 8080, reachable at https://…, reaching nothing
 `reaching nothing else` is a statement of fact, not a warning — most services
 legitimately need nothing. But if you expected a name there and it is missing,
 that is your hang, and the fix is **a redeploy** of the caller with the
-`-needs` it was missing. There is no separate command to connect two services
+`--needs` it was missing. There is no separate command to connect two services
 after the fact, because the deploy is the only place deployment structure is set.
 
-**`-needs` is replaced wholesale on every deploy, exactly like `-env`.** If `api`
+**`--needs` is replaced wholesale on every deploy, exactly like `--env`.** If `api`
 calls both `db` and `cache`, every future deploy of `api` must pass both:
 
 ```
-gg deploy -name api -needs db -needs cache
+gg deploy --name api --needs db --needs cache
 ```
 
-Pass only `-needs db` next time and `api` stops being able to reach `cache` —
+Pass only `--needs db` next time and `api` stops being able to reach `cache` —
 same trap as forgetting an environment variable, same fix. Read the current set
 out of `gg status` before redeploying something you did not deploy yourself.
 
 Two consequences worth knowing:
 
-- **The direction matters.** `-needs` goes on the *caller*. If `api` queries `db`,
-  it is `api` that is deployed with `-needs db`, never the other way round.
+- **The direction matters.** `--needs` goes on the *caller*. If `api` queries `db`,
+  it is `api` that is deployed with `--needs db`, never the other way round.
 - **Public URLs are not covered by this.** If one service calls another's public
   `https://` address, that arrives the same way a stranger's browser does and is
   allowed. The guarantee is about private, in-project addresses: *a private
   service is unreachable unless something declared it needs it.*
 
-To take a service away entirely, `gg destroy -service <name>`. It is refused
+To take a service away entirely, `gg destroy --service <name>`. It is refused
 while anything still needs it, and names what does — redeploy that service
-without the `-needs` first.
+without the `--needs` first.
 
 ## Undoing a deploy
 
@@ -201,7 +201,7 @@ is marked.
 
 ```
 gg rollback <service>            put the previous deploy back
-gg rollback <service> -to 3      put a particular revision back
+gg rollback <service> --to 3     put a particular revision back
 ```
 
 Three things about this are worth knowing before you reach for it.
@@ -260,7 +260,7 @@ with what was asked for; one marked `○` does not, and the cluster's own
 explanation is printed underneath. Trust `gg status` over your own memory of what
 you deployed — it reads the cluster, not just the database.
 
-`gg status -visual` opens the same thing in a browser as a dependency graph. That
+`gg status --visual` opens the same thing in a browser as a dependency graph. That
 is for the human, not for you: offer it when someone is trying to understand how
 their services fit together, and read the plain output yourself.
 
@@ -277,7 +277,7 @@ number of **editors** and **viewers**.
 ```
 gg members <project>              who can reach it, and as what
 gg share <email> <project>        add an editor (default)
-gg share <email> <project> -role viewer
+gg share <email> <project> --role viewer
 gg unshare <email> <project>      revoke access
 ```
 
@@ -291,9 +291,9 @@ cannot be granted, taken, or handed over here.
 Two things follow that you should say out loud to the user rather than discover
 for them:
 
-- `gg share <email>` with no `-role` grants **editor**, which can deploy over
+- `gg share <email>` with no `--role` grants **editor**, which can deploy over
   whatever is running. If the user asked for "read access" or "let them look at
-  the logs", pass `-role viewer`.
+  the logs", pass `--role viewer`.
 - Sharing with somebody who has never used gagarin is allowed. The access waits
   for them; they get it when they sign up with that address. Nothing is emailed
   to them, so tell the user to let them know.
@@ -372,7 +372,7 @@ Do not attempt these or suggest workarounds; they are not missing features, they
 are excluded on purpose:
 
 - deploy from a git repository or a git URL
-- read deployment configuration from a file in the repo — `-env-file` supplies
+- read deployment configuration from a file in the repo — `--env-file` supplies
   values, and is the only file gagarin will ever read
 - interpolate variables into each other
 - pull images from Docker Hub, GHCR, or any registry other than gagarin's

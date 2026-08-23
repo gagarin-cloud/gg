@@ -95,8 +95,8 @@ func TestDeployEnvPrecedence(t *testing.T) {
 	over := writeTemp(t, "over.env", "SHARED=from-over\nONLY_OVER=o\n")
 
 	for _, args := range [][]string{
-		{"-env-file", base, "-env-file", over, "-env", "SHARED=from-flag"},
-		{"-env", "SHARED=from-flag", "-env-file", base, "-env-file", over},
+		{"--env-file", base, "--env-file", over, "--env", "SHARED=from-flag"},
+		{"--env", "SHARED=from-flag", "--env-file", base, "--env-file", over},
 	} {
 		f, err := parseDeploy(args)
 		if err != nil {
@@ -114,7 +114,7 @@ func TestDeployEnvPrecedence(t *testing.T) {
 func TestDeployLaterEnvFileWins(t *testing.T) {
 	a := writeTemp(t, "a.env", "K=first\n")
 	b := writeTemp(t, "b.env", "K=second\n")
-	f, err := parseDeploy([]string{"-env-file", a, "-env-file", b})
+	f, err := parseDeploy([]string{"--env-file", a, "--env-file", b})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestDeployLaterEnvFileWins(t *testing.T) {
 // an app needs produces a service that starts and then misbehaves, which is far
 // harder to diagnose than a refusal.
 func TestDeployMissingEnvFileIsAnError(t *testing.T) {
-	if _, err := parseDeploy([]string{"-env-file", "/nonexistent/.env"}); err == nil {
+	if _, err := parseDeploy([]string{"--env-file", "/nonexistent/.env"}); err == nil {
 		t.Error("expected deploy parsing to fail on a missing env file")
 	}
 }
