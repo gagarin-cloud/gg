@@ -65,6 +65,7 @@ Environment (overrides the file; meant for CI):
 		newRollbackCmd(),
 		newEjectCmd(),
 		newResourceCmd(),
+		newDomainCmd(),
 		newRegistryCmd(),
 		newSkillCmd(),
 		newVersionCmd(),
@@ -269,6 +270,81 @@ func newDestroyCmd() *cobra.Command {
 		"delete just this one service instead. Refused while another service\nstill --needs it")
 	cmd.Flags().StringVar(&resource, "resource", "",
 		"delete just this one resource instead, and everything in it. Refused\nwhile a service still --needs it")
+	return cmd
+}
+
+// newDomainCmd is its own verb rather than a flag on deploy, because a domain is
+// a claim on a name rather than part of the artifact a deploy produces — and a
+// flag could release one by being forgotten, which is the failure nobody sees.
+func newDomainCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "domain",
+		Short: "answer on a name you own, as well as the address gagarin gave you",
+		Long: `A custom domain is declared, not deployed.
+
+It is two steps, and only the first is gagarin's. Declaring it here makes the
+service answer for that name; making the name resolve here is a record you
+create at your registrar. Neither alone does anything, and nothing can be issued
+over HTTPS until the record exists — Let's Encrypt has to reach the domain to
+prove you control it.
+
+` + "`gg status`" + ` says which of the two of you it is waiting on.
+
+A deploy never changes a domain. Add and remove are the only two things that do.`,
+	}
+	cmd.AddCommand(newDomainAddCmd(), newDomainRemoveCmd(), newDomainListCmd())
+	return cmd
+}
+
+func newDomainAddCmd() *cobra.Command {
+	var project, service string
+	cmd := &cobra.Command{
+		Use:   "add DOMAIN",
+		Short: "declare a domain for a public service",
+		Args:  usageArgs(1, 1, "usage: gg domain add DOMAIN --service NAME"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if service == "" {
+				return fmt.Errorf("which service should answer on it?\n  hint: gg domain add %s --service web", args[0])
+			}
+			return cmdDomainAdd(args[0], service, project)
+		},
+	}
+	cmd.Flags().StringVar(&service, "service", "", "the public service that should answer on it")
+	cmd.Flags().StringVar(&project, "project", "", "project it belongs to (default: directory name)")
+	return cmd
+}
+
+func newDomainRemoveCmd() *cobra.Command {
+	var project, service string
+	cmd := &cobra.Command{
+		Use:     "rm DOMAIN",
+		Aliases: []string{"remove"},
+		Short:   "stop answering on a domain",
+		Args:    usageArgs(1, 1, "usage: gg domain rm DOMAIN --service NAME"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if service == "" {
+				return fmt.Errorf("which service holds it?\n  hint: gg domain rm %s --service web", args[0])
+			}
+			return cmdDomainRemove(args[0], service, project)
+		},
+	}
+	cmd.Flags().StringVar(&service, "service", "", "the service that currently holds it")
+	cmd.Flags().StringVar(&project, "project", "", "project it belongs to (default: directory name)")
+	return cmd
+}
+
+func newDomainListCmd() *cobra.Command {
+	var project string
+	cmd := &cobra.Command{
+		Use:     "ls",
+		Aliases: []string{"list"},
+		Short:   "every declared domain, and what it is waiting on",
+		Args:    usageArgs(0, 0, "usage: gg domain ls"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdDomainList(project)
+		},
+	}
+	cmd.Flags().StringVar(&project, "project", "", "project to read (default: directory name)")
 	return cmd
 }
 

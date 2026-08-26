@@ -344,6 +344,50 @@ Things worth knowing before you promise a user anything:
   deploy history. `gg deploy --name db` against a resource is refused with
   `not_a_service`, which is telling you the name is already a database.
 
+## Custom domains
+
+A service gets an address under `apps.gagarin.cloud` automatically. To answer on
+a name the user owns as well:
+
+```
+gg domain add shop.example.com --service web
+```
+
+**It is two steps and only the first is gagarin's.** That command makes the
+service answer for the name. Making the name *resolve* here is a DNS record the
+user creates at their registrar, and gagarin cannot do it for them. The command
+prints the exact record — pass it on verbatim rather than paraphrasing it.
+
+**Nothing is served over HTTPS until that record exists.** Let's Encrypt proves
+control by fetching the domain over the internet, so a certificate cannot be
+ordered before DNS points here. This is the normal first state, not a fault. Do
+not treat it as one, and do not retry the command hoping it resolves — it will
+not, because the missing piece is on their side.
+
+`gg status` says which of the two of you it is waiting on:
+
+| reading | who acts |
+|---|---|
+| waiting for DNS | **them** — the record does not exist yet |
+| DNS points elsewhere | **them** — it resolves, but not to gagarin |
+| issuing certificate | gagarin — nothing for them to do |
+| ok | nobody |
+
+Things worth knowing before promising anything:
+
+- **A deploy never changes a domain.** `gg deploy` cannot set, change or remove
+  one. That is deliberate: forgetting a flag would take a live site down while
+  the owner's DNS still looked correct.
+- **The generated address keeps working.** A service answers on both, so
+  existing links do not break and there is something to test with while DNS
+  propagates.
+- **One domain, one service, across all of gagarin.** A name somebody else holds
+  is refused; the refusal does not say who holds it.
+- **The service must be public.** A domain on a private service would point at
+  something nothing may reach, and is refused.
+- **An apex domain gets an A record, not a CNAME** — DNS does not permit a CNAME
+  at an apex. The command prints the right one; do not "correct" it.
+
 ## Reading state
 
 `gg projects` lists every project this account can reach — its own and those

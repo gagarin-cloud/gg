@@ -37,6 +37,7 @@ gg deploy --port 8080          # build, push, run the current directory
 gg resource add postgres db    # a database; you choose the name and the size, nothing else
 gg resource add redis cache    # postgres, mongo and redis — redis is in-memory and loses data on restart
 gg resource secrets db         # its credentials, to pass to a deploy like any other env
+gg domain add shop.example.com --service web   # answer on a name you own; prints the DNS record to create
 gg status                      # what gagarin intends, and what the cluster is actually doing
 gg logs web
 gg share teammate@example.com  # editors deploy and manage; viewers read
