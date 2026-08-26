@@ -26,9 +26,13 @@ call the API. There is no manifest file, no config file, and nothing to commit.
   deploys it — those are separate steps on purpose. To run something you did not
   build, copy it in first: `gg registry copy caddy:2-alpine`. Do not write a
   one-line Dockerfile that only says `FROM`; that is the same thing, worse.
-  **A database is not this.** Use `gg resource add postgres db` — copying a
-  postgres, mongo or redis image in and deploying it as a service is the old
-  workaround and is now the wrong answer.
+  **If a resource type exists, use it.** `gg resource add postgres db` beats
+  copying a postgres image in and deploying it as a service — that was the old
+  workaround, and it is now the wrong answer for postgres, mongo and redis.
+  **For anything else it is still the right answer**: gagarin does not have a
+  type for DuckDB, Cassandra, ClickHouse or a vector database, and a service
+  with a volume is the ordinary way to run one, not a hack. See "Anything we
+  do not have a type for".
 
 Gagarin itself holds the source of truth for all of this. Do not try to write
 config into the repository; it will not be read.
@@ -279,6 +283,28 @@ not tell anyone their data is safe in it.
 It runs **Valkey**, the BSD-licensed fork of Redis, because Redis's own licence
 forbids offering it as a hosted service. This changes nothing you can observe:
 `redis://` URLs, `redis-cli`, and every client library work unchanged.
+
+### Anything we do not have a type for
+
+Three types will never cover everything, and the list of things somebody needs
+is longer than any list gagarin will carry. Run it as an ordinary service with a
+volume:
+
+```
+gg registry copy qdrant/qdrant
+gg deploy --name vectors --image qdrant --port 6333 --volume /qdrant/storage --volume-size 20
+```
+
+Everything else behaves the same way: a private address by name, `--needs
+vectors` from whatever talks to it, a volume that survives restarts, and the
+same refusal to delete it while something still needs it.
+
+The only difference is who decides. For a resource the platform picks the image,
+the version and the port, and carries them. Here you pick them, and upgrades,
+tuning and consequences are yours.
+
+So: **if a type exists, use the resource** — fewer decisions, fewer ways to get
+it wrong. If it does not, this is not a workaround, it is the normal path.
 
 **Connecting to it is two steps, and the second one is an ordinary deploy.**
 
