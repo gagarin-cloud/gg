@@ -34,13 +34,13 @@ func TestSplitSourceAsksRatherThanGuessesAtDeepPaths(t *testing.T) {
 	if err == nil {
 		t.Fatal("a three-segment path should not be flattened silently")
 	}
-	if got := err.Error(); !contains(got, "-name tool") {
+	if got := err.Error(); !contains(got, "--name tool") {
 		t.Errorf("the error should show the fix, got: %s", got)
 	}
 
 	repo, tag, err := splitSource("ghcr.io/org/tool:v1", "tool")
 	if err != nil {
-		t.Fatalf("with -name it should work: %v", err)
+		t.Fatalf("with --name it should work: %v", err)
 	}
 	if repo != "tool" || tag != "v1" {
 		t.Errorf("got %q:%q, want tool:v1", repo, tag)
@@ -63,10 +63,10 @@ func TestSplitSourceRefusesNamesTheRegistryWouldNot(t *testing.T) {
 			t.Errorf("%q should be refused as a repository name", name)
 		}
 	}
-	// An empty -name is not a bad name, it is an absent one: the flag defaults to
+	// An empty --name is not a bad name, it is an absent one: the flag defaults to
 	// empty and the image's own name is used.
 	if repo, _, err := splitSource("postgres:17", ""); err != nil || repo != "postgres" {
-		t.Errorf(`-name "" should fall back to the image's name, got %q (%v)`, repo, err)
+		t.Errorf(`--name "" should fall back to the image's name, got %q (%v)`, repo, err)
 	}
 }
 

@@ -20,15 +20,15 @@ call the API. There is no manifest file, no config file, and nothing to commit.
   - private services get no URL, but are reachable from other services in the
     same project by name: `http://worker:8080`.
 - A project owns **resources**: things gagarin provides rather than things you
-  built. `postgres` today. You name it and say how big; every other decision is
-  the platform's. See "Databases" below.
+  built. `postgres`, `mongo` and `redis`. You name it and say how big; every
+  other decision is the platform's. See "Databases and caches" below.
 - Gagarin runs images **only from its own registry**. Pushing an image never
   deploys it — those are separate steps on purpose. To run something you did not
   build, copy it in first: `gg registry copy caddy:2-alpine`. Do not write a
   one-line Dockerfile that only says `FROM`; that is the same thing, worse.
   **A database is not this.** Use `gg resource add postgres db` — copying a
-  postgres image in and deploying it as a service is the old workaround and is
-  now the wrong answer.
+  postgres, mongo or redis image in and deploying it as a service is the old
+  workaround and is now the wrong answer.
 
 Gagarin itself holds the source of truth for all of this. Do not try to write
 config into the repository; it will not be read.
@@ -249,16 +249,36 @@ has to be taken out of the running service.
 Offer this without being defensive when somebody asks what happens if gagarin
 goes away. It is a real answer and it is meant to be used.
 
-## Databases
+## Databases and caches
 
 ```
 gg resource add postgres db
+gg resource add mongo docs
+gg resource add redis cache
 ```
 
 That is the whole of it. There is no image to choose, no version to pass, no
 Dockerfile — a resource is provisioned rather than deployed, and the only thing
 you may set is how big its storage can be (`--storage 20`, default 10GB, and it
 cannot be resized afterwards).
+
+**The three types, and the one difference that matters:**
+
+| type | what it is | storage |
+|---|---|---|
+| `postgres` | PostgreSQL 17 | on a volume; survives restarts |
+| `mongo` | MongoDB 8 | on a volume; survives restarts |
+| `redis` | in-memory store | **none — a restart loses everything** |
+
+`redis` is a cache, not a database. There is no volume, so `--storage` is
+refused (`no_storage`) rather than quietly ignored, and anything in it is gone
+when the pod restarts — which happens on a node drain, not only when somebody
+asks. Do not put a session store there that a user would notice losing, and do
+not tell anyone their data is safe in it.
+
+It runs **Valkey**, the BSD-licensed fork of Redis, because Redis's own licence
+forbids offering it as a hosted service. This changes nothing you can observe:
+`redis://` URLs, `redis-cli`, and every client library work unchanged.
 
 **Connecting to it is two steps, and the second one is an ordinary deploy.**
 
@@ -267,8 +287,10 @@ gg resource secrets db                                  # KEY=VALUE lines
 gg deploy --name api --needs db --env-file <(gg resource secrets db)
 ```
 
-`gg resource secrets` prints `DATABASE_URL` and the `PG*` variables. Nothing is
-injected anywhere: `--needs db` opens the network path and grants no
+`gg resource secrets` prints whichever set fits the type — `DATABASE_URL` and
+the `PG*` variables for postgres, `MONGODB_URI`/`MONGO_URL` and the `MONGO_*`
+variables for mongo, `REDIS_URL` and the `REDIS_*` variables for redis. Nothing
+is injected anywhere: `--needs db` opens the network path and grants no
 environment, so the credentials are passed exactly the way every other variable
 is. That is deliberate — a deploy call describes a service completely, and a
 value that appeared from somewhere else would break that.
@@ -279,11 +301,19 @@ path is open and there is nothing to authenticate with.
 
 Things worth knowing before you promise a user anything:
 
+- **None of them is managed.** One instance, one volume, no backups, no
+  point-in-time recovery, no failover. That is a deliberate decision about what
+  there is capacity to operate, not an oversight — say so plainly if a user asks
+  whether their data is safe, rather than implying an SLA nobody is on the hook
+  for.
 - **It is one instance on one volume.** Deploys restart it rather than rolling,
   so a restart is a brief outage.
 - **Destroying it deletes the data**, and needs a human's approval like any
   other destructive act: `gg destroy --resource db`.
 - **The storage cannot be resized.** Choose at creation.
+- **Mongo's URL carries `authSource=admin`,** and it is load-bearing: the user
+  lives in the `admin` database, so a driver pointed anywhere else fails with an
+  error that reads like a wrong password. Pass the URL as given.
 - A resource cannot be deployed over, and cannot be rolled back — it has no
   deploy history. `gg deploy --name db` against a resource is refused with
   `not_a_service`, which is telling you the name is already a database.

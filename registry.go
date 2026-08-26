@@ -110,14 +110,14 @@ func splitSource(source, override string) (repo, tag string, err error) {
 			repo = last
 		default:
 			return "", "", fmt.Errorf(
-				"%q has more path segments than a project's space allows; say what to call it: gg registry copy %s -name %s",
+				"%q has more path segments than a project's space allows; say what to call it: gg registry copy %s --name %s",
 				ref, source, last)
 		}
 	}
 
 	if !repoRe.MatchString(repo) {
 		return "", "", fmt.Errorf(
-			"%q is not a usable repository name: lowercase letters, digits, and . _ - between them\n  give one with -name",
+			"%q is not a usable repository name: lowercase letters, digits, and . _ - between them\n  give one with --name",
 			repo)
 	}
 	if !tagRe.MatchString(tag) {

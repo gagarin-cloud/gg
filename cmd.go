@@ -287,8 +287,20 @@ func newResourceAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add TYPE NAME",
 		Short: "provision a resource, e.g. `gg resource add postgres db`",
+		Long: `Provision something gagarin runs for you, rather than something you built.
+
+  postgres   PostgreSQL 17, on a volume. Survives restarts.
+  mongo      MongoDB 8, on a volume. Survives restarts.
+  redis      An in-memory store. --storage is refused, and a restart
+             loses everything in it: this is a cache, not a database.
+             (It runs Valkey, the BSD-licensed fork; every redis client
+             and every redis:// URL work unchanged.)
+
+None of them is managed. One instance, one volume, no backups and no
+failover — see ` + "`gg resource secrets`" + ` for how to connect, and the docs for
+what that means before you put a client's data in one.`,
 		Args: usageArgs(2, 2, "usage: gg resource add TYPE NAME\n"+
-			"  the types that exist are: postgres"),
+			"  the types that exist are: postgres, mongo, redis"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdResourceAdd(args[0], args[1], project, storage)
 		},
@@ -296,7 +308,7 @@ func newResourceAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&project, "project", "", "project to add it to (default: directory name)")
 	// The only knob, and it is honoured: it is the size of the volume. Anything
 	// else about how a resource runs is the platform's decision.
-	cmd.Flags().IntVar(&storage, "storage", 0, "how big its storage may get, in GB (default 10).\nSet once, at creation; it cannot be resized afterwards")
+	cmd.Flags().IntVar(&storage, "storage", 0, "how big its storage may get, in GB (default 10).\nSet once, at creation; it cannot be resized afterwards.\nRefused for redis, which keeps nothing across a restart")
 	return cmd
 }
 
