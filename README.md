@@ -34,7 +34,7 @@ gg signup you@example.com      # a human clicks a button in an email; that is th
 gg auth --claim ABCD-1234      # waits for that click, stores credentials, logs docker in
 gg init shop                   # create a project
 
-gg ship shop/web:8080          # build the current directory, push it, run it
+gg ship shop/web:8080 --public # build the current directory, push it, run it — --public gives it a URL
 gg status shop                 # what gagarin intends, and what the cluster is actually doing
 gg logs shop/web
 
@@ -55,7 +55,7 @@ image you did not just build:
 ```
 gg build  shop/web:v3 --context ./web    # make an image, run nothing
 gg push   shop/web:v3                    # publish it, release nothing
-gg deploy shop/web:8080 web:v3           # release one that already exists
+gg deploy shop/web:8080 web:v3 --public  # release one that already exists
 ```
 
 `gg help` lists everything.

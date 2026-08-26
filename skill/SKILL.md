@@ -27,9 +27,13 @@ call the API. There is no manifest file, no config file, and nothing to commit.
   name one is refused with the shape it should have had. Do not go looking for a
   way to set a default; there is none, on purpose.
 - A project owns **services**. A service is a container image that runs.
-  - `public` services get an HTTPS URL automatically.
-  - private services get no URL, but are reachable from other services in the
-    same project by name: `http://worker:8080`.
+  - A service is **private unless you pass `--public`**. Private means no URL,
+    reachable from other services in the same project by name —
+    `http://worker:8080` — and only by the ones that declared they need it.
+  - `--public` gives it an HTTPS URL automatically. Pass it for the service the
+    user's browser is meant to open, and for nothing else. Do not make a
+    database, a worker or an internal API public "so it can be tested": ask the
+    user before exposing anything they did not ask to expose.
 - A project owns **resources**: things gagarin provides rather than things you
   built. `postgres`, `mongo` and `redis`. You name it and say how big; every
   other decision is the platform's. See "Databases and caches" below.
@@ -120,8 +124,8 @@ machine has it.
    runs it — the whole job in one command. Run it from the directory containing
    that service's Dockerfile, or point `--context` at one:
    ```
-   gg ship <project>/worker:8080 --private
-   gg ship <project>/web:8080 --env WORKER_URL=http://worker:8080
+   gg ship <project>/worker:8080
+   gg ship <project>/web:8080 --public --env WORKER_URL=http://worker:8080
    ```
    The number after the colon is the port the container listens on. It defaults
    to 8080 when you leave it out; say it anyway when you know it, because a
@@ -374,7 +378,7 @@ volume:
 
 ```
 gg registry copy <project>/qdrant qdrant/qdrant
-gg deploy <project>/vectors:6333 qdrant --private --volume /qdrant/storage --volume-size 20
+gg deploy <project>/vectors:6333 qdrant --volume /qdrant/storage --volume-size 20
 ```
 
 Everything else behaves the same way: a private address by name,
@@ -433,8 +437,8 @@ Things worth knowing before you promise a user anything:
 
 ## Custom domains
 
-A service gets an address under `apps.gagarin.cloud` automatically. To answer on
-a name the user owns as well:
+A public service gets an address under `apps.gagarin.cloud` automatically. To
+answer on a name the user owns as well:
 
 ```
 gg domain add <project>/web shop.example.com
@@ -471,7 +475,8 @@ Things worth knowing before promising anything:
 - **One domain, one service, across all of gagarin.** A name somebody else holds
   is refused; the refusal does not say who holds it.
 - **The service must be public.** A domain on a private service would point at
-  something nothing may reach, and is refused.
+  something nothing may reach, and is refused — redeploy it with `--public`
+  first, and say out loud that you are exposing it.
 - **An apex domain gets an A record, not a CNAME** — DNS does not permit a CNAME
   at an apex. The command prints the right one; do not "correct" it.
 

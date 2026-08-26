@@ -234,6 +234,14 @@ The port is the one the container listens on, and defaults to 8080. The
 image is one in this project's own space — gagarin runs nothing from
 anywhere else, so bring somebody else's in with "gg registry copy" first.
 
+A service is private unless you say otherwise. Private means reachable
+inside its own project, by name, by the services that have declared they
+need it — and from nowhere else. "--public" gives it an address on the
+internet. Exposure is something you say out loud, because the two mistakes
+do not cost the same: a service that should have been public fails the
+first time somebody opens it, and a service that should have been private
+does not fail at all.
+
 A deploy changes the image and the environment, and nothing else. It
 cannot set a domain, move a volume, or change what this service is allowed
 to reach: those are declared by "gg domain", by the first deploy, and by
@@ -274,7 +282,9 @@ forward to a tag somebody else built.
 
 The image is named after the service and tagged from the clock, since
 somebody shipping does not have a name in mind for this particular build.
-It is printed, so it can be deployed again later.`,
+It is printed, so it can be deployed again later.
+
+As with "gg deploy", the service is private unless you pass "--public".`,
 		Args: usageArgs(1, 1, "usage: gg ship PROJECT/SERVICE[:PORT]\n"+
 			"  e.g. gg ship shop/web:8080 --context ./web"),
 	}

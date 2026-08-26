@@ -207,8 +207,8 @@ func resolveProject(ref string) (project, error) {
 }
 
 type deployFlags struct {
-	private bool
-	env     map[string]string
+	public bool
+	env    map[string]string
 	// A directory that survives a restart, and how big it may get. Set once, when
 	// the service is created; gagarin refuses to change it on a later deploy,
 	// because moving a volume abandons the data at the old path and resizing one
@@ -245,7 +245,7 @@ type deployFlagVars struct {
 // `gg deploy` and `gg ship`, so the two cannot drift.
 func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
 	v := &deployFlagVars{f: &deployFlags{env: map[string]string{}}}
-	fs.BoolVar(&v.f.private, "private", false, "do not expose a public URL")
+	fs.BoolVar(&v.f.public, "public", false, "give it an address on the internet. Without this a service\nis reachable only from inside its project, by the services\nthat have declared they need it")
 	fs.StringArrayVar(&v.env, "env", nil, "set an env var K=V (repeatable)")
 	fs.StringArrayVar(&v.envFiles, "env-file", nil, "read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)")
 	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
@@ -341,7 +341,7 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 		"image":  t.ref,
 		"digest": digest,
 		"port":   port,
-		"public": !f.private,
+		"public": f.public,
 		"env":    f.env,
 	}
 	// Only sent when asked for. An absent volume and a volume of zero size are
@@ -381,7 +381,11 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	if svc.URL != "" {
 		fmt.Printf("  %s\n", svc.URL)
 	} else {
+		// Said in full because the default changed in v0.10.0: somebody who
+		// expected a URL has to be told, in the same breath, both what they got
+		// and how to get the other thing.
 		fmt.Printf("  private — reachable in %s by name, once something needs it\n", project)
+		fmt.Printf("  (--public gives it an address on the internet)\n")
 	}
 	fmt.Printf("\ngagarin is converging on that. `gg status %s` says when it has.\n", project)
 	return nil
