@@ -92,12 +92,7 @@ func cmdDomainList(project string) error {
 	var out struct {
 		Services []struct {
 			Name   string `json:"name"`
-			Domain *struct {
-				Domain    string `json:"domain"`
-				State     string `json:"state"`
-				BlockedOn string `json:"blocked_on"`
-				Sentence  string `json:"sentence"`
-			} `json:"domain"`
+			Domain *domainStatus `json:"domain"`
 		} `json:"services"`
 	}
 	if err := call("GET", "/v1/projects/"+project+"/status", nil, &out); err != nil {
@@ -112,6 +107,12 @@ func cmdDomainList(project string) error {
 		found = true
 		fmt.Printf("%-34s %-10s %s\n", sv.Domain.Domain, sv.Name, describeDomainState(sv.Domain.State, sv.Domain.BlockedOn))
 		fmt.Printf("  %s\n", sv.Domain.Sentence)
+		// The sentence says "the record below", so the record has to be below.
+		// It is carried only for the states somebody can act on, which is
+		// exactly when it is worth printing.
+		if d := sv.Domain.DNS; d["type"] != "" {
+			fmt.Printf("    %s  %s  →  %s\n", d["type"], d["name"], d["value"])
+		}
 	}
 	if !found {
 		fmt.Printf("no domains in %s\n\n  gg domain add shop.example.com --service web\n", project)

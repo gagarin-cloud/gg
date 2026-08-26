@@ -124,6 +124,15 @@ func printStatusTable(st statusResp) {
 			row = append(row, v)
 		}
 		rows = append(rows, append(row, url))
+
+		// A declared domain gets its own line under its service, indented, so it
+		// reads as a property of that service rather than as another one. It is
+		// not a column: three of the four readings need a sentence, and a column
+		// wide enough for one would deform the table for the projects — most of
+		// them — that have no domain at all.
+		if s.Domain != nil {
+			rows = append(rows, domainRow(len(head), s.Domain))
+		}
 	}
 
 	// Widths from the content, so nothing is truncated and nothing is padded to a
@@ -273,4 +282,26 @@ func kindLabel(kind string) string {
 		return strings.TrimPrefix(kind, "resource:")
 	}
 	return "service"
+}
+
+// domainRow renders a declared domain as a child of its service.
+//
+// The marker column carries the same vocabulary the service marks use: a filled
+// dot when there is nothing left to do, an open one when somebody has to act.
+// Which somebody is in the text, because that is the part a reader acts on.
+func domainRow(width int, d *domainStatus) []string {
+	mark := "○"
+	if d.State == "ok" {
+		mark = "●"
+	}
+	row := make([]string, width)
+	for i := range row {
+		row[i] = ""
+	}
+	row[0] = mark
+	row[1] = "└ " + d.Domain
+	// Into the last column, where the service above it prints its URL — the two
+	// are the same kind of fact, which is where it is reachable.
+	row[width-1] = describeDomainState(d.State, d.BlockedOn)
+	return row
 }

@@ -411,6 +411,18 @@ type statusResp struct {
 	Services  []serviceStatus `json:"services"`
 }
 
+// domainStatus is where a declared domain is in its handshake, and which of the
+// two parties is holding it up. Both, because the state alone misleads:
+// "waiting" reads as "the platform is working on it", and for half the states
+// the platform can do nothing until a DNS record changes.
+type domainStatus struct {
+	Domain    string            `json:"domain"`
+	State     string            `json:"state"`
+	BlockedOn string            `json:"blocked_on"`
+	Sentence  string            `json:"sentence"`
+	DNS       map[string]string `json:"dns"`
+}
+
 // Named rather than anonymous so the renderers in status.go can take one.
 type serviceStatus struct {
 	// Kind distinguishes a service from a resource. Absent from an older control
@@ -427,7 +439,11 @@ type serviceStatus struct {
 	VolumePath   string   `json:"volume_path"`
 	VolumeSizeGB int      `json:"volume_size_gb"`
 	InSync       bool     `json:"in_sync"`
-	Sentence     string   `json:"sentence"`
+	// Domain is present only when one was declared. Reported separately from
+	// InSync on purpose: a domain waiting on somebody's registrar is not a
+	// cluster mismatch, and the platform cannot converge it.
+	Domain   *domainStatus `json:"domain"`
+	Sentence string        `json:"sentence"`
 	Actual       struct {
 		Exists  bool   `json:"exists"`
 		Ready   int32  `json:"ready_replicas"`
