@@ -29,9 +29,10 @@ type deployment struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
-func cmdHistory(service, project string) error {
-	if project == "" {
-		project = defaultName()
+func cmdHistory(ref string) error {
+	project, service, _, err := parseService(ref)
+	if err != nil {
+		return err
 	}
 
 	var out struct {
@@ -65,18 +66,19 @@ func cmdHistory(service, project string) error {
 			fmt.Printf("       by %s\n", d.DeployedBy)
 		}
 	}
-	fmt.Printf("\nGo back one with `gg rollback %s`, or to a particular one with -to N.\n", service)
+	fmt.Printf("\nGo back one with `gg rollback %s/%s`, or to a particular one with --to N.\n", project, service)
 	return nil
 }
 
 // ---- rollback -------------------------------------------------------------
 
-func cmdRollback(service, project string, to int) error {
-	if project == "" {
-		project = defaultName()
+func cmdRollback(ref string, to int) error {
+	project, service, _, err := parseService(ref)
+	if err != nil {
+		return err
 	}
 	if to < 0 {
-		return fmt.Errorf("%d is not a revision number; see `gg history SERVICE`", to)
+		return fmt.Errorf("%d is not a revision number; see `gg history %s/%s`", to, project, service)
 	}
 
 	body := map[string]any{}
@@ -101,9 +103,10 @@ func cmdRollback(service, project string, to int) error {
 
 // ---- eject ----------------------------------------------------------------
 
-func cmdEject(project, outPath string) error {
-	if project == "" {
-		project = defaultName()
+func cmdEject(ref, outPath string) error {
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
 	}
 
 	// Raw rather than through call(): what comes back is a YAML file, not the

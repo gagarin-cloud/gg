@@ -3,7 +3,7 @@ package main
 // Two ways of looking at the same answer.
 //
 // The table is what `gg status` prints: one row per service, aligned, so a
-// project is taken in at a glance rather than read. The graph is what `-visual`
+// project is taken in at a glance rather than read. The graph is what `--visual`
 // opens: the same data drawn as the shape it actually has, because "api needs
 // db, db needs nothing" is a picture long before it is a list.
 //
@@ -65,7 +65,7 @@ func shortImage(image, projectID string) string {
 func printStatusTable(st statusResp) {
 	fmt.Printf("\nproject %s  (id %s)\n\n", st.Project, st.ProjectID)
 	if len(st.Services) == 0 {
-		fmt.Println("  no services yet — deploy one with `gg deploy`")
+		fmt.Printf("  no services yet — ship one with `gg ship %s/web:8080`\n", st.Project)
 		fmt.Println()
 		return
 	}
@@ -186,7 +186,7 @@ func printStatusTable(st statusResp) {
 			fmt.Printf("  ○ %s: %s\n", s.Name, s.Actual.Message)
 		}
 	}
-	fmt.Printf("\n  gg status -visual   the same thing as a picture\n\n")
+	fmt.Printf("\n  gg status %s --visual   the same thing as a picture\n\n", st.Project)
 }
 
 // ---- the visual ---------------------------------------------------------
@@ -195,7 +195,7 @@ func printStatusTable(st statusResp) {
 // interrupted.
 //
 // The page is served from here rather than written to a file so that it can be
-// live: it re-fetches every few seconds, which turns `gg status -visual` into
+// live: it re-fetches every few seconds, which turns `gg status --visual` into
 // something worth leaving open on a second monitor while a deploy converges.
 //
 // The credential never reaches the browser. The page asks this process for the

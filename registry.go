@@ -5,7 +5,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 )
@@ -17,36 +16,35 @@ import (
 // while the user is still looking at it, rather than after a long upload.
 var repoRe = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
 
-func cmdRegistryCopy(project, name, source string) error {
-	if project == "" {
-		project = defaultName()
-	}
-
-	var who struct {
-		Registry string `json:"registry"`
-		Platform string `json:"platform"`
-	}
-	if err := call("GET", "/v1/whoami", nil, &who); err != nil {
-		return err
-	}
-	registry := os.Getenv("GAGARIN_REGISTRY")
-	if registry == "" {
-		registry = who.Registry
-	}
-	if registry == "" {
-		return fmt.Errorf("no image registry: the control plane did not report one and GAGARIN_REGISTRY is not set")
-	}
-
-	repo, tag, err := splitSource(source, name)
+// cmdRegistryCopy brings an image somebody else built into a project's space.
+//
+// Both halves are named. The destination used to be guessed from the source —
+// `gg registry copy ghcr.io/org/tool:v1` became `tool` — with a --name flag for
+// when the guess would not work and a refusal for when it could not be made. A
+// flattening rule is one more thing to learn and to be surprised by, and now
+// that every other command names its project explicitly there is nowhere left
+// for the guess to hide: say what to call it, and where.
+func cmdRegistryCopy(dest, source string) error {
+	project, repo, tag, err := parseImage(dest)
 	if err != nil {
 		return err
 	}
-
-	p, err := resolveProject(project)
+	srcTag, err := sourceTag(source)
 	if err != nil {
 		return err
 	}
-	target := fmt.Sprintf("%s/%s/%s:%s", strings.TrimRight(registry, "/"), p.ID, repo, tag)
+	// The source's tag when the destination does not give one. Derived from an
+	// argument the caller typed rather than from their working directory, which
+	// is the distinction that matters: copying `postgres:17-alpine` and getting
+	// `17-alpine` is reading what was said, not inferring what was meant.
+	if tag == "" {
+		tag = srcTag
+	}
+
+	target, err := resolveTarget(project, repo, tag)
+	if err != nil {
+		return err
+	}
 
 	// Registry to registry, without the image touching this machine.
 	//
@@ -63,79 +61,89 @@ func cmdRegistryCopy(project, name, source string) error {
 	// picks the right one at pull time and no platform has to be guessed here. It
 	// is also far faster, because the layers never make the round trip.
 	fmt.Printf("→ copying %s\n", source)
-	if err := run("docker", "buildx", "imagetools", "create", "--tag", target, source); err != nil {
-		return fmt.Errorf("copy failed: %w\n  hint: run `gg registry login` first", err)
+	if err := run("docker", "buildx", "imagetools", "create", "--tag", target.ref, source); err != nil {
+		// Deliberately not "run gg registry login first". That was the only hint
+		// this gave, and it is wrong for every failure that is not a credential:
+		// a 502 from the registry, a source tag that does not exist, a rate limit
+		// at the other end. Sending somebody to re-authenticate over a broken
+		// upload costs them the one piece of information docker just printed.
+		return fmt.Errorf("copy failed: %w\n  hint: docker printed the reason above."+
+			"\n        401 or 403 — run `gg registry login`."+
+			"\n        404 — check the source tag exists."+
+			"\n        502 or a timeout — the registry is having trouble; retry, and report it if it persists", err)
 	}
 
-	fmt.Printf("\n  %s\n", target)
-	if d := imageDigest(target); d != "" {
+	fmt.Printf("\n  %s\n", target.short())
+	if d := imageDigest(target.ref); d != "" {
 		fmt.Printf("  %s\n", d)
 	}
-	fmt.Printf("\nDeploy it with:\n  gg deploy --project %s --name %s --port <port>\n", project, repo)
+	fmt.Printf("\nRun it:\n  gg deploy %s/%s:<port> %s\n", project, repo, target.short())
 	return nil
 }
 
-// splitSource works out what to call the copy, given what it came from.
-//
-// A source may carry a registry host and any number of path segments —
-// `ghcr.io/org/tool:v1` — while the target has room for exactly one, because the
-// segment before it is the project id and that is the tenant boundary. Where the
-// answer is obvious the name is taken; where it is not, the user is asked rather
-// than guessed at, because a flattening rule is one more thing to learn and to
-// be surprised by.
-func splitSource(source, override string) (repo, tag string, err error) {
-	ref := source
-	tag = "latest"
+// sourceTag reads the tag off the image being copied from. That reference can
+// carry a registry host and any number of path segments — `ghcr.io/org/tool:v1`
+// — so unlike the destination it is not a gagarin reference and is not parsed
+// as one.
+func sourceTag(source string) (string, error) {
+	if source == "" {
+		return "", fmt.Errorf("which image?\n  hint: gg registry copy shop/postgres postgres:17-alpine")
+	}
 	// A digest pins harder than a tag, and Docker will not let one be re-tagged
 	// onto a name without also naming a tag, so say so rather than produce
-	// something confusing.
-	if strings.Contains(ref, "@") {
-		return "", "", fmt.Errorf("copy an image by tag rather than by digest: %s", source)
+	// something confusing. Copying one platform out of a multi-architecture image
+	// produces a different digest anyway, so a source digest cannot be carried
+	// across even in principle.
+	if strings.Contains(source, "@") {
+		return "", fmt.Errorf("copy an image by tag rather than by digest: %s", source)
 	}
 	// The last colon is only a tag if it is after the last slash — otherwise it
 	// is a port, as in localhost:5000/thing.
-	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
-		ref, tag = ref[:i], ref[i+1:]
-	}
-
-	if override != "" {
-		repo = override
-	} else {
-		parts := strings.Split(ref, "/")
-		last := parts[len(parts)-1]
-		switch {
-		// A bare name, or a well-known single-owner path like library/postgres:
-		// the last segment is the name anybody would call it.
-		case len(parts) <= 2:
-			repo = last
-		default:
-			return "", "", fmt.Errorf(
-				"%q has more path segments than a project's space allows; say what to call it: gg registry copy %s --name %s",
-				ref, source, last)
+	if i := strings.LastIndex(source, ":"); i > strings.LastIndex(source, "/") {
+		tag := source[i+1:]
+		if !tagRe.MatchString(tag) {
+			return "", fmt.Errorf("%q is not a usable tag", tag)
 		}
+		return tag, nil
 	}
-
-	if !repoRe.MatchString(repo) {
-		return "", "", fmt.Errorf(
-			"%q is not a usable repository name: lowercase letters, digits, and . _ - between them\n  give one with --name",
-			repo)
-	}
-	if !tagRe.MatchString(tag) {
-		return "", "", fmt.Errorf("%q is not a usable tag", tag)
-	}
-	return repo, tag, nil
+	return "latest", nil
 }
 
 // tagRe is docker's own tag shape, restated so a bad one is caught before a pull.
 var tagRe = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`)
 
-// imageDigest asks the registry what the copy landed as. gagarin runs images by
-// digest, so the useful thing to print is the one the platform will pin.
+// imageDigest asks the registry what an image landed as. gagarin pins by digest,
+// so this is what a deploy sends and what the platform will run.
+//
+// Note the printf, which is load-bearing and looks like it should not be.
+// `--format '{{.Manifest.Digest}}'` reads correctly and does the wrong thing:
+// buildx prints its whole default block — Name, MediaType, Digest, and every
+// manifest in an index — for any template that references .Manifest directly.
+// Wrapping the field defeats that and prints the digest alone. infra/README.md
+// documents the same trap for the control plane's own image; this function had
+// it too, and got away with it for as long as the result was only printed.
+//
+// The result is checked rather than trusted, because it is about to be sent to
+// an API that will refuse it: an empty answer means "run it by tag", and an
+// answer that is not a digest means the same thing rather than a failed deploy.
 func imageDigest(ref string) string {
 	out, err := runCapture("docker", "buildx", "imagetools", "inspect", ref,
-		"--format", "{{.Manifest.Digest}}")
+		"--format", `{{printf "%s" .Manifest.Digest}}`)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	return validDigest(strings.TrimSpace(out))
+}
+
+// digestShapeRe is what the control plane will accept (internal/api, digestRe).
+var digestShapeRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// validDigest passes a digest through, or returns empty for anything that is
+// not one. Empty is a meaningful answer here — it means "pin by tag" — so a
+// malformed reading degrades to the same behaviour as no reading at all.
+func validDigest(s string) string {
+	if digestShapeRe.MatchString(s) {
+		return s
+	}
+	return ""
 }

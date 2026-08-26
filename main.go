@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -149,31 +148,10 @@ func callYAML(method, path string) (string, error) {
 
 // ---- commands -----------------------------------------------------------
 
-func defaultName() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "app"
-	}
-	return sanitize(filepath.Base(wd))
-}
-
-var notAllowed = regexp.MustCompile(`[^a-z0-9-]+`)
-
-func sanitize(s string) string {
-	s = notAllowed.ReplaceAllString(strings.ToLower(s), "-")
-	s = strings.Trim(s, "-")
-	if s == "" || s[0] < 'a' || s[0] > 'z' {
-		s = "app-" + s
-	}
-	if len(s) > 30 {
-		s = strings.Trim(s[:30], "-")
-	}
-	return s
-}
-
 func cmdInit(name string) error {
-	if name == "" {
-		name = defaultName()
+	name, err := parseProject(name)
+	if err != nil {
+		return err
 	}
 	var p project
 	if err := call("POST", "/v1/projects", map[string]string{"name": name}, &p); err != nil {
@@ -229,9 +207,6 @@ func resolveProject(ref string) (project, error) {
 }
 
 type deployFlags struct {
-	project string
-	name    string
-	port    int
 	private bool
 	env     map[string]string
 	// A directory that survives a restart, and how big it may get. Set once, when
@@ -240,12 +215,22 @@ type deployFlags struct {
 	// can destroy a filesystem.
 	volumePath   string
 	volumeSizeGB int
-	// The services this one calls. Nothing else in the project can reach it, so
-	// an undeclared dependency does not fail loudly — it times out. Replaced
-	// wholesale on every deploy, exactly like env: a redeploy that omits a name
-	// withdraws it.
-	needs []string
 }
+
+// What is deliberately not here any more: --project, --name, --port and --needs.
+//
+// The first three moved into the service reference, where they are visible in
+// the command rather than derived from the directory it was run in. --needs
+// moved out of a deploy entirely, to `gg deps` — it is a standing declaration
+// about who may talk to whom, and it was replaced wholesale on every deploy, so
+// a redeploy that failed to restate a dependency withdrew it. That does not
+// break the caller; an undeclared call is dropped rather than refused, so it
+// hangs. A capability you can lose by forgetting to mention it is the failure
+// nobody sees.
+//
+// --env stayed, and is still replaced wholesale, because env is genuinely part
+// of the artifact: it is what this revision ran with, it is what a rollback
+// restores, and `gg history` would mean less without it.
 
 // deployFlagVars holds the pflag.FlagSet destinations that need post-processing
 // once parsing is done: env vars and env files both feed the same map, and
@@ -256,24 +241,19 @@ type deployFlagVars struct {
 	envFiles []string
 }
 
-// bindDeployFlags registers every `gg deploy` flag on fs, so the cobra command
-// and the standalone parser below define them exactly once.
+// bindDeployFlags registers the flags that describe a deployed service, on both
+// `gg deploy` and `gg ship`, so the two cannot drift.
 func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
-	v := &deployFlagVars{f: &deployFlags{port: 8080, env: map[string]string{}}}
-	fs.StringVar(&v.f.project, "project", "", "project to deploy into (default: directory name)")
-	fs.StringVar(&v.f.name, "name", "", "service name (default: directory name)")
-	fs.IntVar(&v.f.port, "port", 8080, "port the container listens on")
+	v := &deployFlagVars{f: &deployFlags{env: map[string]string{}}}
 	fs.BoolVar(&v.f.private, "private", false, "do not expose a public URL")
 	fs.StringArrayVar(&v.env, "env", nil, "set an env var K=V (repeatable)")
 	fs.StringArrayVar(&v.envFiles, "env-file", nil, "read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)")
-	fs.StringArrayVar(&v.f.needs, "needs", nil, "another service in this project that this one calls\n(repeatable). Nothing else can reach it. Replaced on\nevery deploy, like --env: pass every service you still\ncall, or the call stops working")
 	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
 	fs.IntVar(&v.f.volumeSizeGB, "volume-size", 0, "how big the volume may get, in GB (default 10)")
 	return v
 }
 
-// finish applies env-file/-env precedence and directory-name defaults once
-// flags have been parsed.
+// finish applies env-file/-env precedence once flags have been parsed.
 func (v *deployFlagVars) finish() (*deployFlags, error) {
 	for _, path := range v.envFiles {
 		vals, err := parseEnvFile(path)
@@ -291,18 +271,12 @@ func (v *deployFlagVars) finish() (*deployFlags, error) {
 		}
 		v.f.env[k] = val
 	}
-	if v.f.name == "" {
-		v.f.name = defaultName()
-	}
-	if v.f.project == "" {
-		v.f.project = defaultName()
-	}
 	return v.f, nil
 }
 
-// parseDeploy parses `gg deploy` flags on their own, outside of cobra. It
-// exists for tests: it defines the identical flag set newDeployCmd binds to
-// its cobra.Command.
+// parseDeploy parses the deploy flags on their own, outside of cobra. It exists
+// for tests: it defines the identical flag set newDeployCmd binds to its
+// cobra.Command.
 func parseDeploy(args []string) (*deployFlags, error) {
 	fs := pflag.NewFlagSet("deploy", pflag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -313,66 +287,62 @@ func parseDeploy(args []string) (*deployFlags, error) {
 	return v.finish()
 }
 
-func cmdDeploy(f *deployFlags) error {
-	if _, err := os.Stat("Dockerfile"); err != nil {
-		return fmt.Errorf("no Dockerfile in the current directory\n  hint: gagarin deploys images, so the repo needs a Dockerfile it can build")
-	}
+// defaultPort is what a service listens on when the reference does not say.
+//
+// Kept, and kept at the conventional number, because most containers do listen
+// here and restating it on every redeploy is noise. It is printed on every
+// deploy rather than left implicit, so a service that is answering on the wrong
+// port is visible in the output instead of only in a timeout.
+const defaultPort = 8080
 
-	// Ask the platform what its nodes run, and where its registry is, instead of
-	// assuming either. Building for the wrong architecture succeeds locally and
-	// only fails much later at pull time; and a registry the user has to know and
-	// export is one more secret-shaped thing standing between an agent and a
-	// deploy, when the control plane already knows the answer.
-	var who struct {
-		Platform string `json:"platform"`
-		Registry string `json:"registry"`
-	}
-	if err := call("GET", "/v1/whoami", nil, &who); err != nil {
-		return err
-	}
-	if who.Platform == "" {
-		return fmt.Errorf("control plane did not report a target platform")
-	}
-	// The environment still wins, so pushing somewhere else stays possible.
-	registry := os.Getenv("GAGARIN_REGISTRY")
-	if registry == "" {
-		registry = who.Registry
-	}
-	if registry == "" {
-		return fmt.Errorf("no image registry: the control plane did not report one and GAGARIN_REGISTRY is not set")
-	}
-
-	// The id, not the name: names are unique only within an account, so a registry
-	// path built from one would collide between tenants — and the control plane
-	// refuses an image that is not under this project's id.
-	p, err := resolveProject(f.project)
+// cmdDeploy runs an image that is already in the project's registry space.
+//
+// It does one thing. It does not build, it does not push, and it does not touch
+// the dependency graph, the domain or the volume of a service that already
+// exists — all of those are declared elsewhere and outlive any one image.
+func cmdDeploy(ref, image string, f *deployFlags) error {
+	project, service, port, err := parseService(ref)
 	if err != nil {
 		return err
 	}
-	tag := fmt.Sprintf("%s/%s/%s:%d", strings.TrimRight(registry, "/"), p.ID, f.name, time.Now().Unix())
-
-	fmt.Printf("→ building %s for %s\n", tag, who.Platform)
-	if err := run("docker", "build", "--platform", who.Platform, "-t", tag, "."); err != nil {
-		return fmt.Errorf("docker build failed: %w", err)
-	}
-
-	fmt.Printf("→ pushing\n")
-	pushOut, err := runCapture("docker", "push", tag)
+	repo, tag, err := parseRepoTag(image, project)
 	if err != nil {
-		return fmt.Errorf("docker push failed: %w\n  hint: run `gg registry login` first", err)
+		return err
 	}
-	digest := parseDigest(pushOut)
+	target, err := resolveTarget(project, repo, tag)
+	if err != nil {
+		return err
+	}
+	return deployImage(project, service, port, target, f)
+}
 
-	fmt.Printf("→ registering service\n")
+// deployImage is the registration itself, shared with `gg ship`.
+func deployImage(project, service string, port int, t *registryTarget, f *deployFlags) error {
+	if port == 0 {
+		port = defaultPort
+	}
+
+	// gagarin pins by digest, and the server clears the pin when it is not sent.
+	// A deploy no longer follows a push, so there is no push output to read one
+	// out of — it is asked of the registry instead. A failure here is not fatal:
+	// running by tag is what every other platform does, and refusing to deploy
+	// over it would be worse than saying so.
+	digest := t.digest
+	if digest == "" {
+		digest = imageDigest(t.ref)
+	}
+
+	fmt.Printf("→ recording %s as %s on port %d\n", t.short(), service, port)
+	if digest == "" {
+		fmt.Printf("  (no digest for that tag; %s will run by tag rather than pinned)\n", service)
+	}
+
 	body := map[string]any{
-		"image":  tag,
+		"image":  t.ref,
 		"digest": digest,
-		"port":   f.port,
+		"port":   port,
 		"public": !f.private,
 		"env":    f.env,
-		// Always sent, even when empty, because empty is a meaningful request:
-		// it withdraws whatever this service used to reach.
-		"needs": f.needs,
 	}
 	// Only sent when asked for. An absent volume and a volume of zero size are
 	// different requests, and the control plane refuses the second.
@@ -386,22 +356,34 @@ func cmdDeploy(f *deployFlags) error {
 		Name string `json:"name"`
 		URL  string `json:"url"`
 	}
-	path := fmt.Sprintf("/v1/projects/%s/services/%s", f.project, f.name)
+	path := fmt.Sprintf("/v1/projects/%s/services/%s", project, service)
 	if err := call("PUT", path, body, &svc); err != nil {
 		return err
 	}
 
-	if svc.URL == "" {
-		fmt.Printf("\n%s is running as a private service (no public URL)\n", svc.Name)
-		return nil
+	// Submitted, not awaited.
+	//
+	// Every command here writes a demand and returns. Nothing blocks on the
+	// cluster catching up, because the cluster catching up is not this command's
+	// business — gagarin reconciles, and `gg status` is where you find out
+	// whether it has. That is the same shape a domain already had: declare it,
+	// and read who is holding it up.
+	//
+	// It also removes a claim gg was in no position to make. A deploy used to sit
+	// on the status endpoint for ninety seconds and then announce a URL, which
+	// read as "it works" — and for a private service it skipped even that and
+	// said "is running" on the strength of the write having succeeded. The
+	// control plane accepts any image inside the project's own space, existing or
+	// not, so a typo deploys cleanly and sits in ImagePullBackOff. Saying nothing
+	// about the running state is more honest than saying something unchecked, and
+	// it is one fewer place for the answer to disagree with `gg status`.
+	fmt.Printf("  %s\n", t.short())
+	if svc.URL != "" {
+		fmt.Printf("  %s\n", svc.URL)
+	} else {
+		fmt.Printf("  private — reachable in %s by name, once something needs it\n", project)
 	}
-	fmt.Printf("→ waiting for %s to come up\n", svc.Name)
-	if err := waitReady(f.project, f.name, 90*time.Second); err != nil {
-		fmt.Printf("\n%s deployed but not ready yet: %v\n", svc.Name, err)
-		fmt.Printf("check `gg logs %s`\n", f.name)
-		return nil
-	}
-	fmt.Printf("\n  %s\n\n", svc.URL)
+	fmt.Printf("\ngagarin is converging on that. `gg status %s` says when it has.\n", project)
 	return nil
 }
 
@@ -444,7 +426,7 @@ type serviceStatus struct {
 	// cluster mismatch, and the platform cannot converge it.
 	Domain   *domainStatus `json:"domain"`
 	Sentence string        `json:"sentence"`
-	Actual       struct {
+	Actual   struct {
 		Exists  bool   `json:"exists"`
 		Ready   int32  `json:"ready_replicas"`
 		Desired int32  `json:"desired_replicas"`
@@ -452,36 +434,10 @@ type serviceStatus struct {
 	} `json:"actual"`
 }
 
-func waitReady(project, service string, d time.Duration) error {
-	deadline := time.Now().Add(d)
-	var last string
-	for time.Now().Before(deadline) {
-		var st statusResp
-		if err := call("GET", "/v1/projects/"+project+"/status", nil, &st); err != nil {
-			return err
-		}
-		for _, s := range st.Services {
-			if s.Name != service {
-				continue
-			}
-			if s.InSync {
-				return nil
-			}
-			if s.Actual.Message != "" {
-				last = s.Actual.Message
-			}
-		}
-		time.Sleep(3 * time.Second)
-	}
-	if last != "" {
-		return fmt.Errorf("%s", last)
-	}
-	return fmt.Errorf("timed out waiting for readiness")
-}
-
-func cmdStatus(project string, visual bool) error {
-	if project == "" {
-		project = defaultName()
+func cmdStatus(ref string, visual bool) error {
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
 	}
 	if visual {
 		return serveVisual(project)
@@ -495,9 +451,10 @@ func cmdStatus(project string, visual bool) error {
 	return nil
 }
 
-func cmdLogs(service, project string) error {
-	if project == "" {
-		project = defaultName()
+func cmdLogs(ref string) error {
+	project, service, _, err := parseService(ref)
+	if err != nil {
+		return err
 	}
 	var out struct{ Logs string }
 	if err := call("GET", "/v1/projects/"+project+"/services/"+service+"/logs", nil, &out); err != nil {
@@ -513,12 +470,13 @@ func cmdLogs(service, project string) error {
 // editors and viewers. You cannot hand over ownership here, because ownership is
 // the bill; and for the same reason nobody but the owner can delete a project.
 
-func cmdShare(email, project, role string) error {
+func cmdShare(ref, email, role string) error {
 	if role == "" {
 		role = "editor"
 	}
-	if project == "" {
-		project = defaultName()
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
 	}
 
 	if err := call("PUT", "/v1/projects/"+project+"/members",
@@ -533,9 +491,10 @@ func cmdShare(email, project, role string) error {
 	return nil
 }
 
-func cmdUnshare(email, project string) error {
-	if project == "" {
-		project = defaultName()
+func cmdUnshare(ref, email string) error {
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
 	}
 	if err := call("DELETE", "/v1/projects/"+project+"/members/"+url.PathEscape(email), nil, nil); err != nil {
 		return err
@@ -544,9 +503,10 @@ func cmdUnshare(email, project string) error {
 	return nil
 }
 
-func cmdMembers(project string) error {
-	if project == "" {
-		project = defaultName()
+func cmdMembers(ref string) error {
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
 	}
 	var out struct {
 		Owner   string `json:"owner"`
@@ -565,42 +525,81 @@ func cmdMembers(project string) error {
 	return nil
 }
 
-// cmdDestroy destroys a project, or one service within it if service is set.
-// service narrows the blast radius rather than changing what a bare
-// `gg destroy` means: without it this still destroys the whole project, which
-// is what every existing script and every habit expects.
-func cmdDestroy(project, service, resource string) error {
-	if project == "" {
-		project = defaultName()
-	}
-
-	if service != "" {
-		path := fmt.Sprintf("/v1/projects/%s/services/%s", project, service)
-		if err := call("DELETE", path, nil, nil); err != nil {
+// cmdDestroy destroys a project, or one thing inside it.
+//
+// Which of the two depends only on the shape of what was typed: `shop` is the
+// project, `shop/db` is something in it. There used to be --service and
+// --resource flags here, because a database and a container are deleted through
+// different endpoints and the caller had to say which they meant — with the
+// server refusing a wrong guess, which was better than succeeding but still put
+// the guess on the caller.
+//
+// It is not a guess now. `gg status` already reports what kind each name is, so
+// the kind is looked up and the right endpoint called. One extra read before an
+// irreversible act is a good trade, and it turns "you called a database a
+// service" into a question nobody has to answer.
+func cmdDestroy(ref string) error {
+	if !strings.Contains(ref, "/") {
+		project, err := parseProject(ref)
+		if err != nil {
 			return err
 		}
-		fmt.Printf("service %s destroyed\n", service)
+		if err := call("DELETE", "/v1/projects/"+project, nil, nil); err != nil {
+			return err
+		}
+		fmt.Printf("project %s destroyed\n", project)
 		return nil
 	}
 
-	// The same verb, a different noun. Naming it separately rather than letting
-	// --service take either is what makes the API able to refuse a wrong guess:
-	// a resource deleted through the service path is a caller who thinks a
-	// database is a container, and being told so is worth more than succeeding.
-	if resource != "" {
-		path := fmt.Sprintf("/v1/projects/%s/resources/%s", project, resource)
-		if err := call("DELETE", path, nil, nil); err != nil {
-			return err
-		}
-		fmt.Printf("resource %s destroyed, and everything in it\n", resource)
-		return nil
-	}
-
-	if err := call("DELETE", "/v1/projects/"+project, nil, nil); err != nil {
+	project, name, _, err := parseService(ref)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("project %s destroyed\n", project)
+	kind, err := kindOf(project, name)
+	if err != nil {
+		return err
+	}
+	if kind == kindResource {
+		path := fmt.Sprintf("/v1/projects/%s/resources/%s", project, name)
+		if err := call("DELETE", path, nil, nil); err != nil {
+			return err
+		}
+		fmt.Printf("resource %s destroyed, and everything in it\n", name)
+		return nil
+	}
+	path := fmt.Sprintf("/v1/projects/%s/services/%s", project, name)
+	if err := call("DELETE", path, nil, nil); err != nil {
+		return err
+	}
+	fmt.Printf("service %s destroyed\n", name)
 	return nil
+}
+
+// The two things a name in a project can be. A resource is provisioned — a
+// database, a cache — and a service is an image somebody built.
+const (
+	kindService  = "service"
+	kindResource = "resource"
+)
+
+// kindOf asks the platform what a name is. An older control plane does not
+// report a kind at all, and a service is the right thing to assume there: it is
+// what the field's absence meant before resources existed.
+func kindOf(project, name string) (string, error) {
+	var st statusResp
+	if err := call("GET", "/v1/projects/"+project+"/status", nil, &st); err != nil {
+		return "", err
+	}
+	for _, s := range st.Services {
+		if s.Name != name {
+			continue
+		}
+		if s.Kind != "" && s.Kind != "container" {
+			return kindResource, nil
+		}
+		return kindService, nil
+	}
+	return "", fmt.Errorf("%s has no service or resource called %s\n  hint: gg status %s lists them", project, name, project)
 }
 
 func cmdRegistryLogin() error {

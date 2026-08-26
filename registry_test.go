@@ -1,88 +1,57 @@
 package main
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestSplitSourceTakesTheImagesOwnName(t *testing.T) {
-	for _, tc := range []struct{ source, repo, tag string }{
-		{"postgres:17-alpine", "postgres", "17-alpine"},
-		{"postgres", "postgres", "latest"},
-		{"library/postgres:17", "postgres", "17"},
-		{"docker.io/redis:7-alpine", "redis", "7-alpine"},
+// The tag comes off the source when the destination does not give one. The
+// source is not a gagarin reference — it can carry a registry host and any
+// number of path segments — so it is read rather than parsed.
+func TestSourceTagReadsTheTagOffAnyReference(t *testing.T) {
+	for in, want := range map[string]string{
+		"postgres:17-alpine":     "17-alpine",
+		"postgres":               "latest",
+		"library/postgres:17":    "17",
+		"docker.io/redis:7-alpi": "7-alpi",
+		"ghcr.io/org/tool:v1":    "v1",
+		"ghcr.io/org/tool":       "latest",
 		// A colon before the last slash is a port, not a tag.
-		{"localhost:5000/thing:v2", "thing", "v2"},
-		{"localhost:5000/thing", "thing", "latest"},
+		"localhost:5000/thing:v2": "v2",
+		"localhost:5000/thing":    "latest",
 	} {
-		repo, tag, err := splitSource(tc.source, "")
-		if err != nil {
-			t.Errorf("%q: unexpected error: %v", tc.source, err)
-			continue
-		}
-		if repo != tc.repo || tag != tc.tag {
-			t.Errorf("%q: got %q:%q, want %q:%q", tc.source, repo, tag, tc.repo, tc.tag)
-		}
+		t.Run(in, func(t *testing.T) {
+			got, err := sourceTag(in)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
 	}
 }
 
-// A project's space has room for one path segment, because the segment before it
-// is the project id and that is the tenant boundary. Where flattening would be a
-// guess, say so and show the fix rather than inventing a rule people have to
-// learn by being surprised.
-func TestSplitSourceAsksRatherThanGuessesAtDeepPaths(t *testing.T) {
-	_, _, err := splitSource("ghcr.io/org/tool:v1", "")
-	if err == nil {
-		t.Fatal("a three-segment path should not be flattened silently")
+// gagarin runs images by digest, and copying one platform out of a
+// multi-architecture image produces a different one — so a source digest cannot
+// be carried across, and saying so beats producing something confusing.
+func TestSourceTagRefusesADigest(t *testing.T) {
+	digest := "postgres@sha256:"
+	for range 64 {
+		digest += "a"
 	}
-	if got := err.Error(); !contains(got, "--name tool") {
-		t.Errorf("the error should show the fix, got: %s", got)
-	}
-
-	repo, tag, err := splitSource("ghcr.io/org/tool:v1", "tool")
-	if err != nil {
-		t.Fatalf("with --name it should work: %v", err)
-	}
-	if repo != "tool" || tag != "v1" {
-		t.Errorf("got %q:%q, want tool:v1", repo, tag)
+	if _, err := sourceTag(digest); err == nil {
+		t.Error("expected a digest-pinned source to be refused")
 	}
 }
 
-// gagarin runs images by digest and copying one platform out of a
-// multi-architecture image produces a different one, so a source digest cannot
-// be carried across. Refusing is honest; re-tagging it would not be.
-func TestSplitSourceRefusesADigest(t *testing.T) {
-	_, _, err := splitSource("postgres@sha256:"+repeat("a", 64), "")
-	if err == nil {
-		t.Fatal("copying by digest should be refused")
+func TestSourceTagRefusesWhatARegistryWould(t *testing.T) {
+	for name, in := range map[string]string{
+		"empty":     "",
+		"bad tag":   "postgres:-leading",
+		"empty tag": "postgres:",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := sourceTag(in); err == nil {
+				t.Errorf("expected %q to be refused", in)
+			}
+		})
 	}
-}
-
-func TestSplitSourceRefusesNamesTheRegistryWouldNot(t *testing.T) {
-	for _, name := range []string{"UPPER", "has space", "two/segments", "-leading"} {
-		if _, _, err := splitSource("postgres:17", name); err == nil {
-			t.Errorf("%q should be refused as a repository name", name)
-		}
-	}
-	// An empty --name is not a bad name, it is an absent one: the flag defaults to
-	// empty and the image's own name is used.
-	if repo, _, err := splitSource("postgres:17", ""); err != nil || repo != "postgres" {
-		t.Errorf(`--name "" should fall back to the image's name, got %q (%v)`, repo, err)
-	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
-func repeat(s string, n int) string {
-	out := ""
-	for range n {
-		out += s
-	}
-	return out
 }

@@ -15,6 +15,17 @@ call the API. There is no manifest file, no config file, and nothing to commit.
   you chose, unique only within your account, and an **id** gagarin generated —
   eight characters — which is what image paths and public hostnames are built
   from. Commands take either.
+- **Every command is asynchronous.** You submit a desired state and gagarin
+  converges on it. Nothing blocks waiting for the cluster, so a command that
+  returns successfully means *the demand was recorded*, not *the thing is
+  running*. Those are different claims and gg will only make the first one.
+  `gg status <project>` is where you find out about the second — it reads the
+  cluster, and it is the only thing that can answer "is it up".
+- **Everything is named for its project, always.** A project is `shop`; a service
+  or a resource in it is `shop/web`. Nothing is inferred from the directory you
+  are standing in — `gg` will not guess a project, and a command that does not
+  name one is refused with the shape it should have had. Do not go looking for a
+  way to set a default; there is none, on purpose.
 - A project owns **services**. A service is a container image that runs.
   - `public` services get an HTTPS URL automatically.
   - private services get no URL, but are reachable from other services in the
@@ -22,11 +33,13 @@ call the API. There is no manifest file, no config file, and nothing to commit.
 - A project owns **resources**: things gagarin provides rather than things you
   built. `postgres`, `mongo` and `redis`. You name it and say how big; every
   other decision is the platform's. See "Databases and caches" below.
-- Gagarin runs images **only from its own registry**. Pushing an image never
-  deploys it — those are separate steps on purpose. To run something you did not
-  build, copy it in first: `gg registry copy caddy:2-alpine`. Do not write a
-  one-line Dockerfile that only says `FROM`; that is the same thing, worse.
-  **If a resource type exists, use it.** `gg resource add postgres db` beats
+- Gagarin runs images **only from its own registry**. Building, pushing and
+  deploying are three separate verbs — `gg build`, `gg push`, `gg deploy` — and
+  `gg ship` is all three at once, which is what you want most of the time. To run
+  something you did not build, copy it in first:
+  `gg registry copy shop/caddy caddy:2-alpine`. Do not write a one-line
+  Dockerfile that only says `FROM`; that is the same thing, worse.
+  **If a resource type exists, use it.** `gg resource add <project>/db postgres` beats
   copying a postgres image in and deploying it as a service — that was the old
   workaround, and it is now the wrong answer for postgres, mongo and redis.
   **For anything else it is still the right answer**: gagarin does not have a
@@ -85,9 +98,10 @@ delete anything**: see "Destroying things" below.
 You never handle the credential yourself, and you should not read that file or
 echo it anywhere. If a command needs authorisation it will say so.
 
-Then `gg registry login` once per machine, so `docker` can push. It uses the
-credential this machine already holds — there is no second account, and nothing
-to type. If it reports that the credential is not valid, run `gg auth`.
+`gg auth` also logs `docker` in to gagarin's registry, using the credential it
+just stored — there is no second account and nothing to type. If that step is
+skipped because `docker` was not installed yet, run `gg registry login` once the
+machine has it.
 
 ## Deploying a project
 
@@ -102,31 +116,73 @@ to type. If it reports that the credential is not valid, run `gg auth`.
    gg init <project>
    ```
 
-3. **Deploy each service.** Deploy private services *before* the public ones
-   that call them — `--needs` can only name a service that already exists:
+3. **Ship each service.** `gg ship` builds the current directory, pushes it, and
+   runs it — the whole job in one command. Run it from the directory containing
+   that service's Dockerfile, or point `--context` at one:
    ```
-   gg deploy --project <project> --name worker --port 8080 --private
-   gg deploy --project <project> --name web --port 8080 --needs worker --env WORKER_URL=http://worker:8080
+   gg ship <project>/worker:8080 --private
+   gg ship <project>/web:8080 --env WORKER_URL=http://worker:8080
    ```
-   `--needs` is not documentation: without it `web` cannot reach `worker` at all.
-   See "Wiring services together" below — including why a missing `--needs` hangs
-   instead of failing.
-   `gg deploy` builds the image in the current directory, pushes it, registers
-   the service, and prints the URL. Run it from the directory containing that
-   service's Dockerfile.
+   The number after the colon is the port the container listens on. It defaults
+   to 8080 when you leave it out; say it anyway when you know it, because a
+   service answering on the wrong port is a hang rather than an error.
 
-4. **Verify** and give the user the URL:
+4. **Connect them.** Nothing in a project can reach anything else until you say
+   so, and `gg deps` is what says so:
+   ```
+   gg deps add <project>/web worker
+   ```
+   This is not documentation — without it `web` cannot reach `worker` at all, and
+   the failure is a hang rather than an error. See "Connecting services" below.
+   Order does not matter here the way it used to: both services have to exist
+   before you can declare an edge between them, so ship first and connect after.
+
+5. **Verify, and only then give the user the URL:**
    ```
    gg status <project>
    ```
+   This step is not a formality. `gg ship` prints a URL the moment the deploy
+   is recorded, before anything has been pulled or started — the URL is
+   derived from the service name and the project id, so it exists as a string
+   long before it answers. `gg status` is what turns it into a fact: `●` means
+   the cluster agrees with what was asked for, `○` means it does not, and the
+   cluster's own explanation is printed underneath.
+
+   If it is `○`, read that explanation before changing anything.
+   `ImagePullBackOff` means the image is not there — usually a copy that never
+   finished, or a tag that does not exist. A container that starts and exits
+   is in `gg logs <project>/<service>`.
+
+   Do not poll in a tight loop, and do not tell the user something is live
+   because a command exited zero.
+
+### When to use the three steps instead
+
+`gg ship` is build, push and deploy fused. Reach for them separately when you
+want less than all three:
+
+```
+gg build <project>/web:v3 --context ./web    make an image, run nothing
+gg push  <project>/web:v3                    publish it, release nothing
+gg deploy <project>/web:8080 web:v3          release one that already exists
+```
+
+That is what CI wants — publish on every commit, release on some of them — and
+it is the only way to run an image you did not just build, including one copied
+in with `gg registry copy` and one you are rolling forward to by hand.
+
+`gg build` invents a tag when you do not give it one. `gg push` will not: it
+moves something that already exists, and "whichever one I built last" is not a
+name.
 
 ## Environment variables
 
 Set them individually, or read them from a plain `KEY=VALUE` file:
 
 ```
-gg deploy --project <project> --name web --port 8080 --env-file .env
-gg deploy --project <project> --name web --port 8080 --env-file .env --env DEBUG=false
+gg deploy <project>/web:8080 web:v3 --env-file .env
+gg deploy <project>/web:8080 web:v3 --env-file .env --env DEBUG=false
+gg ship   <project>/web:8080 --env-file .env
 ```
 
 - `--env-file` is **not** picked up automatically. If the user has a `.env` and
@@ -140,28 +196,34 @@ gg deploy --project <project> --name web --port 8080 --env-file .env --env DEBUG
 The file supplies **values only**. It cannot name services, set ports, or say
 what is public — that is not a limitation to work around, it is the design. If
 you find yourself wanting to put deployment structure in a file, stop: gagarin
-holds that itself and the only way to set it is the flags above.
+holds that itself, and the only way to set it is on the command line.
 
-## Wiring services together
+Environment is the *one* thing a deploy still replaces wholesale, and that is
+deliberate: it is part of what a revision ran with, and it is what a rollback
+puts back. Everything else about a service that could be lost by forgetting to
+restate it — its dependencies, its domain, its volume — has been moved out of a
+deploy for exactly that reason.
+
+## Connecting services
 
 A private service is reachable at `http://<service-name>:<port>` from inside the
 same project — but **only by the services that declared they call it.**
 
-Declare that with `--needs`, on the service doing the calling:
+Declare that with `gg deps`, on the service doing the calling:
 
 ```
-gg deploy --name api --needs db
+gg deps add <project>/api db
 ```
 
-`db` now accepts connections from `api` and from nothing else. Deploy `api`
-without `--needs db` and the address still resolves, the connection is simply
-never answered.
+`db` now accepts connections from `api` and from nothing else. Without that
+declaration the address still resolves and the connection is simply never
+answered.
 
 **This is the part that will waste your time if you skip it.** A call nobody
 declared is not refused — it is dropped. So it does not fail fast with
 "connection refused"; it **hangs until the client's timeout**, which for a
 database driver can be 30 seconds or forever. A hang is the symptom of a missing
-`--needs` far more often than it is a bug in the application.
+dependency far more often than it is a bug in the application.
 
 So when a service hangs talking to another one, check `gg status` *first*. It
 ends every service's line with what that service can reach:
@@ -173,43 +235,58 @@ web is a public service on port 8080, reachable at https://…, reaching nothing
 
 `reaching nothing else` is a statement of fact, not a warning — most services
 legitimately need nothing. But if you expected a name there and it is missing,
-that is your hang, and the fix is **a redeploy** of the caller with the
-`--needs` it was missing. There is no separate command to connect two services
-after the fact, because the deploy is the only place deployment structure is set.
-
-**`--needs` is replaced wholesale on every deploy, exactly like `--env`.** If `api`
-calls both `db` and `cache`, every future deploy of `api` must pass both:
+that is your hang, and the fix is one command:
 
 ```
-gg deploy --name api --needs db --needs cache
+gg deps add <project>/web the-missing-one
 ```
 
-Pass only `--needs db` next time and `api` stops being able to reach `cache` —
-same trap as forgetting an environment variable, same fix. Read the current set
-out of `gg status` before redeploying something you did not deploy yourself.
+The three verbs, and they are the only things that change the graph:
 
-Two consequences worth knowing:
+```
+gg deps ls  <project>/api            what it reaches today
+gg deps add <project>/api db cache   and these as well
+gg deps rm  <project>/api cache      and no longer that one
+```
 
-- **The direction matters.** `--needs` goes on the *caller*. If `api` queries `db`,
-  it is `api` that is deployed with `--needs db`, never the other way round.
+Two things about this are worth knowing:
+
+- **The direction matters.** The declaration goes on the *caller*. If `api`
+  queries `db`, it is `api` that needs `db`, never the other way round. Asking
+  for it backwards is refused rather than quietly accepted.
 - **Public URLs are not covered by this.** If one service calls another's public
   `https://` address, that arrives the same way a stranger's browser does and is
   allowed. The guarantee is about private, in-project addresses: *a private
   service is unreachable unless something declared it needs it.*
+- **Withdrawing applies to new connections, not open ones.** `gg deps rm` closes
+  the path immediately for anything that connects afterwards, but a client
+  already holding a keep-alive connection — which most HTTP clients and every
+  database driver pool do — can keep using it until it reconnects. This is how
+  Kubernetes network policy works and gagarin cannot change it. If you need the
+  old path gone *now*, redeploy the caller: a new pod has no old connections.
+  Do not read a still-working request as a failed withdrawal without checking
+  `gg status` first, which reports what the platform is actually enforcing.
 
-To take a service away entirely, `gg destroy --service <name>`. It is refused
-while anything still needs it, and names what does — redeploy that service
-without the `--needs` first.
+**A deploy never touches any of this.** That is new, and it matters: this used to
+be a `--needs` flag on `gg deploy`, replaced wholesale on every deploy, so a
+redeploy that failed to restate a dependency silently withdrew it — and because
+an undeclared call hangs rather than failing, the service did not break, it went
+quiet. If you are working from memory or from an older skill and reach for
+`--needs`, it is gone; `gg deps` is where it went. Deploy as often as you like;
+the graph stays where you put it.
+
+To take a service away entirely, `gg destroy <project>/<name>`. It is refused
+while anything still needs it, and names what does — `gg deps rm` that first.
 
 ## Undoing a deploy
 
-Every deploy is recorded. `gg history <service>` lists them newest first, with a
+Every deploy is recorded. `gg history <project>/<service>` lists them newest first, with a
 revision number, the image, when it happened and who asked for it; the live one
 is marked.
 
 ```
-gg rollback <service>            put the previous deploy back
-gg rollback <service> --to 3     put a particular revision back
+gg rollback <project>/<service>            put the previous deploy back
+gg rollback <project>/<service> --to 3     put a particular revision back
 ```
 
 Three things about this are worth knowing before you reach for it.
@@ -221,6 +298,11 @@ Three things about this are worth knowing before you reach for it.
 - **It restores the environment too**, exactly as that revision had it. A
   variable added since is gone after the rollback, because it was not part of
   what you went back to.
+- **It does not restore the dependency graph, the domain, or the volume.** Those
+  are standing declarations about the shape of the project rather than parts of
+  the artifact, and putting yesterday's image back says nothing about them. A
+  dependency you added since the revision you are restoring survives the
+  rollback.
 - **It is refused across a change of volume**, with `volume_immutable`. A volume
   is set once, at the deploy that creates a service, so reverting one would
   abandon or destroy data. Deploy the configuration you want instead.
@@ -256,9 +338,9 @@ goes away. It is a real answer and it is meant to be used.
 ## Databases and caches
 
 ```
-gg resource add postgres db
-gg resource add mongo docs
-gg resource add redis cache
+gg resource add <project>/db postgres
+gg resource add <project>/docs mongo
+gg resource add <project>/cache redis
 ```
 
 That is the whole of it. There is no image to choose, no version to pass, no
@@ -291,13 +373,14 @@ is longer than any list gagarin will carry. Run it as an ordinary service with a
 volume:
 
 ```
-gg registry copy qdrant/qdrant
-gg deploy --name vectors --image qdrant --port 6333 --volume /qdrant/storage --volume-size 20
+gg registry copy <project>/qdrant qdrant/qdrant
+gg deploy <project>/vectors:6333 qdrant --private --volume /qdrant/storage --volume-size 20
 ```
 
-Everything else behaves the same way: a private address by name, `--needs
-vectors` from whatever talks to it, a volume that survives restarts, and the
-same refusal to delete it while something still needs it.
+Everything else behaves the same way: a private address by name,
+`gg deps add <project>/api vectors` from whatever talks to it, a volume that
+survives restarts, and the same refusal to delete it while something still needs
+it.
 
 The only difference is who decides. For a resource the platform picks the image,
 the version and the port, and carries them. Here you pick them, and upgrades,
@@ -309,21 +392,22 @@ it wrong. If it does not, this is not a workaround, it is the normal path.
 **Connecting to it is two steps, and the second one is an ordinary deploy.**
 
 ```
-gg resource secrets db                                  # KEY=VALUE lines
-gg deploy --name api --needs db --env-file <(gg resource secrets db)
+gg resource secrets <project>/db                        # KEY=VALUE lines
+gg deploy <project>/api:8080 api:v3 --env-file <(gg resource secrets <project>/db)
+gg deps add <project>/api db
 ```
 
 `gg resource secrets` prints whichever set fits the type — `DATABASE_URL` and
 the `PG*` variables for postgres, `MONGODB_URI`/`MONGO_URL` and the `MONGO_*`
 variables for mongo, `REDIS_URL` and the `REDIS_*` variables for redis. Nothing
-is injected anywhere: `--needs db` opens the network path and grants no
+is injected anywhere: `gg deps add` opens the network path and grants no
 environment, so the credentials are passed exactly the way every other variable
-is. That is deliberate — a deploy call describes a service completely, and a
-value that appeared from somewhere else would break that.
+is. That is deliberate — a value that appeared from somewhere other than the
+deploy would mean a deploy no longer describes what it runs.
 
-Both halves are required and they do different things. Without `--needs`, the
-credentials are correct and the connection hangs. Without the credentials, the
-path is open and there is nothing to authenticate with.
+Both halves are required and they do different things. Without the dependency,
+the credentials are correct and the connection hangs. Without the credentials,
+the path is open and there is nothing to authenticate with.
 
 Things worth knowing before you promise a user anything:
 
@@ -335,14 +419,17 @@ Things worth knowing before you promise a user anything:
 - **It is one instance on one volume.** Deploys restart it rather than rolling,
   so a restart is a brief outage.
 - **Destroying it deletes the data**, and needs a human's approval like any
-  other destructive act: `gg destroy --resource db`.
+  other destructive act: `gg destroy <project>/db`. You do not have to say that
+  it is a resource rather than a service — gg asks the platform, which knows.
 - **The storage cannot be resized.** Choose at creation.
 - **Mongo's URL carries `authSource=admin`,** and it is load-bearing: the user
   lives in the `admin` database, so a driver pointed anywhere else fails with an
   error that reads like a wrong password. Pass the URL as given.
 - A resource cannot be deployed over, and cannot be rolled back — it has no
-  deploy history. `gg deploy --name db` against a resource is refused with
-  `not_a_service`, which is telling you the name is already a database.
+  deploy history. `gg deploy <project>/db` against a resource is refused with
+  `not_a_service`, which is telling you the name is already a database. Nor can
+  a resource declare dependencies: it is reached, it does not reach, and asking
+  for it the other way round is refused for the same reason.
 
 ## Custom domains
 
@@ -350,7 +437,7 @@ A service gets an address under `apps.gagarin.cloud` automatically. To answer on
 a name the user owns as well:
 
 ```
-gg domain add shop.example.com --service web
+gg domain add <project>/web shop.example.com
 ```
 
 **It is two steps and only the first is gagarin's.** That command makes the
@@ -364,7 +451,7 @@ ordered before DNS points here. This is the normal first state, not a fault. Do
 not treat it as one, and do not retry the command hoping it resolves — it will
 not, because the missing piece is on their side.
 
-`gg status` says which of the two of you it is waiting on:
+`gg status <project>` says which of the two of you it is waiting on:
 
 | reading | who acts |
 |---|---|
@@ -397,13 +484,13 @@ role means deploys will be refused, and that is worth knowing before the
 attempt, not after. Names are unique only within one account, so two rows can
 share a name — the id column is what tells them apart.
 
-`gg status` reports **desired state and actual cluster state side by side**, one
+`gg status <project>` reports **desired state and actual cluster state side by side**, one
 row per service, ending with what each one reaches. A service marked `●` agrees
 with what was asked for; one marked `○` does not, and the cluster's own
-explanation is printed underneath. Trust `gg status` over your own memory of what
+explanation is printed underneath. Trust `gg status <project>` over your own memory of what
 you deployed — it reads the cluster, not just the database.
 
-`gg status --visual` opens the same thing in a browser as a dependency graph. That
+`gg status <project> --visual` opens the same thing in a browser as a dependency graph. That
 is for the human, not for you: offer it when someone is trying to understand how
 their services fit together, and read the plain output yourself.
 
@@ -418,15 +505,15 @@ A project has exactly one **owner** — the account that pays for it — plus an
 number of **editors** and **viewers**.
 
 ```
-gg members <project>              who can reach it, and as what
-gg share <email> <project>        add an editor (default)
-gg share <email> <project> --role viewer
-gg unshare <email> <project>      revoke access
+gg members <project>                     who can reach it, and as what
+gg share <project> <email>               add an editor (default)
+gg share <project> <email> --role viewer
+gg unshare <project> <email>             revoke access
 ```
 
 An **editor** operates the project — deploy, delete individual services, manage
 the roster — without paying for it. A **viewer** can read status, logs and the
-member list, and nothing else. **`gg destroy` is the owner's alone**: deleting a
+member list, and nothing else. **destroying a project is the owner's alone**: deleting a
 project takes its data and its URL with it, and only the account paying for that
 can decide. Ownership itself is not in this list because it is the bill: it
 cannot be granted, taken, or handed over here.
@@ -434,7 +521,7 @@ cannot be granted, taken, or handed over here.
 Two things follow that you should say out loud to the user rather than discover
 for them:
 
-- `gg share <email>` with no `--role` grants **editor**, which can deploy over
+- `gg share` with no `--role` grants **editor**, which can deploy over
   whatever is running. If the user asked for "read access" or "let them look at
   the logs", pass `--role viewer`.
 - Sharing with somebody who has never used gagarin is allowed. The access waits
@@ -453,7 +540,7 @@ Act on the `code`, not the prose.
 |---|---|---|
 | `unauthorized` | this machine has no usable credential | run `gg whoami`, then the "Getting access" steps — never ask the user for a token |
 | `approval_required` | a human must approve a deletion | tell the user, pass on the code, wait, retry the same command |
-| `project_not_found` | no such project, **or** you have no access to it | `gg init <project>` first; if it is somebody else's, ask them to `gg share` it with you |
+| `project_not_found` | no such project, **or** you have no access to it | `gg projects` lists what you can reach; `gg init <project>` creates one; if it is somebody else's, ask them to `gg share` it with you |
 | `insufficient_role` | you can see the project but only as a viewer | ask the owner or an editor for edit access; do not retry |
 | `owner_only` | only the account that pays for the project may do this (deleting it) | tell the user to run it themselves; nobody can grant this, so do not retry |
 | `invalid_role` | roles are `editor` and `viewer` | `owner` cannot be granted — it is the account that pays |
@@ -461,14 +548,16 @@ Act on the `code`, not the prose.
 | `member_not_found` | that address has no access to remove | `gg members <project>` to see who does |
 | `project_exists` | you already have a project with that name | deploy into it, or pick another name; names only have to be unique within your own account |
 | `invalid_name` | not a usable name | lowercase letters, digits, hyphens; start with a letter; 2–30 chars |
-| `image_required` | no image given | push an image first |
-| `image_not_yours` | the image is not in this project's registry space | push to this project and deploy that; `gg deploy` handles the path for you |
+| `image_required` | no image given | `gg push` one first, or use `gg ship` |
+| `image_not_yours` | the image is not in this project's registry space | `gg build`/`gg push` into this project and deploy that; gg builds the path for you |
 | `invalid_digest` | the digest is not a sha256 one | pass what `docker push` reported, or leave it out |
 | `invalid_port` | port out of range | set the port the container actually listens on |
+| `invalid_needs` | a dependency list gg would not send: a blank name, or a service naming itself | correct the names; a service reaches itself without being told to |
+| `no_such_service` | a name in `gg deps add` is not a service in this project | `gg status <project>` lists them; ship it first |
 | `apply_failed` | desired state saved, cluster update failed | retry the same command; it is idempotent |
 | `cluster_error` | gagarin could not reach infrastructure | not your fault; report it to the user |
-| `logs_unavailable` | no running pod yet | check `gg status` first |
-| `no_such_route` | wrong path **or** wrong method | re-read the endpoint list above; do not invent endpoints |
+| `logs_unavailable` | no running pod yet | check `gg status <project>` first |
+| `no_such_route` | wrong path **or** wrong method | you are calling the API directly and got the path wrong; use `gg`, which is the only supported client |
 | `body_too_large` | request body over the limit | large values belong in a secret, not in a deploy call |
 | `timeout` | the control plane gave up waiting on infrastructure | retry once; if it persists, report it to the user |
 | `internal_error` | a bug in gagarin | report it; the control plane log has the detail |
@@ -480,16 +569,19 @@ Act on the `code`, not the prose.
 If a deploy succeeds but the service never becomes ready, the usual causes are:
 the container listens on a different port than you declared, it crashes on
 startup, or it needs an environment variable you did not pass. Read `gg logs
-<service>` before changing anything, and fix the declared port or the missing
+<project>/<service>` before changing anything, and fix the declared port or the missing
 variable rather than redeploying unchanged.
 
 ## Destroying things
 
 ```
-gg destroy <project>
+gg destroy <project>              the project, and everything in it
+gg destroy <project>/web         one service
+gg destroy <project>/db          one resource, and its data
 ```
 
-Deletes the project and everything in it. Only the project's **owner** can do
+You do not say which of the last two a name is; gg asks the platform, which
+already knows. Deleting a project takes everything in it. Only the project's **owner** can do
 this — an editor gets `owner_only`, and no amount of approval changes that,
 because the answer is "ask the person paying for it", not "get permission".
 
@@ -506,7 +598,7 @@ Do this:
 
 Ask the user before *requesting* the approval, not just before retrying — an
 approval email for a deletion they never asked for is alarming. And if a deploy
-went wrong, prefer fixing it with another `gg deploy`: destroying and recreating a
+went wrong, prefer fixing it with another `gg ship`: destroying and recreating a
 project loses its data and its URL.
 
 ## Things gagarin deliberately does not do
@@ -520,3 +612,5 @@ are excluded on purpose:
 - interpolate variables into each other
 - pull images from Docker Hub, GHCR, or any registry other than gagarin's
 - expose Kubernetes, cloud provider, or networking primitives
+- infer a project from the current directory, or from anything else — every
+  command names the project it acts on, and there is no default to configure

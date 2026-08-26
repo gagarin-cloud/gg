@@ -90,7 +90,18 @@ func cmdAuth(claim string) error {
 			fmt.Printf("  credential stored in %s\n", path)
 			fmt.Printf("  it can %s — deleting anything needs a fresh approval\n",
 				strings.Join(out.Scopes, ", "))
-			fmt.Printf("\nnothing to export. try: gg status\n")
+
+			// The gagarin credential is also the registry credential, so there is
+			// nothing to ask for and no reason to make somebody run a second
+			// command before their first push. Best effort: docker may not be
+			// installed on this machine, and that is not a failed authorisation —
+			// reading logs and status needs no docker at all.
+			if err := cmdRegistryLogin(); err != nil {
+				fmt.Printf("\n  (docker is not logged in to the registry yet: %v)\n", err)
+				fmt.Printf("  run `gg registry login` before your first push\n")
+			}
+
+			fmt.Printf("\nnothing to export. try: gg projects\n")
 			return nil
 		}
 		if time.Now().After(deadline) {

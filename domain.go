@@ -18,9 +18,10 @@ import (
 	"strings"
 )
 
-func cmdDomainAdd(domain, service, project string) error {
-	if project == "" {
-		project = defaultName()
+func cmdDomainAdd(ref, domain string) error {
+	project, service, _, err := parseService(ref)
+	if err != nil {
+		return err
 	}
 	var out struct {
 		Service string            `json:"service"`
@@ -58,17 +59,18 @@ func cmdDomainAdd(domain, service, project string) error {
 Until that record exists, %s will not resolve and no certificate can be
 issued — Let's Encrypt has to reach the domain to prove you control it.
 
-  gg status        where it is: waiting on you, or on us
-`, out.Domain)
+  gg status %s     where it is: waiting on you, or on us
+`, out.Domain, project)
 	if out.URL != "" {
 		fmt.Printf("\n%s keeps working throughout.\n", out.URL)
 	}
 	return nil
 }
 
-func cmdDomainRemove(domain, service, project string) error {
-	if project == "" {
-		project = defaultName()
+func cmdDomainRemove(ref, domain string) error {
+	project, service, _, err := parseService(ref)
+	if err != nil {
+		return err
 	}
 	path := fmt.Sprintf("/v1/projects/%s/services/%s/domain", project, service)
 	if err := call("DELETE", path, nil, nil); err != nil {
@@ -85,13 +87,14 @@ func cmdDomainRemove(domain, service, project string) error {
 // cmdDomainList shows every declared domain in a project and where it is in the
 // handshake. It reads the same status the rest of the CLI reads — there is no
 // second source for this.
-func cmdDomainList(project string) error {
-	if project == "" {
-		project = defaultName()
+func cmdDomainList(ref string) error {
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
 	}
 	var out struct {
 		Services []struct {
-			Name   string `json:"name"`
+			Name   string        `json:"name"`
 			Domain *domainStatus `json:"domain"`
 		} `json:"services"`
 	}
@@ -115,7 +118,7 @@ func cmdDomainList(project string) error {
 		}
 	}
 	if !found {
-		fmt.Printf("no domains in %s\n\n  gg domain add shop.example.com --service web\n", project)
+		fmt.Printf("no domains in %s\n\n  gg domain add %s/web shop.example.com\n", project, project)
 	}
 	return nil
 }

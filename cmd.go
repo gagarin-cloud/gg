@@ -3,14 +3,17 @@ package main
 // The command tree.
 //
 // This file only wires flags and positional arguments to the business logic
-// that lives next to each concern (auth.go, registry.go, rollback.go, ...).
-// Cobra owns dispatch, --help generation (wrapped to the terminal's width),
-// and flag parsing; nothing here should contain a decision the API or the
-// functions it calls could make instead.
+// that lives next to each concern (auth.go, image.go, deps.go, registry.go,
+// rollback.go, ...). Cobra owns dispatch, --help generation and flag parsing;
+// nothing here should contain a decision the API or the functions it calls
+// could make instead.
+//
+// One rule runs through all of it: nothing is derived from where the command
+// was run. Every project-scoped command names its project, in the argument, as
+// `project` or `project/name`. See ref.go for why.
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/spf13/cobra"
 )
@@ -27,6 +30,17 @@ func usageArgs(min, max int, usage string) cobra.PositionalArgs {
 	}
 }
 
+// atLeastArgs is the same for the commands that take a list — `gg deps add`
+// takes one service and any number of names.
+func atLeastArgs(min int, usage string) cobra.PositionalArgs {
+	return func(cmd *cobra.Command, args []string) error {
+		if len(args) < min {
+			return errors.New(usage)
+		}
+		return nil
+	}
+}
+
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "gg",
@@ -34,6 +48,15 @@ func rootCmd() *cobra.Command {
 		Long: `gg is a thin wrapper over the gagarin API. It holds no state of its own
 beyond an access token: anything gg can do, the API can do — there is no
 second path.
+
+Everything lives in a project, and everything is named for it:
+
+  gg status shop                        a project
+  gg logs shop/web                      a service in one
+  gg deploy shop/web:8080 api:v3        that service, on that port, running
+                                        that image
+
+Nothing is inferred from the directory you are standing in.
 
 Credentials live in ~/.config/gagarin/credentials.json after "gg auth".
 There is nothing to export.
@@ -54,9 +77,13 @@ Environment (overrides the file; meant for CI):
 		newWhoamiCmd(),
 		newInitCmd(),
 		newProjectsCmd(),
+		newBuildCmd(),
+		newPushCmd(),
 		newDeployCmd(),
+		newShipCmd(),
 		newStatusCmd(),
 		newLogsCmd(),
+		newDepsCmd(),
 		newShareCmd(),
 		newUnshareCmd(),
 		newMembersCmd(),
@@ -69,10 +96,6 @@ Environment (overrides the file; meant for CI):
 		newRegistryCmd(),
 		newSkillCmd(),
 		newVersionCmd(),
-		// The old spelling, kept working and kept out of the help. The published
-		// agent skill in the wild still says it, and a skill is not something we
-		// can update on somebody else's machine.
-		newRegistryLoginAliasCmd(),
 	)
 	return root
 }
@@ -121,15 +144,12 @@ func newWhoamiCmd() *cobra.Command {
 
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "init [project]",
-		Short: "create a project (defaults to directory name)",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "init PROJECT",
+		Short: "create a project",
+		Args: usageArgs(1, 1, "usage: gg init PROJECT\n"+
+			"  lowercase letters, digits and hyphens, e.g. gg init shop"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := ""
-			if len(args) > 0 {
-				name = args[0]
-			}
-			return cmdInit(name)
+			return cmdInit(args[0])
 		},
 	}
 }
@@ -145,11 +165,87 @@ func newProjectsCmd() *cobra.Command {
 	}
 }
 
+// --- images ----------------------------------------------------------------
+
+// bindBuildFlags is shared by `gg build` and `gg ship`, which build the same way
+// and must not disagree about how.
+func bindBuildFlags(cmd *cobra.Command, f *buildFlags) {
+	cmd.Flags().StringVar(&f.context, "context", ".",
+		"directory to build from — the one the Dockerfile can COPY out of")
+	cmd.Flags().StringVar(&f.file, "file", "",
+		"the Dockerfile (default: Dockerfile in the context directory)")
+}
+
+func newBuildCmd() *cobra.Command {
+	var f buildFlags
+	cmd := &cobra.Command{
+		Use:   "build PROJECT/IMAGE[:TAG]",
+		Short: "build an image into a project's registry space",
+		Long: `Build a container image and name it in a project's space in the gagarin
+registry.
+
+The tag is optional: without one gg mints it from the clock, because most
+of the time nobody cares what a particular build is called. Building does
+not run anything — "gg push" uploads it, "gg deploy" releases it, and
+"gg ship" is all three.
+
+The platform is not yours to choose. gagarin reports what its own nodes
+run and the build targets that, because an image built for the wrong
+architecture succeeds here and fails much later at pull time.`,
+		Args: usageArgs(1, 1, "usage: gg build PROJECT/IMAGE[:TAG]\n"+
+			"  e.g. gg build shop/api:v3 --context ./api"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdBuild(args[0], f)
+		},
+	}
+	bindBuildFlags(cmd, &f)
+	cmd.Flags().BoolVar(&f.push, "push", false, "upload it afterwards, as `gg push` would")
+	return cmd
+}
+
+func newPushCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "push PROJECT/IMAGE:TAG",
+		Short: "upload an image you have built",
+		Long: `Upload an image to the gagarin registry.
+
+The tag is required here, unlike on "gg build": a push moves something
+that already exists, and "whichever one I built last" is not a name.
+
+Pushing never deploys. That is the point of it being its own verb — CI
+can publish an image on every commit and release it on some of them.`,
+		Args: usageArgs(1, 1, "usage: gg push PROJECT/IMAGE:TAG\n"+
+			"  e.g. gg push shop/api:v3"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdPush(args[0])
+		},
+	}
+}
+
 func newDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "deploy",
-		Short: "build, push, and run the current directory",
-		Args:  cobra.NoArgs,
+		Use:   "deploy PROJECT/SERVICE[:PORT] IMAGE[:TAG]",
+		Short: "run an image that is already in the registry",
+		Long: `Run an image as a named service.
+
+  gg deploy shop/web:8080 api:v3
+
+The port is the one the container listens on, and defaults to 8080. The
+image is one in this project's own space — gagarin runs nothing from
+anywhere else, so bring somebody else's in with "gg registry copy" first.
+
+A deploy changes the image and the environment, and nothing else. It
+cannot set a domain, move a volume, or change what this service is allowed
+to reach: those are declared by "gg domain", by the first deploy, and by
+"gg deps", and none of them can be released by a deploy that forgets to
+mention them.
+
+Environment is replaced wholesale, because it is part of what this
+revision ran with and is what a rollback puts back. Pass every variable
+the service needs, every time.`,
+		Args: usageArgs(2, 2, "usage: gg deploy PROJECT/SERVICE[:PORT] IMAGE[:TAG]\n"+
+			"  e.g. gg deploy shop/web:8080 api:v3\n"+
+			"  build one first with gg build, or gg ship to do both"),
 	}
 	v := bindDeployFlags(cmd.Flags())
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -157,23 +253,54 @@ func newDeployCmd() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		return cmdDeploy(f)
+		return cmdDeploy(args[0], args[1], f)
 	}
 	return cmd
 }
 
+func newShipCmd() *cobra.Command {
+	var b buildFlags
+	cmd := &cobra.Command{
+		Use:   "ship PROJECT/SERVICE[:PORT]",
+		Short: "build, push and deploy in one go",
+		Long: `Build the current directory, upload it, and run it as a service.
+
+  gg ship shop/web:8080
+
+This is the everyday path, and the three commands underneath it — build,
+push, deploy — are there for when you want the steps apart: publishing
+without releasing, releasing an image you already have, or rolling
+forward to a tag somebody else built.
+
+The image is named after the service and tagged from the clock, since
+somebody shipping does not have a name in mind for this particular build.
+It is printed, so it can be deployed again later.`,
+		Args: usageArgs(1, 1, "usage: gg ship PROJECT/SERVICE[:PORT]\n"+
+			"  e.g. gg ship shop/web:8080 --context ./web"),
+	}
+	bindBuildFlags(cmd, &b)
+	v := bindDeployFlags(cmd.Flags())
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		d, err := v.finish()
+		if err != nil {
+			return err
+		}
+		return cmdShip(args[0], b, d)
+	}
+	return cmd
+}
+
+// --- reading state ---------------------------------------------------------
+
 func newStatusCmd() *cobra.Command {
 	var visual bool
 	cmd := &cobra.Command{
-		Use:   "status [project]",
+		Use:   "status PROJECT",
 		Short: "desired vs actual state for every service",
-		Args:  cobra.MaximumNArgs(1),
+		Args: usageArgs(1, 1, "usage: gg status PROJECT\n"+
+			"  gg projects lists the ones you can reach"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 0 {
-				project = args[0]
-			}
-			return cmdStatus(project, visual)
+			return cmdStatus(args[0], visual)
 		},
 	}
 	cmd.Flags().BoolVar(&visual, "visual", false,
@@ -183,31 +310,98 @@ func newStatusCmd() *cobra.Command {
 
 func newLogsCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "logs SERVICE [project]",
+		Use:   "logs PROJECT/SERVICE",
 		Short: "recent logs",
-		Args:  usageArgs(1, 2, "usage: gg logs SERVICE [project]"),
+		Args:  usageArgs(1, 1, "usage: gg logs PROJECT/SERVICE\n  e.g. gg logs shop/web"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 1 {
-				project = args[1]
-			}
-			return cmdLogs(args[0], project)
+			return cmdLogs(args[0])
 		},
 	}
 }
 
+// --- the dependency graph --------------------------------------------------
+
+// newDepsCmd is its own verb rather than a flag on deploy, for the reason
+// spelled out at the top of deps.go: a network path that can be withdrawn by
+// forgetting to restate it fails silently, because an undeclared call hangs
+// rather than being refused.
+func newDepsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "deps",
+		Short: "which services may reach which, inside a project",
+		Long: `Every service in a project is default-denied.
+
+A private service is reachable only from services that have declared they
+need it, and an undeclared call is dropped rather than refused — so it does
+not fail fast, it hangs until the client gives up.
+
+  gg deps add shop/api db cache     api may now reach db and cache
+  gg deps ls  shop/api              what it reaches today
+  gg deps rm  shop/api cache        and no longer cache
+
+The direction matters. The declaration goes on the caller: if api queries
+db, it is api that needs db, never the other way round.
+
+This opens a route and grants nothing else. Credentials are passed as
+environment on the deploy — see "gg resource secrets". Both halves are
+required, and they fail differently: without the credentials you get an
+authentication error, without the route you get a hang.
+
+A deploy never changes any of this.`,
+	}
+	cmd.AddCommand(newDepsListCmd(), newDepsAddCmd(), newDepsRemoveCmd())
+	return cmd
+}
+
+func newDepsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "ls PROJECT/SERVICE",
+		Aliases: []string{"list"},
+		Short:   "what this service is allowed to reach",
+		Args:    usageArgs(1, 1, "usage: gg deps ls PROJECT/SERVICE\n  e.g. gg deps ls shop/api"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdDepsList(args[0])
+		},
+	}
+}
+
+func newDepsAddCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "add PROJECT/SERVICE NAME...",
+		Short: "let it reach these as well",
+		Args: atLeastArgs(2, "usage: gg deps add PROJECT/SERVICE NAME...\n"+
+			"  e.g. gg deps add shop/api db cache\n"+
+			"  the names are services in the same project; there is no reaching across one"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdDepsAdd(args[0], args[1:])
+		},
+	}
+}
+
+func newDepsRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "rm PROJECT/SERVICE NAME...",
+		Aliases: []string{"remove"},
+		Short:   "stop it reaching these",
+		Args: atLeastArgs(2, "usage: gg deps rm PROJECT/SERVICE NAME...\n"+
+			"  e.g. gg deps rm shop/api cache"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdDepsRemove(args[0], args[1:])
+		},
+	}
+}
+
+// --- sharing ---------------------------------------------------------------
+
 func newShareCmd() *cobra.Command {
 	var role string
 	cmd := &cobra.Command{
-		Use:   "share EMAIL [project]",
+		Use:   "share PROJECT EMAIL",
 		Short: "give somebody access to a project",
-		Args:  usageArgs(1, 2, "usage: gg share EMAIL [project] [--role editor|viewer]"),
+		Args: usageArgs(2, 2, "usage: gg share PROJECT EMAIL [--role editor|viewer]\n"+
+			"  e.g. gg share shop teammate@example.com"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 1 {
-				project = args[1]
-			}
-			return cmdShare(args[0], project, role)
+			return cmdShare(args[0], args[1], role)
 		},
 	}
 	cmd.Flags().StringVar(&role, "role", "editor",
@@ -217,61 +411,178 @@ func newShareCmd() *cobra.Command {
 
 func newUnshareCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unshare EMAIL [project]",
+		Use:   "unshare PROJECT EMAIL",
 		Short: "take that access away",
-		Args:  usageArgs(1, 2, "usage: gg unshare EMAIL [project]"),
+		Args:  usageArgs(2, 2, "usage: gg unshare PROJECT EMAIL"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 1 {
-				project = args[1]
-			}
-			return cmdUnshare(args[0], project)
+			return cmdUnshare(args[0], args[1])
 		},
 	}
 }
 
 func newMembersCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "members [project]",
+		Use:   "members PROJECT",
 		Short: "who can reach a project, and as what",
-		Args:  cobra.MaximumNArgs(1),
+		Args:  usageArgs(1, 1, "usage: gg members PROJECT"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 0 {
-				project = args[0]
-			}
-			return cmdMembers(project)
+			return cmdMembers(args[0])
 		},
 	}
 }
 
+// --- destroying ------------------------------------------------------------
+
 func newDestroyCmd() *cobra.Command {
-	var service, resource string
-	cmd := &cobra.Command{
-		Use:   "destroy [project]",
-		Short: "delete the project and everything in it",
-		Args:  cobra.MaximumNArgs(1),
+	return &cobra.Command{
+		Use:   "destroy PROJECT | PROJECT/NAME",
+		Short: "delete a project, or one thing inside it",
+		Long: `Delete something. Which thing depends only on what you name:
+
+  gg destroy shop        the project, and everything in it
+  gg destroy shop/web    one service
+  gg destroy shop/db     one resource, and its data
+
+You do not have to say which of the last two a name is — gg asks the
+platform, because it already knows.
+
+Destroying anything needs a human's approval, every time the approval
+window has lapsed, and only a project's owner can destroy the project.`,
+		Args: usageArgs(1, 1, "usage: gg destroy PROJECT | PROJECT/NAME\n"+
+			"  gg destroy shop        the whole project\n"+
+			"  gg destroy shop/web    one service or resource in it"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 0 {
-				project = args[0]
-			}
-			if service != "" && resource != "" {
-				return errors.New("pass --service or --resource, not both\n" +
-					"  hint: `gg status` says which of the two a name is")
-			}
-			return cmdDestroy(project, service, resource)
+			return cmdDestroy(args[0])
 		},
 	}
-	// One command destroys things, whatever they are. A second verb would be a
-	// second place to audit and a second habit to have, and the approval flow
-	// lives in the API's answer rather than here either way.
-	cmd.Flags().StringVar(&service, "service", "",
-		"delete just this one service instead. Refused while another service\nstill --needs it")
-	cmd.Flags().StringVar(&resource, "resource", "",
-		"delete just this one resource instead, and everything in it. Refused\nwhile a service still --needs it")
+}
+
+// --- history ---------------------------------------------------------------
+
+func newHistoryCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "history PROJECT/SERVICE",
+		Short: "every deploy of a service, newest first",
+		Args:  usageArgs(1, 1, "usage: gg history PROJECT/SERVICE\n  e.g. gg history shop/web"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdHistory(args[0])
+		},
+	}
+}
+
+func newRollbackCmd() *cobra.Command {
+	var to int
+	cmd := &cobra.Command{
+		Use:   "rollback PROJECT/SERVICE",
+		Short: "put the previous deploy back",
+		Long: `Restore a recorded revision by deploying it again.
+
+It restores the image and the environment that revision ran with. It does
+not restore what the service was allowed to reach, or its domain, or its
+volume — those are declarations about the shape of the project rather than
+parts of the artifact, and putting yesterday's code back says nothing
+about them.
+
+A rollback is itself a deploy: it is recorded as a new revision naming the
+one it restored, and nothing leaves the history.`,
+		Args: usageArgs(1, 1, "usage: gg rollback PROJECT/SERVICE [--to REVISION]\n"+
+			"  e.g. gg rollback shop/web"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRollback(args[0], to)
+		},
+	}
+	cmd.Flags().IntVar(&to, "to", 0,
+		"a particular revision instead (see gg history). Refused across a\nchange of volume")
 	return cmd
 }
+
+func newEjectCmd() *cobra.Command {
+	var out string
+	cmd := &cobra.Command{
+		Use:   "eject PROJECT",
+		Short: "the Kubernetes manifests for this project. Owner only",
+		Long: "the Kubernetes manifests for this project, so you can run it\n" +
+			"somewhere else. Owner only.",
+		Args: usageArgs(1, 1, "usage: gg eject PROJECT [-o FILE]"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdEject(args[0], out)
+		},
+	}
+	cmd.Flags().StringVarP(&out, "output", "o", "", "write to a file instead of stdout")
+	return cmd
+}
+
+// --- resources -------------------------------------------------------------
+
+func newResourceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "resource",
+		Short: "databases and the like: what a project has, rather than what it runs",
+	}
+	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd())
+	return cmd
+}
+
+func newResourceAddCmd() *cobra.Command {
+	var storage int
+	cmd := &cobra.Command{
+		Use:   "add PROJECT/NAME TYPE",
+		Short: "provision a resource, e.g. `gg resource add shop/db postgres`",
+		Long: `Provision something gagarin runs for you, rather than something you built.
+
+  postgres   PostgreSQL 17, on a volume. Survives restarts.
+  mongo      MongoDB 8, on a volume. Survives restarts.
+  redis      An in-memory store. --storage is refused, and a restart
+             loses everything in it: this is a cache, not a database.
+             (It runs Valkey, the BSD-licensed fork; every redis client
+             and every redis:// URL work unchanged.)
+
+You name it and say how big. Every other decision is the platform's.
+
+None of them is managed. One instance, one volume, no backups and no
+failover — see ` + "`gg resource secrets`" + ` for how to connect, and the docs for
+what that means before you put a client's data in one.`,
+		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
+			"  e.g. gg resource add shop/db postgres\n"+
+			"  the types that exist are: postgres, mongo, redis"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourceAdd(args[0], args[1], storage)
+		},
+	}
+	// The only knob, and it is honoured rather than negotiated. Anything else
+	// about how a resource runs is the platform's decision.
+	cmd.Flags().IntVar(&storage, "storage", 0,
+		"how big its storage may get, in GB (default 10).\nSet once, at creation; it cannot be resized afterwards.\nRefused for redis, which keeps nothing across a restart")
+	return cmd
+}
+
+func newResourceSecretsCmd() *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "secrets PROJECT/NAME",
+		Short: "the credentials for connecting to it",
+		Long: `Print what a caller needs to connect, and nothing else.
+
+Nothing is injected anywhere. Connecting is two steps and they do
+different things:
+
+  gg deploy shop/api:8080 api:v3 --env-file <(gg resource secrets shop/db)
+  gg deps add shop/api db
+
+The first supplies the credentials, the second opens the route. Without
+the credentials you get an authentication error; without the route the
+credentials are correct and the connection hangs.`,
+		Args: usageArgs(1, 1, "usage: gg resource secrets PROJECT/NAME\n  e.g. gg resource secrets shop/db"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourceSecrets(args[0], format)
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "env",
+		"env (KEY=VALUE lines, for --env-file) or json")
+	return cmd
+}
+
+// --- domains ---------------------------------------------------------------
 
 // newDomainCmd is its own verb rather than a flag on deploy, because a domain is
 // a claim on a name rather than part of the artifact a deploy produces — and a
@@ -297,175 +608,48 @@ A deploy never changes a domain. Add and remove are the only two things that do.
 }
 
 func newDomainAddCmd() *cobra.Command {
-	var project, service string
-	cmd := &cobra.Command{
-		Use:   "add DOMAIN",
+	return &cobra.Command{
+		Use:   "add PROJECT/SERVICE DOMAIN",
 		Short: "declare a domain for a public service",
-		Args:  usageArgs(1, 1, "usage: gg domain add DOMAIN --service NAME"),
+		Args: usageArgs(2, 2, "usage: gg domain add PROJECT/SERVICE DOMAIN\n"+
+			"  e.g. gg domain add shop/web shop.example.com"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if service == "" {
-				return fmt.Errorf("which service should answer on it?\n  hint: gg domain add %s --service web", args[0])
-			}
-			return cmdDomainAdd(args[0], service, project)
+			return cmdDomainAdd(args[0], args[1])
 		},
 	}
-	cmd.Flags().StringVar(&service, "service", "", "the public service that should answer on it")
-	cmd.Flags().StringVar(&project, "project", "", "project it belongs to (default: directory name)")
-	return cmd
 }
 
 func newDomainRemoveCmd() *cobra.Command {
-	var project, service string
-	cmd := &cobra.Command{
-		Use:     "rm DOMAIN",
+	return &cobra.Command{
+		Use:     "rm PROJECT/SERVICE DOMAIN",
 		Aliases: []string{"remove"},
-		Short:   "stop answering on a domain",
-		Args:    usageArgs(1, 1, "usage: gg domain rm DOMAIN --service NAME"),
+		Short:   "release it",
+		Args: usageArgs(2, 2, "usage: gg domain rm PROJECT/SERVICE DOMAIN\n"+
+			"  e.g. gg domain rm shop/web shop.example.com"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if service == "" {
-				return fmt.Errorf("which service holds it?\n  hint: gg domain rm %s --service web", args[0])
-			}
-			return cmdDomainRemove(args[0], service, project)
+			return cmdDomainRemove(args[0], args[1])
 		},
 	}
-	cmd.Flags().StringVar(&service, "service", "", "the service that currently holds it")
-	cmd.Flags().StringVar(&project, "project", "", "project it belongs to (default: directory name)")
-	return cmd
 }
 
 func newDomainListCmd() *cobra.Command {
-	var project string
-	cmd := &cobra.Command{
-		Use:     "ls",
-		Aliases: []string{"list"},
-		Short:   "every declared domain, and what it is waiting on",
-		Args:    usageArgs(0, 0, "usage: gg domain ls"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdDomainList(project)
-		},
-	}
-	cmd.Flags().StringVar(&project, "project", "", "project to read (default: directory name)")
-	return cmd
-}
-
-func newResourceCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "resource",
-		Short: "databases and the like: what a project has, rather than what it runs",
-	}
-	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd())
-	return cmd
-}
-
-func newResourceAddCmd() *cobra.Command {
-	var project string
-	var storage int
-	cmd := &cobra.Command{
-		Use:   "add TYPE NAME",
-		Short: "provision a resource, e.g. `gg resource add postgres db`",
-		Long: `Provision something gagarin runs for you, rather than something you built.
-
-  postgres   PostgreSQL 17, on a volume. Survives restarts.
-  mongo      MongoDB 8, on a volume. Survives restarts.
-  redis      An in-memory store. --storage is refused, and a restart
-             loses everything in it: this is a cache, not a database.
-             (It runs Valkey, the BSD-licensed fork; every redis client
-             and every redis:// URL work unchanged.)
-
-None of them is managed. One instance, one volume, no backups and no
-failover — see ` + "`gg resource secrets`" + ` for how to connect, and the docs for
-what that means before you put a client's data in one.`,
-		Args: usageArgs(2, 2, "usage: gg resource add TYPE NAME\n"+
-			"  the types that exist are: postgres, mongo, redis"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdResourceAdd(args[0], args[1], project, storage)
-		},
-	}
-	cmd.Flags().StringVar(&project, "project", "", "project to add it to (default: directory name)")
-	// The only knob, and it is honoured: it is the size of the volume. Anything
-	// else about how a resource runs is the platform's decision.
-	cmd.Flags().IntVar(&storage, "storage", 0, "how big its storage may get, in GB (default 10).\nSet once, at creation; it cannot be resized afterwards.\nRefused for redis, which keeps nothing across a restart")
-	return cmd
-}
-
-func newResourceSecretsCmd() *cobra.Command {
-	var project, format string
-	cmd := &cobra.Command{
-		Use:   "secrets NAME",
-		Short: "the credentials for connecting to a resource",
-		Long: `Prints what a service needs to connect, and nothing else.
-
-Nothing is injected anywhere: --needs opens the network path and grants no
-environment, so these are passed to a deploy like any other variable.
-
-  gg deploy --name api --needs db --env-file <(gg resource secrets db)`,
-		Args: usageArgs(1, 1, "usage: gg resource secrets NAME"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdResourceSecrets(args[0], project, format)
-		},
-	}
-	cmd.Flags().StringVar(&project, "project", "", "project it belongs to (default: directory name)")
-	cmd.Flags().StringVar(&format, "format", "env", "env (KEY=VALUE lines, for --env-file) or json")
-	return cmd
-}
-
-func newHistoryCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "history SERVICE [project]",
-		Short: "every deploy of a service, newest first",
-		Args:  usageArgs(1, 2, "usage: gg history SERVICE [project]"),
+		Use:     "ls PROJECT",
+		Aliases: []string{"list"},
+		Short:   "every declared domain, and who it is waiting on",
+		Args:    usageArgs(1, 1, "usage: gg domain ls PROJECT"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 1 {
-				project = args[1]
-			}
-			return cmdHistory(args[0], project)
+			return cmdDomainList(args[0])
 		},
 	}
 }
 
-func newRollbackCmd() *cobra.Command {
-	var to int
-	cmd := &cobra.Command{
-		Use:   "rollback SERVICE [project]",
-		Short: "put the previous deploy back",
-		Args:  usageArgs(1, 2, "usage: gg rollback SERVICE [project] [--to REVISION]"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 1 {
-				project = args[1]
-			}
-			return cmdRollback(args[0], project, to)
-		},
-	}
-	cmd.Flags().IntVar(&to, "to", 0,
-		"a particular revision instead (see gg history). Refused across a\nchange of --volume")
-	return cmd
-}
-
-func newEjectCmd() *cobra.Command {
-	var outPath string
-	cmd := &cobra.Command{
-		Use:   "eject [project]",
-		Short: "the Kubernetes manifests for this project. Owner only",
-		Long:  "the Kubernetes manifests for this project, so you can run it\nsomewhere else. Owner only.",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			project := ""
-			if len(args) > 0 {
-				project = args[0]
-			}
-			return cmdEject(project, outPath)
-		},
-	}
-	cmd.Flags().StringVarP(&outPath, "output", "o", "", "write to a file instead of stdout")
-	return cmd
-}
+// --- registry --------------------------------------------------------------
 
 func newRegistryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "registry",
-		Short: "docker login, and copying images into a project's space",
+		Short: "docker login, and copying images in from elsewhere",
 	}
 	cmd.AddCommand(newRegistryLoginCmd(), newRegistryCopyCmd())
 	return cmd
@@ -475,21 +659,10 @@ func newRegistryLoginCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "login",
 		Short: "log docker in to the gagarin registry",
-		Long:  "log docker in to the gagarin registry, using the credential this\nmachine already holds.",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdRegistryLogin()
-		},
-	}
-}
-
-// newRegistryLoginAliasCmd keeps `gg registry-login` working without showing it
-// in --help.
-func newRegistryLoginAliasCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:    "registry-login",
-		Args:   cobra.NoArgs,
-		Hidden: true,
+		Long: "log docker in to the gagarin registry, using the credential this\n" +
+			"machine already holds. `gg auth` does this for you; this is here for\n" +
+			"CI, and for when docker was installed after gagarin was.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdRegistryLogin()
 		},
@@ -497,55 +670,49 @@ func newRegistryLoginAliasCmd() *cobra.Command {
 }
 
 func newRegistryCopyCmd() *cobra.Command {
-	var project, name string
-	cmd := &cobra.Command{
-		Use:   "copy IMAGE",
-		Short: "copy a public image into this project's space",
-		Long:  "copy a public image into this project's space, so gagarin can run\nit.",
-		Args: func(cmd *cobra.Command, args []string) error {
-			switch {
-			case len(args) == 0:
-				return errors.New("which image? e.g. gg registry copy postgres:17-alpine")
-			case len(args) > 1:
-				return fmt.Errorf("one image at a time; got %v", args)
-			}
-			return nil
-		},
+	return &cobra.Command{
+		Use:   "copy PROJECT/IMAGE[:TAG] SOURCE",
+		Short: "copy an image from another registry into a project's space",
+		Long: `Copy an image somebody else published into a project's own space, so
+gagarin can run it.
+
+  gg registry copy shop/postgres postgres:17-alpine
+
+gagarin runs images only from its own registry, so this is how anything
+you did not build gets in. Do not write a one-line Dockerfile that only
+says FROM; that is the same thing, worse.
+
+If a resource type exists for what you want, use that instead — see
+` + "`gg resource add`" + `.`,
+		Args: usageArgs(2, 2, "usage: gg registry copy PROJECT/IMAGE[:TAG] SOURCE\n"+
+			"  e.g. gg registry copy shop/postgres postgres:17-alpine"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdRegistryCopy(project, name, args[0])
+			return cmdRegistryCopy(args[0], args[1])
 		},
 	}
-	cmd.Flags().StringVar(&project, "project", "", "project to copy into (default: directory name)")
-	cmd.Flags().StringVar(&name, "name", "", "repository to copy it to (default: the image's own name)")
-	return cmd
 }
+
+// --- the rest --------------------------------------------------------------
 
 func newSkillCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "skill",
 		Short: "the agent skill that ships inside this binary",
 	}
-	cmd.AddCommand(newSkillInstallCmd(), newSkillShowCmd())
-	return cmd
-}
-
-func newSkillInstallCmd() *cobra.Command {
 	var dir string
-	cmd := &cobra.Command{
+	install := &cobra.Command{
 		Use:   "install",
 		Short: "install the agent skill (Claude Code)",
-		Long:  "install the agent skill (Claude Code) so your agent knows how to\nuse gagarin.",
-		Args:  cobra.NoArgs,
+		Long: "install the agent skill (Claude Code) so your agent knows how to\n" +
+			"use gagarin.",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return installSkill(dir)
 		},
 	}
-	cmd.Flags().StringVar(&dir, "dir", "", "install into this directory instead of the default location")
-	return cmd
-}
-
-func newSkillShowCmd() *cobra.Command {
-	return &cobra.Command{
+	install.Flags().StringVar(&dir, "dir", "",
+		"install into this directory instead of the default location")
+	show := &cobra.Command{
 		Use:   "show",
 		Short: "print the skill's contents",
 		Args:  cobra.NoArgs,
@@ -553,6 +720,8 @@ func newSkillShowCmd() *cobra.Command {
 			return cmdSkillShow()
 		},
 	}
+	cmd.AddCommand(install, show)
+	return cmd
 }
 
 func newVersionCmd() *cobra.Command {

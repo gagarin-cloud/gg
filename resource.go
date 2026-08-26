@@ -7,22 +7,23 @@ package main
 // is why `add` takes almost no flags: a knob here would be a decision the
 // platform should be making.
 //
-// Credentials are read, never injected. `--needs db` means what it has always
-// meant — this service may reach that one — and grants no environment. To
-// connect, ask for the credentials and pass them to a deploy like any other
-// variable, so a deploy stays the only thing that sets an environment.
+// Credentials are read, never injected. `gg deps add api db` means what
+// `--needs db` used to mean — this service may reach that one — and grants no
+// environment. To connect, ask for the credentials and pass them to a deploy
+// like any other variable, so a deploy stays the only thing that sets an
+// environment.
 
 import (
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 )
 
-func cmdResourceAdd(typ, name, project string, storageGB int) error {
-	if project == "" {
-		project = defaultName()
+func cmdResourceAdd(ref, typ string, storageGB int) error {
+	project, name, _, err := parseService(ref)
+	if err != nil {
+		return err
 	}
 	body := map[string]any{"type": typ}
 	// Omitted rather than sent as zero, so the platform's default is the
@@ -39,27 +40,30 @@ func cmdResourceAdd(typ, name, project string, storageGB int) error {
 		return err
 	}
 
-	// Waiting is not politeness. The image is a hundred megabytes on first pull,
-	// and an agent that deploys a dependent against a database still starting
-	// gets a connection error that reads like a bug in gagarin.
-	fmt.Printf("→ waiting for %s to come up\n", name)
-	if err := waitReady(project, name, 3*time.Minute); err != nil {
-		fmt.Printf("\n%s was created but is not ready yet: %v\n", name, err)
-		fmt.Printf("  check `gg status`\n")
-		return nil
-	}
-
 	if out.Sentence != "" {
-		fmt.Printf("\n%s\n", out.Sentence)
+		fmt.Printf("%s\n", out.Sentence)
 	}
+	// Not waited for. This used to block for up to three minutes, on the grounds
+	// that the first pull is a hundred megabytes and a dependent that connects
+	// too early gets an error reading like a bug in gagarin. That reasoning was
+	// about the wrong thing: the fix for connecting too early is to look before
+	// connecting, which `gg status` is for, and a command that blocks for three
+	// minutes is a command an agent will run twice.
+	fmt.Printf("\ngagarin is provisioning it. `gg status %s` says when it is ready.\n", project)
 	// The two things to do next, in order. Deliberately no connection string
 	// here: printing one would put a password in every terminal scrollback and
 	// agent transcript that ever created a database.
+	// The two halves, in order, and both are required. Without the credentials
+	// there is nothing to authenticate with; without the dependency the
+	// credentials are correct and the connection hangs.
 	fmt.Printf(`
-Connect something to it:
-  gg resource secrets %s                 the credentials, to pass as env
-  gg deploy --name api --needs %s        %s can then reach it
-`, name, name, "api")
+Connect something to it, in two steps:
+  gg deploy %s/api:8080 api --env-file <(gg resource secrets %s/%s)
+  gg deps add %s/api %s
+
+The first passes the credentials. The second opens the route — without it the
+connection is not refused, it hangs.
+`, project, project, name, project, name)
 	return nil
 }
 
@@ -68,9 +72,10 @@ Connect something to it:
 // Two formats because there are two readers. `env` is KEY=VALUE lines, which is
 // exactly what `gg deploy --env-file` already consumes, so the whole flow is one
 // pipe. `json` is for anything that would rather use jq than parse.
-func cmdResourceSecrets(name, project, format string) error {
-	if project == "" {
-		project = defaultName()
+func cmdResourceSecrets(ref, format string) error {
+	project, name, _, err := parseService(ref)
+	if err != nil {
+		return err
 	}
 	var out struct {
 		Resource string            `json:"resource"`

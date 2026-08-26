@@ -187,7 +187,7 @@ function render(st) {
   document.getElementById("empty").style.display = el.nodes.length ? "none" : "flex";
   if (!el.nodes.length) {
     document.getElementById("empty").innerHTML =
-      "No services yet — deploy one with <code class='mono'>&nbsp;gg deploy</code>";
+      "No services yet — ship one with <code class='mono'>&nbsp;gg ship &lt;project&gt;/web:8080</code>";
     if (cy) cy.elements().remove();
     return;
   }
