@@ -62,6 +62,21 @@ func shortImage(image, projectID string) string {
 
 // ---- the table ----------------------------------------------------------
 
+// line is one printed row.
+//
+// Two shapes, because the table has two kinds of thing in it. A service is a row
+// of cells that line up with every other service's cells. An address is a
+// sentence hanging under the service it belongs to, and it must not be a cell:
+// column widths come from the content, so a forty-character hostname in the
+// SERVICE column would pad every service name out to match it and push the rest
+// of the table off the screen to describe one domain.
+type line struct {
+	// cells is set for a service row, and lines up with the header.
+	cells []string
+	// text is set for an address, printed under its service and outside the grid.
+	text string
+}
+
 func printStatusTable(st statusResp) {
 	fmt.Printf("\nproject %s  (id %s)\n\n", st.Project, st.ProjectID)
 	if len(st.Services) == 0 {
@@ -94,18 +109,18 @@ func printStatusTable(st statusResp) {
 	if anyVolume {
 		head = append(head, "VOLUME")
 	}
-	head = append(head, "URL")
 
-	rows := [][]string{head}
+	// No URL column. There used to be one, holding the generated address, while a
+	// custom domain hung underneath as a sub-row — which said, wrongly, that the
+	// two were different kinds of fact. Now every address is a line under its
+	// service and the widest column in the table is gone, which is most of why
+	// this reads at a glance again.
+	lines := []line{{cells: head}}
 	for _, s := range st.Services {
 		mark := map[string]string{"running": "●", "starting": "◐", "out-of-sync": "○"}[state(s)]
 		reaches := strings.Join(s.Needs, ", ")
 		if reaches == "" {
 			reaches = "—"
-		}
-		url := s.URL
-		if url == "" {
-			url = "— private"
 		}
 		row := []string{mark, s.Name}
 		if anyResource {
@@ -123,34 +138,36 @@ func printStatusTable(st statusResp) {
 			}
 			row = append(row, v)
 		}
-		rows = append(rows, append(row, url))
+		lines = append(lines, line{cells: row})
 
-		// A declared domain gets its own line under its service, indented, so it
-		// reads as a property of that service rather than as another one. It is
-		// not a column: three of the four readings need a sentence, and a column
-		// wide enough for one would deform the table for the projects — most of
-		// them — that have no domain at all.
-		if s.Domain != nil {
-			rows = append(rows, domainRow(len(head), s.Domain))
+		// Every address the service answers on, under it, in the order the
+		// control plane put them: a name somebody owns first, because that is the
+		// one that can be waiting on them.
+		for _, d := range s.Domains {
+			lines = append(lines, line{text: domainLine(d)})
 		}
 	}
 
 	// Widths from the content, so nothing is truncated and nothing is padded to a
-	// guess. The last column is never padded — trailing spaces are invisible
-	// until someone copies the line.
-	w := make([]int, len(rows[0]))
-	for _, r := range rows {
-		for i, c := range r {
+	// guess. Address lines are skipped: they are not in the grid, which is the
+	// whole reason they can be as long as a hostname needs to be.
+	w := make([]int, len(head))
+	for _, l := range lines {
+		for i, c := range l.cells {
 			if n := len([]rune(c)); n > w[i] {
 				w[i] = n
 			}
 		}
 	}
-	for _, r := range rows {
+	for _, l := range lines {
+		if l.cells == nil {
+			fmt.Println(strings.TrimRight("  "+l.text, " "))
+			continue
+		}
 		var b strings.Builder
 		b.WriteString("  ")
-		for i, c := range r {
-			if i == len(r)-1 {
+		for i, c := range l.cells {
+			if i == len(l.cells)-1 {
 				b.WriteString(c)
 				break
 			}
@@ -284,24 +301,27 @@ func kindLabel(kind string) string {
 	return "service"
 }
 
-// domainRow renders a declared domain as a child of its service.
+// domainLine renders one address as a child of its service.
 //
-// The marker column carries the same vocabulary the service marks use: a filled
-// dot when there is nothing left to do, an open one when somebody has to act.
-// Which somebody is in the text, because that is the part a reader acts on.
-func domainRow(width int, d *domainStatus) []string {
+// The marker carries the same vocabulary the service marks use: a filled dot when
+// there is nothing left to do, an open one when somebody has to act. A finished
+// address says nothing more than its own name — no "ok" column, because a full
+// dot and silence already mean it — so the only text here is the text somebody
+// needs, which is who is holding the address up and why.
+func domainLine(d domainStatus) string {
 	mark := "○"
 	if d.State == "ok" {
 		mark = "●"
 	}
-	row := make([]string, width)
-	for i := range row {
-		row[i] = ""
+	// The URL, not the bare hostname: it is the form a reader can paste into a
+	// browser, and terminals make it clickable.
+	url := d.URL
+	if url == "" {
+		url = "https://" + d.Domain
 	}
-	row[0] = mark
-	row[1] = "└ " + d.Domain
-	// Into the last column, where the service above it prints its URL — the two
-	// are the same kind of fact, which is where it is reachable.
-	row[width-1] = describeDomainState(d.State, d.BlockedOn)
-	return row
+	out := mark + "  └ " + url
+	if d.State != "ok" {
+		out += "   " + describeDomainState(d.State, d.BlockedOn)
+	}
+	return out
 }

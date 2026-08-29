@@ -34,7 +34,8 @@ gg signup you@example.com      # a human clicks a button in an email; that is th
 gg auth --claim ABCD-1234      # waits for that click, stores credentials, logs docker in
 gg init shop                   # create a project
 
-gg ship shop/web:8080 --public # build the current directory, push it, run it — --public gives it a URL
+gg ship shop/web:8080          # build the current directory, push it, run it
+gg domain add shop/web         # put it on the internet, at an address gagarin gives you
 gg status shop                 # what gagarin intends, and what the cluster is actually doing
 gg logs shop/web
 
@@ -43,7 +44,7 @@ gg resource add shop/cache redis    # postgres, mongo and redis — redis is in-
 gg resource secrets shop/db         # its credentials, to pass to a deploy like any other env
 gg deps add shop/web db             # and let web reach it — without this the connection hangs
 
-gg domain add shop/web shop.example.com   # answer on a name you own; prints the DNS record to create
+gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
 gg share shop teammate@example.com        # editors deploy and manage; viewers read
 gg destroy shop                           # asks your human, every time
 ```
@@ -55,7 +56,7 @@ image you did not just build:
 ```
 gg build  shop/web:v3 --context ./web    # make an image, run nothing
 gg push   shop/web:v3                    # publish it, release nothing
-gg deploy shop/web:8080 web:v3 --public  # release one that already exists
+gg deploy shop/web:8080 web:v3           # release one that already exists
 ```
 
 `gg help` lists everything.
@@ -76,9 +77,11 @@ lapsed. An agent cannot grant itself that capability by asking.
 message, and a `fix_hint`. Agents should branch on the code, not the prose.
 
 **A deploy changes the image and the environment, and nothing else.** What a
-service is allowed to reach (`gg deps`), the domain it answers on (`gg domain`)
-and the volume it keeps are declared separately and survive every deploy — none
-of them can be released by a deploy that forgets to restate it.
+service is allowed to reach (`gg deps`), the addresses it answers on
+(`gg domain`) and the volume it keeps are declared separately and survive every
+deploy — none of them can be released by a deploy that forgets to restate it.
+That includes being on the internet at all: `gg ship` can neither give a service
+an address nor take one away, and taking one away asks a human first.
 
 ## Building from source
 

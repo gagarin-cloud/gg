@@ -207,8 +207,7 @@ func resolveProject(ref string) (project, error) {
 }
 
 type deployFlags struct {
-	public bool
-	env    map[string]string
+	env map[string]string
 	// A directory that survives a restart, and how big it may get. Set once, when
 	// the service is created; gagarin refuses to change it on a later deploy,
 	// because moving a volume abandons the data at the old path and resizing one
@@ -217,7 +216,8 @@ type deployFlags struct {
 	volumeSizeGB int
 }
 
-// What is deliberately not here any more: --project, --name, --port and --needs.
+// What is deliberately not here any more: --project, --name, --port, --needs and
+// --public.
 //
 // The first three moved into the service reference, where they are visible in
 // the command rather than derived from the directory it was run in. --needs
@@ -227,6 +227,14 @@ type deployFlags struct {
 // break the caller; an undeclared call is dropped rather than refused, so it
 // hangs. A capability you can lose by forgetting to mention it is the failure
 // nobody sees.
+//
+// --public left last and for the sharpest version of the same reason. It handed
+// out an address on the internet, and an address is not part of the artifact — it
+// is a name people have, in a browser, a webhook, a colleague's bookmark. Carried
+// on a deploy it could be withdrawn by being forgotten, and from outside that
+// looks exactly like an outage nobody caused. `gg domain add` gives a service an
+// address now, the same verb that attaches a name you own, and a deploy cannot
+// touch either.
 //
 // --env stayed, and is still replaced wholesale, because env is genuinely part
 // of the artifact: it is what this revision ran with, it is what a rollback
@@ -245,7 +253,6 @@ type deployFlagVars struct {
 // `gg deploy` and `gg ship`, so the two cannot drift.
 func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
 	v := &deployFlagVars{f: &deployFlags{env: map[string]string{}}}
-	fs.BoolVar(&v.f.public, "public", false, "give it an address on the internet. Without this a service\nis reachable only from inside its project, by the services\nthat have declared they need it")
 	fs.StringArrayVar(&v.env, "env", nil, "set an env var K=V (repeatable)")
 	fs.StringArrayVar(&v.envFiles, "env-file", nil, "read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)")
 	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
@@ -341,7 +348,6 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 		"image":  t.ref,
 		"digest": digest,
 		"port":   port,
-		"public": f.public,
 		"env":    f.env,
 	}
 	// Only sent when asked for. An absent volume and a volume of zero size are
@@ -354,7 +360,6 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	}
 	var svc struct {
 		Name string `json:"name"`
-		URL  string `json:"url"`
 	}
 	path := fmt.Sprintf("/v1/projects/%s/services/%s", project, service)
 	if err := call("PUT", path, body, &svc); err != nil {
@@ -378,16 +383,13 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	// about the running state is more honest than saying something unchecked, and
 	// it is one fewer place for the answer to disagree with `gg status`.
 	fmt.Printf("  %s\n", t.short())
-	if svc.URL != "" {
-		fmt.Printf("  %s\n", svc.URL)
-	} else {
-		// Said in full because the default changed in v0.10.0: somebody who
-		// expected a URL has to be told, in the same breath, both what they got
-		// and how to get the other thing.
-		fmt.Printf("  private — reachable in %s by name, once something needs it\n", project)
-		fmt.Printf("  (--public gives it an address on the internet)\n")
-	}
-	fmt.Printf("\ngagarin is converging on that. `gg status %s` says when it has.\n", project)
+	// Deliberately silent about where the service can be reached.
+	//
+	// A deploy no longer decides that — it cannot add an address and it cannot
+	// take one away — so anything printed here would be this command repeating a
+	// fact it did not establish and cannot check. `gg status` holds the addresses,
+	// and one place saying it is better than two that can disagree.
+	fmt.Printf("\ngagarin is converging on that. `gg status %s` says when it has,\nand where %s answers.\n", project, service)
 	return nil
 }
 
@@ -402,7 +404,13 @@ type statusResp struct {
 // "waiting" reads as "the platform is working on it", and for half the states
 // the platform can do nothing until a DNS record changes.
 type domainStatus struct {
-	Domain    string            `json:"domain"`
+	// URL is the address in the form somebody can click; Domain is the bare
+	// hostname, which is what a registrar and a certificate are about.
+	URL    string `json:"url"`
+	Domain string `json:"domain"`
+	// Generated marks the address gagarin handed out, as against a name its owner
+	// brought. Only one of the two can ever be waiting on somebody's registrar.
+	Generated bool              `json:"generated"`
 	State     string            `json:"state"`
 	BlockedOn string            `json:"blocked_on"`
 	Sentence  string            `json:"sentence"`
@@ -420,16 +428,22 @@ type serviceStatus struct {
 	// What this service is allowed to reach. Server-side truth: it is the same
 	// list that decides whether the packets arrive, not a description of it.
 	Needs        []string `json:"needs"`
-	Public       bool     `json:"public"`
-	URL          string   `json:"url"`
 	VolumePath   string   `json:"volume_path"`
 	VolumeSizeGB int      `json:"volume_size_gb"`
 	InSync       bool     `json:"in_sync"`
-	// Domain is present only when one was declared. Reported separately from
-	// InSync on purpose: a domain waiting on somebody's registrar is not a
-	// cluster mismatch, and the platform cannot converge it.
-	Domain   *domainStatus `json:"domain"`
-	Sentence string        `json:"sentence"`
+	// Domains is every address this service answers on — a name its owner brought
+	// first, the one gagarin handed out last — and empty for a service that is not
+	// on the internet.
+	//
+	// One list rather than a URL and a domain side by side. They are the same kind
+	// of fact, and holding them apart is what put one in a column and the other in
+	// a sub-row under it, as though a service could be reachable in two different
+	// senses. "Public" is not a field either: it is whether this list is empty.
+	//
+	// Reported separately from InSync on purpose: a domain waiting on somebody's
+	// registrar is not a cluster mismatch, and the platform cannot converge it.
+	Domains  []domainStatus `json:"domains"`
+	Sentence string         `json:"sentence"`
 	Actual   struct {
 		Exists  bool   `json:"exists"`
 		Ready   int32  `json:"ready_replicas"`

@@ -136,9 +136,9 @@ function build(st) {
         label: s.name + "\n" + (a.ready_replicas || 0) + "/" + (a.desired_replicas || 0)
           + "  ·  :" + s.port,
         svc: s,
-        url: s.url || "",
+        url: primaryURL(s),
       },
-      classes: s.public ? "public" : "",
+      classes: addressesOf(s).length ? "public" : "",
     };
   });
 
@@ -167,6 +167,23 @@ function esc(v) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Every address a service answers on. "Public" is not a field any more — it is
+// whether this list has anything in it, which is the same question asked once
+// instead of twice.
+function addressesOf(s) {
+  return s.domains || [];
+}
+
+// The address to open when somebody clicks a node. A name its owner brought wins
+// over the generated one: if they went to the trouble of a DNS record, that is
+// the address they think of as theirs. Only one that is actually working, though
+// — sending somebody to a domain that does not resolve yet is worse than sending
+// them nowhere.
+function primaryURL(s) {
+  const live = addressesOf(s).filter((d) => d.state === "ok");
+  return (live[0] || {}).url || "";
+}
+
 function tipHTML(s, projectID) {
   const a = s.actual || {};
   const rows = [];
@@ -174,7 +191,19 @@ function tipHTML(s, projectID) {
   rows.push(["port", String(s.port)]);
   rows.push(["reaches", (s.needs || []).length ? s.needs.join(", ") : "nothing else"]);
   if (s.volume_path) rows.push(["volume", s.volume_size_gb + "GB at " + s.volume_path]);
-  rows.push([s.public ? "url" : "access", s.public ? s.url : "private — in-project only"]);
+  // Every address, each on its own row, because a service with two of them has
+  // two and a tooltip that showed one would be choosing for the reader. The
+  // state travels with an address that is not finished, for the same reason the
+  // table prints it: the useful question is who is holding it up.
+  const addrs = addressesOf(s);
+  if (!addrs.length) {
+    rows.push(["access", "private — in-project only"]);
+  } else {
+    for (const d of addrs) {
+      rows.push([d.generated ? "url" : "domain",
+        d.state === "ok" ? d.url : d.url + "  ·  " + d.state.replace(/_/g, " ")]);
+    }
+  }
   if (stateOf(s) === "out-of-sync" && a.message) rows.push(["cluster", a.message, "clamp"]);
   return "<b>" + esc(s.name) + "</b>" +
     rows.map((r) => '<div class="row ' + (r[2] || "") + '">' + r[0] +
@@ -290,8 +319,8 @@ function legend(st) {
   if (seen.has("out-of-sync")) health.push(chip(css("--bad"), "failing"));
 
   const reach = [];
-  if (svcs.some((s) => s.public)) reach.push('<span><b class="k solid"></b>public</span>');
-  if (svcs.some((s) => !s.public)) reach.push('<span><b class="k dotted"></b>private</span>');
+  if (svcs.some((s) => addressesOf(s).length)) reach.push('<span><b class="k solid"></b>public</span>');
+  if (svcs.some((s) => !addressesOf(s).length)) reach.push('<span><b class="k dotted"></b>private</span>');
   reach.push("<span>→ reaches</span>");
 
   const grp = (inner) => '<div class="grp">' + inner + '</div>';

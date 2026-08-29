@@ -234,19 +234,18 @@ The port is the one the container listens on, and defaults to 8080. The
 image is one in this project's own space — gagarin runs nothing from
 anywhere else, so bring somebody else's in with "gg registry copy" first.
 
-A service is private unless you say otherwise. Private means reachable
-inside its own project, by name, by the services that have declared they
-need it — and from nowhere else. "--public" gives it an address on the
-internet. Exposure is something you say out loud, because the two mistakes
-do not cost the same: a service that should have been public fails the
-first time somebody opens it, and a service that should have been private
-does not fail at all.
+A new service is private: reachable inside its own project, by name, by
+the services that have declared they need it — and from nowhere else.
+"gg domain add" is what puts one on the internet. Exposure is something
+you say out loud, because the two mistakes do not cost the same: a service
+that should have been public fails the first time somebody opens it, and a
+service that should have been private does not fail at all.
 
 A deploy changes the image and the environment, and nothing else. It
-cannot set a domain, move a volume, or change what this service is allowed
-to reach: those are declared by "gg domain", by the first deploy, and by
-"gg deps", and none of them can be released by a deploy that forgets to
-mention them.
+cannot give a service an address or take one away, move a volume, or
+change what this service is allowed to reach: those are declared by
+"gg domain", by the first deploy, and by "gg deps", and none of them can
+be released by a deploy that forgets to mention them.
 
 Environment is replaced wholesale, because it is part of what this
 revision ran with and is what a rollback puts back. Pass every variable
@@ -284,7 +283,9 @@ The image is named after the service and tagged from the clock, since
 somebody shipping does not have a name in mind for this particular build.
 It is printed, so it can be deployed again later.
 
-As with "gg deploy", the service is private unless you pass "--public".`,
+As with "gg deploy", this changes the image and the environment and
+nothing else. A new service is private until "gg domain add" gives it an
+address, and one that already has an address keeps it.`,
 		Args: usageArgs(1, 1, "usage: gg ship PROJECT/SERVICE[:PORT]\n"+
 			"  e.g. gg ship shop/web:8080 --context ./web"),
 	}
@@ -600,18 +601,23 @@ credentials are correct and the connection hangs.`,
 func newDomainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
-		Short: "answer on a name you own, as well as the address gagarin gave you",
-		Long: `A custom domain is declared, not deployed.
+		Short: "put a service on the internet, at gagarin's name or your own",
+		Long: `An address is declared, not deployed.
 
-It is two steps, and only the first is gagarin's. Declaring it here makes the
-service answer for that name; making the name resolve here is a record you
-create at your registrar. Neither alone does anything, and nothing can be issued
-over HTTPS until the record exists — Let's Encrypt has to reach the domain to
-prove you control it.
+` + "`gg domain add PROJECT/SERVICE`" + ` gives a service the address gagarin
+generates for it, and that is what makes it public. Add a name of your own after
+it and the service answers on both.
 
-` + "`gg status`" + ` says which of the two of you it is waiting on.
+A name you own is two steps, and only the first is gagarin's. Declaring it here
+makes the service answer for that name; making the name resolve here is a record
+you create at your registrar. Neither alone does anything, and nothing can be
+issued over HTTPS until the record exists — Let's Encrypt has to reach the domain
+to prove you control it. ` + "`gg status`" + ` says which of the two of you it is
+waiting on.
 
-A deploy never changes a domain. Add and remove are the only two things that do.`,
+A deploy never changes an address. Add and remove are the only two things that
+do, and remove asks a human first — an address that stops answering breaks things
+that are nowhere near this terminal.`,
 	}
 	cmd.AddCommand(newDomainAddCmd(), newDomainRemoveCmd(), newDomainListCmd())
 	return cmd
@@ -619,25 +625,37 @@ A deploy never changes a domain. Add and remove are the only two things that do.
 
 func newDomainAddCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "add PROJECT/SERVICE DOMAIN",
-		Short: "declare a domain for a public service",
-		Args: usageArgs(2, 2, "usage: gg domain add PROJECT/SERVICE DOMAIN\n"+
-			"  e.g. gg domain add shop/web shop.example.com"),
+		Use:   "add PROJECT/SERVICE [DOMAIN]",
+		Short: "give it an address on the internet",
+		Args: usageArgs(1, 2, "usage: gg domain add PROJECT/SERVICE [DOMAIN]\n"+
+			"  e.g. gg domain add shop/web                     an address from gagarin\n"+
+			"       gg domain add shop/web shop.example.com    a name you own"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdDomainAdd(args[0], args[1])
+			// No domain is not a missing argument — it is the request for the
+			// generated address, which is the common case and so is the short form.
+			var domain string
+			if len(args) == 2 {
+				domain = args[1]
+			}
+			return cmdDomainAdd(args[0], domain)
 		},
 	}
 }
 
 func newDomainRemoveCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:     "rm PROJECT/SERVICE DOMAIN",
+		Use:     "rm PROJECT/SERVICE [DOMAIN]",
 		Aliases: []string{"remove"},
-		Short:   "release it",
-		Args: usageArgs(2, 2, "usage: gg domain rm PROJECT/SERVICE DOMAIN\n"+
-			"  e.g. gg domain rm shop/web shop.example.com"),
+		Short:   "take an address away (needs a human's approval)",
+		Args: usageArgs(1, 2, "usage: gg domain rm PROJECT/SERVICE [DOMAIN]\n"+
+			"  e.g. gg domain rm shop/web shop.example.com    release a name you own\n"+
+			"       gg domain rm shop/web                     make it private again"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdDomainRemove(args[0], args[1])
+			var domain string
+			if len(args) == 2 {
+				domain = args[1]
+			}
+			return cmdDomainRemove(args[0], domain)
 		},
 	}
 }
@@ -646,7 +664,7 @@ func newDomainListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "ls PROJECT",
 		Aliases: []string{"list"},
-		Short:   "every declared domain, and who it is waiting on",
+		Short:   "every address in the project, and who it is waiting on",
 		Args:    usageArgs(1, 1, "usage: gg domain ls PROJECT"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdDomainList(args[0])

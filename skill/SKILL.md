@@ -27,13 +27,18 @@ call the API. There is no manifest file, no config file, and nothing to commit.
   name one is refused with the shape it should have had. Do not go looking for a
   way to set a default; there is none, on purpose.
 - A project owns **services**. A service is a container image that runs.
-  - A service is **private unless you pass `--public`**. Private means no URL,
+  - A service is **private until you give it an address**. Private means no URL,
     reachable from other services in the same project by name —
     `http://worker:8080` — and only by the ones that declared they need it.
-  - `--public` gives it an HTTPS URL automatically. Pass it for the service the
-    user's browser is meant to open, and for nothing else. Do not make a
-    database, a worker or an internal API public "so it can be tested": ask the
-    user before exposing anything they did not ask to expose.
+  - `gg domain add <project>/<service>` puts it on the internet, at an HTTPS
+    address gagarin generates. Run it for the service the user's browser is meant
+    to open, and for nothing else. Do not expose a database, a worker or an
+    internal API "so it can be tested": ask the user before putting anything on
+    the internet they did not ask to put there.
+  - **A deploy never changes this.** `gg ship` cannot make a service public and
+    cannot make it private — there is no flag for it, and there used to be. A
+    service that has an address keeps it across every deploy; one that does not
+    stays private until somebody says otherwise.
 - A project owns **resources**: things gagarin provides rather than things you
   built. `postgres`, `mongo` and `redis`. You name it and say how big; every
   other decision is the platform's. See "Databases and caches" below.
@@ -125,8 +130,12 @@ machine has it.
    that service's Dockerfile, or point `--context` at one:
    ```
    gg ship <project>/worker:8080
-   gg ship <project>/web:8080 --public --env WORKER_URL=http://worker:8080
+   gg ship <project>/web:8080 --env WORKER_URL=http://worker:8080
+   gg domain add <project>/web
    ```
+   The last line is what puts `web` on the internet. It is a separate command
+   because an address outlives any one image: a deploy can neither create one nor
+   take one away, so nothing goes dark because a flag was forgotten.
    The number after the colon is the port the container listens on. It defaults
    to 8080 when you leave it out; say it anyway when you know it, because a
    service answering on the wrong port is a hang rather than an error.
@@ -145,12 +154,13 @@ machine has it.
    ```
    gg status <project>
    ```
-   This step is not a formality. `gg ship` prints a URL the moment the deploy
-   is recorded, before anything has been pulled or started — the URL is
-   derived from the service name and the project id, so it exists as a string
-   long before it answers. `gg status` is what turns it into a fact: `●` means
-   the cluster agrees with what was asked for, `○` means it does not, and the
-   cluster's own explanation is printed underneath.
+   This step is not a formality. `gg ship` says nothing about where a service
+   answers, deliberately: it does not decide that, and an address exists as a
+   string — derived from the service name and the project id — long before
+   anything is listening on it. `gg status` is the only thing that turns it into
+   a fact. It lists every address under its service: `●` means the cluster agrees
+   with what was asked for, `○` means it does not, and the explanation is printed
+   beside it.
 
    If it is `○`, read that explanation before changing anything.
    `ImagePullBackOff` means the image is not there — usually a copy that never
@@ -435,25 +445,31 @@ Things worth knowing before you promise a user anything:
   a resource declare dependencies: it is reached, it does not reach, and asking
   for it the other way round is refused for the same reason.
 
-## Custom domains
+## Addresses
 
-A public service gets an address under `apps.gagarin.cloud` automatically. To
-answer on a name the user owns as well:
+A service is private until it is given an address, and one command gives it
+either kind:
 
 ```
-gg domain add <project>/web shop.example.com
+gg domain add <project>/web                     an address gagarin generates
+gg domain add <project>/web shop.example.com    a name the user owns, as well
 ```
 
-**It is two steps and only the first is gagarin's.** That command makes the
-service answer for the name. Making the name *resolve* here is a DNS record the
-user creates at their registrar, and gagarin cannot do it for them. The command
-prints the exact record — pass it on verbatim rather than paraphrasing it.
+The first is idempotent and instant: gagarin holds the wildcard record and the
+wildcard certificate, so there is nothing to coordinate and nobody to wait for.
+Run it for the service the user's browser is meant to open — and only that one.
 
-**Nothing is served over HTTPS until that record exists.** Let's Encrypt proves
-control by fetching the domain over the internet, so a certificate cannot be
-ordered before DNS points here. This is the normal first state, not a fault. Do
-not treat it as one, and do not retry the command hoping it resolves — it will
-not, because the missing piece is on their side.
+**A name the user owns is two steps, and only the first is gagarin's.** That
+command makes the service answer for the name. Making the name *resolve* here is
+a DNS record the user creates at their registrar, and gagarin cannot do it for
+them. The command prints the exact record — pass it on verbatim rather than
+paraphrasing it.
+
+**Nothing is served over HTTPS on that name until the record exists.** Let's
+Encrypt proves control by fetching the domain over the internet, so a certificate
+cannot be ordered before DNS points here. This is the normal first state, not a
+fault. Do not treat it as one, and do not retry the command hoping it resolves —
+it will not, because the missing piece is on their side.
 
 `gg status <project>` says which of the two of you it is waiting on:
 
@@ -464,21 +480,41 @@ not, because the missing piece is on their side.
 | issuing certificate | gagarin — nothing for them to do |
 | ok | nobody |
 
+The generated address only ever reads `ok` or `issuing certificate`. It is never
+waiting on the user, because there is nothing for them to do about it.
+
 Things worth knowing before promising anything:
 
-- **A deploy never changes a domain.** `gg deploy` cannot set, change or remove
-  one. That is deliberate: forgetting a flag would take a live site down while
-  the owner's DNS still looked correct.
-- **The generated address keeps working.** A service answers on both, so
-  existing links do not break and there is something to test with while DNS
-  propagates.
+- **A deploy never changes an address.** `gg ship` and `gg deploy` cannot add
+  one, change one or remove one. That is deliberate: forgetting a flag would take
+  a live site down while the owner's DNS still looked correct.
+- **Both addresses answer.** A service with a custom domain keeps its generated
+  one, so existing links do not break and there is something to test with while
+  DNS propagates.
+- **A custom domain brings the generated one with it.** Claiming a name for a
+  private service makes it public in the same call, so it is reachable somewhere
+  from the moment the claim is made. Say out loud that you are putting it on the
+  internet.
 - **One domain, one service, across all of gagarin.** A name somebody else holds
   is refused; the refusal does not say who holds it.
-- **The service must be public.** A domain on a private service would point at
-  something nothing may reach, and is refused — redeploy it with `--public`
-  first, and say out loud that you are exposing it.
 - **An apex domain gets an A record, not a CNAME** — DNS does not permit a CNAME
   at an apex. The command prints the right one; do not "correct" it.
+
+### Taking an address away
+
+```
+gg domain rm <project>/web shop.example.com    release a name they own
+gg domain rm <project>/web                     make the service private again
+```
+
+**Both need a human's approval, every time**, the same emailed click that
+`gg destroy` needs. This is destructive in the way deleting something is: what
+breaks is invisible from the terminal and obvious to whoever was using the
+address. Do not run either one unless the user asked for it in those words.
+
+Releasing the generated address while a custom name is still declared is refused
+— that would leave their DNS pointing at a host gagarin no longer serves. Release
+the custom name first.
 
 ## Reading state
 
@@ -500,7 +536,9 @@ is for the human, not for you: offer it when someone is trying to understand how
 their services fit together, and read the plain output yourself.
 
 Describe services to the user at the same altitude gagarin does: "web is a
-public service on port 8080, reachable at <url>; worker is private." Do not
+public service on port 8080, reachable at <url>; worker is private." Give them
+every address a service answers on, not just one — a service with a custom
+domain has two, and picking one for them hides the one they might need. Do not
 introduce Kubernetes vocabulary — namespaces, ingresses, pods and service
 accounts are not part of this model and mentioning them is a regression.
 
