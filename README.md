@@ -10,6 +10,12 @@ and nothing about your deployment lives in your repository.
 ## Install
 
 ```
+brew install gagarin-cloud/tap/gg
+```
+
+Or, with a Go toolchain:
+
+```
 go install github.com/gagarin-cloud/gg@latest
 ```
 

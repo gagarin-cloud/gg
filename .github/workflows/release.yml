@@ -27,3 +27,6 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Needed to push the formula update to gagarin-cloud/homebrew-tap;
+          # GITHUB_TOKEN above can't write outside this repo.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
