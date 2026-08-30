@@ -32,6 +32,25 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Publishes a formula to gagarin-cloud/homebrew-tap on every release, so
+# `brew install gagarin-cloud/tap/gg` always resolves to the latest tag.
+# Pushing to that repo needs a token with write access to it; the default
+# GITHUB_TOKEN is scoped to this repo only, so the workflow supplies
+# HOMEBREW_TAP_GITHUB_TOKEN instead.
+brews:
+  - repository:
+      owner: gagarin-cloud
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://gagarin.cloud"
+    description: "The gagarin CLI — deploy and operate applications on gagarin"
+    license: "MIT"
+    test: |
+      system "#{bin}/gg", "version"
+    install: |
+      bin.install "gg"
+
 changelog:
   sort: asc
   filters:
