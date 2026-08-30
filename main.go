@@ -394,9 +394,18 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 }
 
 type statusResp struct {
-	Project   string          `json:"project"`
-	ProjectID string          `json:"project_id"`
-	Services  []serviceStatus `json:"services"`
+	Project    string          `json:"project"`
+	ProjectID  string          `json:"project_id"`
+	Services   []serviceStatus `json:"services"`
+	UsageToday usageToday      `json:"usage_today"`
+}
+
+// usageToday is today's accrued cost so far, folded server-side from the same
+// billing log a real invoice will fold from — see the API's internal/api/usage.go.
+// An estimate, not a bill: the hour a service is currently in is still running,
+// so this total only grows across a single day.
+type usageToday struct {
+	Kopecks int64 `json:"kopecks"`
 }
 
 // domainStatus is where a declared domain is in its handshake, and which of the

@@ -203,7 +203,14 @@ func printStatusTable(st statusResp) {
 			fmt.Printf("  ○ %s: %s\n", s.Name, s.Actual.Message)
 		}
 	}
+	fmt.Printf("  %s today so far\n", formatRubles(st.UsageToday.Kopecks))
 	fmt.Printf("\n  gg status %s --visual   the same thing as a picture\n\n", st.Project)
+}
+
+// formatRubles renders kopecks the way the pricing page prices things: rubles
+// and kopecks, not a float that would round a few of them away.
+func formatRubles(kopecks int64) string {
+	return fmt.Sprintf("₽%d.%02d", kopecks/100, kopecks%100)
 }
 
 // ---- the visual ---------------------------------------------------------

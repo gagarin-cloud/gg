@@ -186,3 +186,17 @@ func TestALongAddressDoesNotStretchTheTable(t *testing.T) {
 			row(short), row(long))
 	}
 }
+
+// The pricing page prices in rubles and kopecks, and so does the meter
+// watching it — a float here would silently disagree with the invoice by a
+// kopeck or two.
+func TestUsageTodayIsRublesAndKopecksNotAFloat(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services:   []serviceStatus{svc("web")},
+			UsageToday: usageToday{Kopecks: 1205}})
+	})
+	if !strings.Contains(out, "₽12.05 today so far") {
+		t.Errorf("expected today's usage on screen:\n%s", out)
+	}
+}
