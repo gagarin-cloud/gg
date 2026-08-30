@@ -64,14 +64,17 @@ config into the repository; it will not be read.
 Run `gg whoami`. If the command is found — even if it reports no credentials —
 `gg` is installed and you can skip to the next section.
 
-If the shell reports that `gg` does not exist, install it:
+If the shell reports that `gg` does not exist, install it. Prefer whichever of
+these the machine can already run, in this order:
 
 ```
+brew install gagarin-cloud/tap/gg
 go install github.com/gagarin-cloud/gg@latest
 ```
 
-That needs Go. If the machine has none, take a released binary for its platform
-from https://github.com/gagarin-cloud/gg/releases — every release publishes
+The first needs Homebrew, the second needs Go. If the machine has neither, take
+a released binary for its platform from
+https://github.com/gagarin-cloud/gg/releases — every release publishes
 checksums, and you should verify them. **Do not pipe a script from a URL into a
 shell**, do not download from a host you guessed, and do not carry on without
 `gg`: every step below goes through it.
