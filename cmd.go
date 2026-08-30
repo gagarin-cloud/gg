@@ -14,6 +14,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -728,18 +730,58 @@ func newSkillCmd() *cobra.Command {
 		Short: "the agent skill that ships inside this binary",
 	}
 	var dir string
+	var agents []string
+	var interactive bool
 	install := &cobra.Command{
 		Use:   "install",
-		Short: "install the agent skill (Claude Code)",
-		Long: "install the agent skill (Claude Code) so your agent knows how to\n" +
-			"use gagarin.",
+		Short: "install the agent skill",
+		Long: "install the agent skill so your agent knows how to use gagarin.\n\n" +
+			"With no flags, installs for Claude Code — that has been the default\n" +
+			"since before --agent existed, and stays that way. Name others with\n" +
+			"--agent, repeated, comma-separated, or 'all' for every one gg knows,\n" +
+			"or pick from a checklist with --interactive.\n" +
+			"Known agents: " + strings.Join(agentKeys(), ", ") + ".",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return installSkill(dir)
+			if interactive {
+				if dir != "" || cmd.Flags().Changed("agent") {
+					return fmt.Errorf("--interactive cannot be combined with --dir or --agent")
+				}
+				picked, err := pickAgentsInteractively(cmd.OutOrStdout())
+				if err != nil {
+					return err
+				}
+				agents = picked
+			}
+			if dir != "" {
+				if cmd.Flags().Changed("agent") {
+					return fmt.Errorf("--dir installs to one explicit path; it cannot be combined with --agent")
+				}
+				return installSkill(dir)
+			}
+			if !cmd.Flags().Changed("agent") && !interactive {
+				agents = []string{"claude"}
+			}
+			for _, key := range agents {
+				if key == "all" {
+					agents = agentKeys()
+					break
+				}
+			}
+			for _, key := range agents {
+				if err := installSkillForAgent(key); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 	install.Flags().StringVar(&dir, "dir", "",
 		"install into this directory instead of the default location")
+	install.Flags().StringSliceVar(&agents, "agent", nil,
+		"agent(s) to install for, repeated or comma-separated (default: claude)")
+	install.Flags().BoolVarP(&interactive, "interactive", "i", false,
+		"choose agents from a checklist instead of --agent")
 	show := &cobra.Command{
 		Use:   "show",
 		Short: "print the skill's contents",

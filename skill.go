@@ -22,18 +22,14 @@ import (
 //go:embed skill/SKILL.md
 var skillMarkdown string
 
-// skillTargets maps an agent harness to where it keeps its skills. Claude Code
-// is the only one with a stable convention today; the map exists so adding the
-// next one is a line rather than a redesign.
-var skillTargets = map[string]string{
-	"claude": filepath.Join(".claude", "skills", "gagarin", "SKILL.md"),
-}
-
 func cmdSkillShow() error {
 	fmt.Print(skillMarkdown)
 	return nil
 }
 
+// installSkill writes SKILL.md to an explicit path (or into it, if dir names
+// a directory rather than ending in .md). This is the --dir escape hatch: a
+// single, literal destination, not a choice among known agents.
 func installSkill(dir string) error {
 	path := dir
 	if path == "" {
@@ -41,12 +37,33 @@ func installSkill(dir string) error {
 		if err != nil {
 			return fmt.Errorf("cannot find your home directory: %w", err)
 		}
-		path = filepath.Join(home, skillTargets["claude"])
+		claude, _ := findAgentTarget("claude")
+		path = filepath.Join(home, claude.homeRelDir, "gagarin", "SKILL.md")
 	} else if !strings.HasSuffix(path, ".md") {
 		// A directory was given: put the file in it under its conventional name.
 		path = filepath.Join(path, "SKILL.md")
 	}
+	return writeSkillFile(path, "")
+}
 
+// installSkillForAgent writes SKILL.md into the given harness's conventional
+// skills directory under the user's home.
+func installSkillForAgent(key string) error {
+	agent, ok := findAgentTarget(key)
+	if !ok {
+		return fmt.Errorf("unknown agent %q — known agents: %s", key, strings.Join(agentKeys(), ", "))
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot find your home directory: %w", err)
+	}
+	path := filepath.Join(home, agent.homeRelDir, "gagarin", "SKILL.md")
+	return writeSkillFile(path, agent.displayName)
+}
+
+// writeSkillFile writes the embedded skill to path, printing what happened.
+// label, if non-empty, names the agent the message is about.
+func writeSkillFile(path, label string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -64,7 +81,10 @@ func installSkill(dir string) error {
 	if existed {
 		verb = "updated"
 	}
-	fmt.Printf("%s the gagarin skill at %s\n", verb, path)
-	fmt.Printf("your agent will pick it up on its next session\n")
+	if label != "" {
+		fmt.Printf("%s the gagarin skill for %s at %s\n", verb, label, path)
+	} else {
+		fmt.Printf("%s the gagarin skill at %s\n", verb, path)
+	}
 	return nil
 }
