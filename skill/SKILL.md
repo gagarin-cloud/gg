@@ -314,6 +314,26 @@ the graph stays where you put it.
 To take a service away entirely, `gg destroy <project>/<name>`. It is refused
 while anything still needs it, and names what does — `gg deps rm` that first.
 
+### Reaching the outside world
+
+Outbound is unrestricted, with **one exception you need before you build on
+it: the mail ports — 25, 465 and 587 — are blocked.** A connection to any of
+them times out, from every service, and it cannot be opened per-account.
+
+So **do not build anything that speaks SMTP.** If the user wants their
+application to send email — a signup confirmation, a password reset, a
+notification — reach for a provider's HTTPS API instead: Resend, Postmark,
+SendGrid, SES, any of them. That is a normal way to send mail, not a
+workaround, and it is what gagarin itself does.
+
+The reason is worth passing on if the user asks: a service that can open those
+ports can relay spam if it is ever compromised, and a hosting account that
+relays spam gets suspended — which would take every other project on the
+platform down with it.
+
+If you find yourself debugging a hanging SMTP connection, stop. It is not the
+user's code and it is not DNS. It is this.
+
 ## Undoing a deploy
 
 Every deploy is recorded. `gg history <project>/<service>` lists them newest first, with a
