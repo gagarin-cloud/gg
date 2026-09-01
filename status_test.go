@@ -293,7 +293,7 @@ func TestASettledServiceIsRunning(t *testing.T) {
 func TestASilentReconcilerIsSaidBeforeTheTable(t *testing.T) {
 	st := statusResp{Project: "shop", ProjectID: "9v3juxz0",
 		Services: []serviceStatus{svc("web")}}
-	st.Platform.Sentence = "the reconciler last ran 2 days ago, so the cluster may have drifted from what you asked for"
+	st.Notices = []string{"the reconciler last ran 2 days ago, so the cluster may have drifted from what you asked for"}
 
 	out := capture(t, func() { printStatusTable(st) })
 
@@ -317,5 +317,33 @@ func TestAHealthyPlatformAddsNoLine(t *testing.T) {
 	})
 	if strings.Contains(out, "!") {
 		t.Errorf("a healthy platform printed a warning line:\n%s", out)
+	}
+}
+
+// A suspended project is stopped, not perpetually starting. Zero replicas looks
+// identical to "on its way" to every other test in this function, and a table
+// that says a stopped service is starting is one that will be watched for a
+// change that is never coming.
+func TestASuspendedProjectReadsAsStoppedWithAReason(t *testing.T) {
+	s := svc("web")
+	s.InSync = false
+	s.Actual.Ready, s.Actual.Desired = 0, 0
+
+	if got := state(s); got != "stopped" {
+		t.Errorf("a service with nothing meant to be running reported as %q", got)
+	}
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{s},
+			Notices:  []string{"this project is suspended and nothing is running: relaying mail"}})
+	})
+	if !strings.Contains(out, "◌ stopped") {
+		t.Errorf("the legend did not offer a stopped state:\n%s", out)
+	}
+	if !strings.Contains(out, "relaying mail") {
+		t.Errorf("a table of zeroes was printed with no reason for them:\n%s", out)
+	}
+	if strings.Contains(out, "starting") {
+		t.Errorf("a stopped service was called starting:\n%s", out)
 	}
 }

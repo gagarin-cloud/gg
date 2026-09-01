@@ -394,24 +394,24 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 }
 
 type statusResp struct {
-	Project    string          `json:"project"`
-	ProjectID  string          `json:"project_id"`
-	Services   []serviceStatus `json:"services"`
-	Platform   platformState   `json:"platform"`
-	UsageToday usageToday      `json:"usage_today"`
+	Project   string          `json:"project"`
+	ProjectID string          `json:"project_id"`
+	Services  []serviceStatus `json:"services"`
+	Platform  platformState   `json:"platform"`
+	// Notices is everything the reader is meant to be told before they read the
+	// table: a suspended project, a reconciler that has stopped. One list
+	// rather than a field per kind, because a second channel for "print this
+	// first" is a second thing to remember to render, and the one added later
+	// is the one that goes unrendered. Empty when there is nothing to say.
+	Notices    []string   `json:"notices"`
+	UsageToday usageToday `json:"usage_today"`
 }
 
-// platformState is what gagarin says about itself, and it is here rather than
-// on a command of its own because it changes how the table below should be
-// read. The rows are live cluster state and stay true; what stops being true is
-// that anything is closing the gap between them and what was asked for.
-//
-// Sentence is empty when there is nothing wrong, and nothing is printed then.
-// A line reporting "everything is fine" on every healthy run is one people stop
-// reading, which is the state this was built to escape.
+// platformState is what gagarin says about itself, as structured fact. The
+// sentence a person reads arrives in Notices instead; this is the boolean
+// anything else would branch on.
 type platformState struct {
-	Converging bool   `json:"converging"`
-	Sentence   string `json:"sentence"`
+	Converging bool `json:"converging"`
 }
 
 // usageToday is today's accrued cost so far, folded server-side from the same

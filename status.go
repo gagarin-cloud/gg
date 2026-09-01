@@ -41,6 +41,12 @@ func state(s serviceStatus) string {
 	switch {
 	case !s.Actual.Exists, s.Actual.Stalled:
 		return "failing"
+	// Nothing is meant to be running, so nothing missing. Today this means the
+	// project is suspended, and the notice above the table says why — but the
+	// row still has to read as stopped rather than as perpetually starting,
+	// which is what a zero replica count looks like to every test above.
+	case s.Actual.Desired == 0:
+		return "stopped"
 	case s.Actual.Ready < s.Actual.Desired, !s.InSync:
 		return "starting"
 	default:
@@ -81,12 +87,16 @@ type line struct {
 func printStatusTable(st statusResp) {
 	fmt.Printf("\nproject %s  (id %s)\n\n", st.Project, st.ProjectID)
 
-	// Before the table, not after it. This is a statement about whether the
-	// platform is still converging the cluster on what was asked for, so it
-	// changes how every row below should be read — and something that changes
-	// how you read a thing has to arrive before it, not in a footnote.
-	if st.Platform.Sentence != "" {
-		fmt.Printf("  ! %s\n\n", st.Platform.Sentence)
+	// Before the table, not after it. These are statements about whether the
+	// table means what it appears to mean — a suspended project, a reconciler
+	// that has stopped — so they change how every row below should be read, and
+	// something that changes how you read a thing has to arrive before it
+	// rather than in a footnote.
+	for _, n := range st.Notices {
+		fmt.Printf("  ! %s\n", n)
+	}
+	if len(st.Notices) > 0 {
+		fmt.Println()
 	}
 	if len(st.Services) == 0 {
 		fmt.Printf("  no services yet — ship one with `gg ship %s/web:8080`\n", st.Project)
@@ -126,7 +136,9 @@ func printStatusTable(st statusResp) {
 	// this reads at a glance again.
 	lines := []line{{cells: head}}
 	for _, s := range st.Services {
-		mark := map[string]string{"running": "●", "starting": "◐", "failing": "○"}[state(s)]
+		mark := map[string]string{
+			"running": "●", "starting": "◐", "failing": "○", "stopped": "◌",
+		}[state(s)]
 		reaches := strings.Join(s.Needs, ", ")
 		if reaches == "" {
 			reaches = "—"
@@ -203,6 +215,9 @@ func printStatusTable(st statusResp) {
 	if seen["failing"] {
 		notes = append(notes, "○ failing")
 	}
+	if seen["stopped"] {
+		notes = append(notes, "◌ stopped")
+	}
 	fmt.Printf("\n  %s\n", strings.Join(notes, "   "))
 
 	// The one thing the table cannot show, said only when it applies: what the
@@ -215,7 +230,7 @@ func printStatusTable(st statusResp) {
 	// be told about a typo in an image name helps nobody.
 	for _, s := range st.Services {
 		st := state(s)
-		if st == "running" || s.Actual.Message == "" {
+		if st == "running" || st == "stopped" || s.Actual.Message == "" {
 			continue
 		}
 		fmt.Printf("  %s %s: %s\n",

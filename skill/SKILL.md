@@ -554,12 +554,21 @@ for the last two the cluster's own explanation is printed underneath. Trust
 `gg status <project>` over your own memory of what you deployed — it reads the
 cluster, not just the database.
 
-If `gg status` prints a line beginning `!` above the table, that is gagarin
-reporting on **itself**, not on the project. The commonest is the reconciler
-having stopped running, which means the cluster is no longer being converged on
-what was asked for — the rows below are still an accurate reading of the
-cluster, but nothing is closing the gap between them and the database any more.
-Tell the user; there is nothing an agent can do about it from here.
+Lines beginning `!` above the table are things to read **before** the table,
+because they change what the table means. There are two:
+
+- **"this project is suspended and nothing is running: …"** — every service
+  shows `◌` and `0/0`, and deploys will be refused with `project_suspended`.
+  The reason is in the line. If it says the account has run out of credit, the
+  user can fix it at https://my.gagarin.cloud/billing and the services start
+  again by themselves within a few minutes. Anything else is a decision gagarin
+  made about this project, and only support can lift it — do not tell the user
+  to add credit, because it will not help. **Nothing has been deleted**: the
+  data, the addresses and the certificates are all still there.
+- **"the reconciler last ran … ago"** — gagarin reporting on itself. The rows
+  below are still an accurate reading of the cluster, but nothing is closing
+  the gap between them and what was asked for any more. Tell the user; there is
+  nothing an agent can do about it from here.
 
 The READY column counts pods of **the revision you asked for**, which is why a
 redeploy that will not start reads `0/1` even though the previous version is
