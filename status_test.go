@@ -187,16 +187,28 @@ func TestALongAddressDoesNotStretchTheTable(t *testing.T) {
 	}
 }
 
-// The pricing page prices in rubles and kopecks, and so does the meter
-// watching it — a float here would silently disagree with the invoice by a
-// kopeck or two.
-func TestUsageTodayIsRublesAndKopecksNotAFloat(t *testing.T) {
+// The pricing page prices in integer micro-dollars, and so does the meter
+// watching it — a float here would silently disagree with the invoice.
+func TestUsageTodayIsIntegerMicroDollarsNotAFloat(t *testing.T) {
 	out := capture(t, func() {
 		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
 			Services:   []serviceStatus{svc("web")},
-			UsageToday: usageToday{Kopecks: 1205}})
+			UsageToday: usageToday{MicroUSD: 12_050_000}})
 	})
-	if !strings.Contains(out, "₽12.05 today so far") {
+	if !strings.Contains(out, "$12.050 today so far") {
 		t.Errorf("expected today's usage on screen:\n%s", out)
+	}
+}
+
+// One running hour is $0.014, and that has to be legible. Two decimal places
+// would print "$0.01"; the first forty-two minutes would print "$0.00".
+func TestUsageTodayStaysLegibleBelowACent(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services:   []serviceStatus{svc("web")},
+			UsageToday: usageToday{MicroUSD: 14_000}})
+	})
+	if !strings.Contains(out, "$0.014 today so far") {
+		t.Errorf("an hour of one service should read as $0.014:\n%s", out)
 	}
 }
