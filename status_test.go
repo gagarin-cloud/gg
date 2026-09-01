@@ -285,3 +285,37 @@ func TestASettledServiceIsRunning(t *testing.T) {
 		t.Errorf("a healthy service reported as %q", got)
 	}
 }
+
+// The two days in August when both CRON triggers were PAUSED and nothing said
+// so. The table is live cluster state and stays true throughout — what stops
+// being true is that anything is closing the gap between it and what was asked
+// for, which is why this prints above the table rather than beneath it.
+func TestASilentReconcilerIsSaidBeforeTheTable(t *testing.T) {
+	st := statusResp{Project: "shop", ProjectID: "9v3juxz0",
+		Services: []serviceStatus{svc("web")}}
+	st.Platform.Sentence = "the reconciler last ran 2 days ago, so the cluster may have drifted from what you asked for"
+
+	out := capture(t, func() { printStatusTable(st) })
+
+	if !strings.Contains(out, "2 days ago") {
+		t.Errorf("the platform said it had stopped converging and the CLI did not repeat it:\n%s", out)
+	}
+	warn := strings.Index(out, "2 days ago")
+	table := strings.Index(out, "SERVICE")
+	if warn > table {
+		t.Errorf("the warning printed after the table it changes the reading of:\n%s", out)
+	}
+}
+
+// Silence when healthy. A line reporting "everything is fine" on every run is
+// one people stop reading, and it would then be unread in exactly the way that
+// caused this.
+func TestAHealthyPlatformAddsNoLine(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{svc("web")}})
+	})
+	if strings.Contains(out, "!") {
+		t.Errorf("a healthy platform printed a warning line:\n%s", out)
+	}
+}

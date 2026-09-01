@@ -554,6 +554,13 @@ for the last two the cluster's own explanation is printed underneath. Trust
 `gg status <project>` over your own memory of what you deployed — it reads the
 cluster, not just the database.
 
+If `gg status` prints a line beginning `!` above the table, that is gagarin
+reporting on **itself**, not on the project. The commonest is the reconciler
+having stopped running, which means the cluster is no longer being converged on
+what was asked for — the rows below are still an accurate reading of the
+cluster, but nothing is closing the gap between them and the database any more.
+Tell the user; there is nothing an agent can do about it from here.
+
 The READY column counts pods of **the revision you asked for**, which is why a
 redeploy that will not start reads `0/1` even though the previous version is
 still up and serving traffic. That is the honest number: the service is

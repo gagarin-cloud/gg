@@ -80,6 +80,14 @@ type line struct {
 
 func printStatusTable(st statusResp) {
 	fmt.Printf("\nproject %s  (id %s)\n\n", st.Project, st.ProjectID)
+
+	// Before the table, not after it. This is a statement about whether the
+	// platform is still converging the cluster on what was asked for, so it
+	// changes how every row below should be read — and something that changes
+	// how you read a thing has to arrive before it, not in a footnote.
+	if st.Platform.Sentence != "" {
+		fmt.Printf("  ! %s\n\n", st.Platform.Sentence)
+	}
 	if len(st.Services) == 0 {
 		fmt.Printf("  no services yet — ship one with `gg ship %s/web:8080`\n", st.Project)
 		fmt.Println()
