@@ -306,18 +306,15 @@ address, and one that already has an address keeps it.`,
 // --- reading state ---------------------------------------------------------
 
 func newStatusCmd() *cobra.Command {
-	var visual bool
 	cmd := &cobra.Command{
 		Use:   "status PROJECT",
 		Short: "desired vs actual state for every service",
 		Args: usageArgs(1, 1, "usage: gg status PROJECT\n"+
 			"  gg projects lists the ones you can reach"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdStatus(args[0], visual)
+			return cmdStatus(args[0])
 		},
 	}
-	cmd.Flags().BoolVar(&visual, "visual", false,
-		"draw it instead: opens a browser on a live dependency graph of the project")
 	return cmd
 }
 
