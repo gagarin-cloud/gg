@@ -534,9 +534,10 @@ with what was asked for; one marked `○` does not, and the cluster's own
 explanation is printed underneath. Trust `gg status <project>` over your own memory of what
 you deployed — it reads the cluster, not just the database.
 
-`gg status <project> --visual` opens the same thing in a browser as a dependency graph. That
-is for the human, not for you: offer it when someone is trying to understand how
-their services fit together, and read the plain output yourself.
+When someone is trying to understand how their services fit together, point
+them at the project's page on https://my.gagarin.cloud — its right half is a
+live dependency graph of exactly this. That is for the human, not for you:
+read the plain output yourself.
 
 Describe services to the user at the same altitude gagarin does: "web is a
 public service on port 8080, reachable at <url>; worker is private." Give them

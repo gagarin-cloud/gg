@@ -466,13 +466,10 @@ type serviceStatus struct {
 	} `json:"actual"`
 }
 
-func cmdStatus(ref string, visual bool) error {
+func cmdStatus(ref string) error {
 	project, err := parseProject(ref)
 	if err != nil {
 		return err
-	}
-	if visual {
-		return serveVisual(project)
 	}
 
 	var st statusResp

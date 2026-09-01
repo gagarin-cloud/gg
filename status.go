@@ -1,37 +1,23 @@
 package main
 
-// Two ways of looking at the same answer.
+// The table `gg status` prints: one row per service, aligned, so a project is
+// taken in at a glance rather than read.
 //
-// The table is what `gg status` prints: one row per service, aligned, so a
-// project is taken in at a glance rather than read. The graph is what `--visual`
-// opens: the same data drawn as the shape it actually has, because "api needs
-// db, db needs nothing" is a picture long before it is a list.
-//
-// Both render the payload the API already returns. Neither computes anything the
+// It renders the payload the API already returns and computes nothing the
 // control plane does not already know — if the two ever disagree, the API is
 // right and this file is wrong.
+//
+// There used to be a second way of looking at the same answer: `--visual`
+// served a live dependency graph into a browser, with two graph libraries
+// embedded in the binary to draw it. Removed 2026-09-01, the day
+// my.gagarin.cloud grew a project workspace whose whole right half is that
+// graph — better drawn, always current, behind the same sign-in. One picture,
+// maintained once.
 
 import (
-	"embed"
-	"encoding/json"
 	"fmt"
-	"io/fs"
-	"net"
-	"net/http"
-	"os/exec"
-	"runtime"
 	"strings"
 )
-
-// The page, its two libraries and its stylesheet, compiled into the binary.
-//
-// Served from here rather than fetched at runtime because this command is most
-// useful to somebody debugging a network, which is the worst moment to depend on
-// a CDN — and because nobody outside this machine needs to learn the names of a
-// project's services. See web/README.md for versions and licences.
-//
-//go:embed web/index.html web/app.js web/cytoscape.min.js web/dagre.min.js web/cytoscape-dagre.js
-var webFS embed.FS
 
 // state reduces a service to the three answers a colour can carry. Deliberately
 // coarse: the detail is a column away, and a legend with seven entries is one
@@ -204,7 +190,7 @@ func printStatusTable(st statusResp) {
 		}
 	}
 	fmt.Printf("  %s today so far\n", formatUSD(st.UsageToday.MicroUSD))
-	fmt.Printf("\n  gg status %s --visual   the same thing as a picture\n\n", st.Project)
+	fmt.Println()
 }
 
 // formatUSD renders micro-dollars the way the pricing page prices things:
@@ -219,88 +205,6 @@ func formatUSD(microUSD int64) string {
 	return fmt.Sprintf("$%d.%03d", microUSD/1_000_000, (microUSD%1_000_000)/1_000)
 }
 
-// ---- the visual ---------------------------------------------------------
-
-// serveVisual opens the graph in a browser and keeps serving it until
-// interrupted.
-//
-// The page is served from here rather than written to a file so that it can be
-// live: it re-fetches every few seconds, which turns `gg status --visual` into
-// something worth leaving open on a second monitor while a deploy converges.
-//
-// The credential never reaches the browser. The page asks this process for the
-// data and this process asks the API, so a bookmarked URL is useless the moment
-// the command exits — which is the point.
-func serveVisual(project string) error {
-	// 127.0.0.1, not :0 on every interface. This serves one person's private
-	// project state with no authentication of its own; the only thing making that
-	// safe is that nothing off this machine can connect.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return fmt.Errorf("could not open a local port: %w", err)
-	}
-	url := fmt.Sprintf("http://%s", ln.Addr().String())
-
-	assets, err := fs.Sub(webFS, "web")
-	if err != nil {
-		return err
-	}
-
-	mux := http.NewServeMux()
-	mux.Handle("/", http.FileServer(http.FS(assets)))
-	mux.HandleFunc("/data", func(w http.ResponseWriter, r *http.Request) {
-		var raw json.RawMessage
-		if err := call("GET", "/v1/projects/"+project+"/status", nil, &raw); err != nil {
-			// Reported into the page rather than only to the terminal the user has
-			// just tabbed away from.
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(raw)
-	})
-
-	// Fetched once before opening a window, so a bad project name or an expired
-	// credential is a line in the terminal rather than an error card in a browser
-	// tab the user then has to close.
-	var probe statusResp
-	if err := call("GET", "/v1/projects/"+project+"/status", nil, &probe); err != nil {
-		return err
-	}
-
-	fmt.Printf("\n  %s — %d service(s)\n", probe.Project, len(probe.Services))
-	fmt.Printf("  serving at %s (refreshes every 3s)\n", url)
-	fmt.Printf("  press ctrl-c when you are done\n\n")
-	openBrowser(url)
-
-	return http.Serve(ln, mux)
-}
-
-// openBrowser is best-effort on purpose. Every failure mode here — no desktop, a
-// remote shell, an unusual window manager — is one where printing the URL is a
-// perfectly good outcome, and none of them is worth failing the command over.
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		cmd = exec.Command("xdg-open", url)
-	}
-	if err := cmd.Start(); err != nil {
-		fmt.Printf("  (could not open a browser — open %s yourself)\n", url)
-		return
-	}
-	go func() { _ = cmd.Wait() }()
-}
-
-// A resource's kind is namespaced — "resource:postgres" — so that telling one
-// from a service is a property of the value rather than a list to keep in step
-// with the control plane.
 func isResourceKind(kind string) bool { return strings.HasPrefix(kind, "resource:") }
 
 // kindLabel is what the table shows. "service" rather than "container": this
