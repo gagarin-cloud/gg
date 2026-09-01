@@ -212,3 +212,76 @@ func TestUsageTodayStaysLegibleBelowACent(t *testing.T) {
 		t.Errorf("an hour of one service should read as $0.014:\n%s", out)
 	}
 }
+
+// The regression that arrived with the readiness probe. InSync is false for
+// any service with fewer ready pods than it asked for, and it used to be
+// tested first — so once readiness meant something, every ordinary deploy
+// spent its first seconds telling the user their service had failed. A status
+// display that cries wolf on the happy path is one whose alarms get ignored.
+func TestAServiceThatIsStillStartingIsNotCalledFailing(t *testing.T) {
+	s := svc("web")
+	s.InSync = false
+	s.Actual.Ready, s.Actual.Desired = 0, 1
+	s.Actual.Stalled = false
+	s.Actual.Message = "the container is running but nothing is listening on port 8080 yet"
+
+	if got := state(s); got != "starting" {
+		t.Errorf("a deploy in flight reported as %q", got)
+	}
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{s}})
+	})
+	if !strings.Contains(out, "◐ starting") {
+		t.Errorf("the legend did not say starting:\n%s", out)
+	}
+	if strings.Contains(out, "failing") {
+		t.Errorf("a service that is merely starting was called failing:\n%s", out)
+	}
+	// And the reason is still on screen, because why a deploy is taking its
+	// time is the most useful sentence there while it is taking its time.
+	if !strings.Contains(out, "nothing is listening on port 8080") {
+		t.Errorf("the cluster's own reason was withheld while starting:\n%s", out)
+	}
+}
+
+// Once Kubernetes has stopped calling it a rollout in progress, waiting will
+// not help and the display should stop implying it might.
+func TestAStalledRolloutIsCalledFailing(t *testing.T) {
+	s := svc("web")
+	s.InSync = false
+	s.Actual.Ready, s.Actual.Desired = 0, 1
+	s.Actual.Stalled = true
+	s.Actual.Message = "the container is running but nothing is listening on port 8080"
+
+	if got := state(s); got != "failing" {
+		t.Errorf("a rollout Kubernetes gave up on reported as %q", got)
+	}
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{s}})
+	})
+	if !strings.Contains(out, "○ failing") {
+		t.Errorf("a stalled rollout was not called failing:\n%s", out)
+	}
+	if !strings.Contains(out, "○ web: the container is running") {
+		t.Errorf("the reason was not printed:\n%s", out)
+	}
+}
+
+// Nothing in the cluster at all is a failure whatever the numbers say.
+func TestAServiceWithNoDeploymentIsFailing(t *testing.T) {
+	s := svc("web")
+	s.Actual.Exists = false
+	if got := state(s); got != "failing" {
+		t.Errorf("a service with nothing in the cluster reported as %q", got)
+	}
+}
+
+// A settled service is still just running, or the reordering above has made
+// the common case wrong to fix the rare one.
+func TestASettledServiceIsRunning(t *testing.T) {
+	if got := state(svc("web")); got != "running" {
+		t.Errorf("a healthy service reported as %q", got)
+	}
+}

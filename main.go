@@ -459,9 +459,21 @@ type serviceStatus struct {
 	Domains  []domainStatus `json:"domains"`
 	Sentence string         `json:"sentence"`
 	Actual   struct {
-		Exists  bool   `json:"exists"`
-		Ready   int32  `json:"ready_replicas"`
-		Desired int32  `json:"desired_replicas"`
+		Exists bool `json:"exists"`
+		// Ready counts pods of the revision that was asked for, not every
+		// revision at once — so a redeploy whose new pod never starts reads as
+		// 0 rather than borrowing the readiness of the pod it is replacing.
+		Ready   int32 `json:"ready_replicas"`
+		Desired int32 `json:"desired_replicas"`
+		// Superseded is how many pods of an older revision are still serving.
+		// Non-zero means the service is up but is not the version asked for.
+		Superseded int32 `json:"superseded_replicas"`
+		// Stalled is Kubernetes' own verdict that this stopped being a rollout
+		// in progress and became one that failed. It is what lets a service
+		// that is genuinely still starting be told apart from one that is never
+		// going to start — a replica count alone cannot do that, and without it
+		// every deploy reads as broken for its first few seconds.
+		Stalled bool   `json:"stalled"`
 		Message string `json:"message"`
 	} `json:"actual"`
 }

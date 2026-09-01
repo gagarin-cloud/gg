@@ -161,14 +161,33 @@ machine has it.
    answers, deliberately: it does not decide that, and an address exists as a
    string — derived from the service name and the project id — long before
    anything is listening on it. `gg status` is the only thing that turns it into
-   a fact. It lists every address under its service: `●` means the cluster agrees
-   with what was asked for, `○` means it does not, and the explanation is printed
-   beside it.
+   a fact. It lists every address under its service, and marks each service:
 
-   If it is `○`, read that explanation before changing anything.
-   `ImagePullBackOff` means the image is not there — usually a copy that never
-   finished, or a tag that does not exist. A container that starts and exits
-   is in `gg logs <project>/<service>`.
+   - `●` **running** — the cluster is running what was asked for, and something
+     is answering on the port that was declared.
+   - `◐` **starting** — in flight. Pulling an image, booting, waiting on an
+     ingress. The cluster has not given up, and neither should you.
+   - `○` **failing** — either there is nothing in the cluster at all, or
+     Kubernetes has stopped calling this a rollout in progress. Waiting will not
+     fix it.
+
+   `◐` and `○` both print the cluster's own explanation beside them. Read it
+   before changing anything. `ImagePullBackOff` means the image is not there —
+   usually a copy that never finished, or a tag that does not exist. A container
+   that starts and exits is in `gg logs <project>/<service>`.
+
+   **"nothing is listening on port N"** is the common one, and it is almost
+   always the port rather than the app. Gagarin asks the container every few
+   seconds whether anything accepts a connection on the port you declared, so a
+   service that boots perfectly well and listens somewhere else never becomes
+   ready. Check what the app actually binds and redeploy on that port. Note also
+   that many frameworks default to `127.0.0.1`, which nothing outside the
+   container can reach — they need `0.0.0.0`.
+
+   If the service was already running and you redeployed it, an explanation
+   ending **"the previous revision is still serving"** means the old version is
+   still up and answering. The user is not down. Fix the new revision and ship
+   again; do not tear anything down first.
 
    Do not poll in a tight loop, and do not tell the user something is live
    because a command exited zero.
@@ -529,10 +548,16 @@ attempt, not after. Names are unique only within one account, so two rows can
 share a name — the id column is what tells them apart.
 
 `gg status <project>` reports **desired state and actual cluster state side by side**, one
-row per service, ending with what each one reaches. A service marked `●` agrees
-with what was asked for; one marked `○` does not, and the cluster's own
-explanation is printed underneath. Trust `gg status <project>` over your own memory of what
-you deployed — it reads the cluster, not just the database.
+row per service, ending with what each one reaches. `●` is running what was
+asked for, `◐` is still on its way there, `○` has stopped making progress — and
+for the last two the cluster's own explanation is printed underneath. Trust
+`gg status <project>` over your own memory of what you deployed — it reads the
+cluster, not just the database.
+
+The READY column counts pods of **the revision you asked for**, which is why a
+redeploy that will not start reads `0/1` even though the previous version is
+still up and serving traffic. That is the honest number: the service is
+answering, but not with what you shipped.
 
 When someone is trying to understand how their services fit together, point
 them at the project's page on https://my.gagarin.cloud — its right half is a

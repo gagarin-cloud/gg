@@ -22,11 +22,26 @@ import (
 // state reduces a service to the three answers a colour can carry. Deliberately
 // coarse: the detail is a column away, and a legend with seven entries is one
 // nobody reads.
+//
+// The order is the whole content of this function, and it used to be wrong in a
+// way that only showed up once the control plane started telling the truth.
+// InSync was tested first, and InSync is false for any service with fewer ready
+// pods than it asked for — so with readiness now meaning something, every
+// deploy spent its first seconds printing "failing" at somebody who had just
+// typed `gg ship` and whose service was fine. A status display that cries wolf
+// on the happy path is one whose alarms get ignored.
+//
+// So "failing" is now reserved for the two cases where waiting will not help:
+// there is nothing in the cluster at all, or Kubernetes itself has stopped
+// calling this a rollout in progress. Everything short of that — pulling an
+// image, booting, an ingress that has not appeared yet — is "starting", which
+// is what it is. The reconciler converges the rest within a pass, and a
+// divergence it will fix on its own is not a fault to shout about.
 func state(s serviceStatus) string {
 	switch {
-	case !s.InSync || !s.Actual.Exists:
-		return "out-of-sync"
-	case s.Actual.Ready < s.Actual.Desired:
+	case !s.Actual.Exists, s.Actual.Stalled:
+		return "failing"
+	case s.Actual.Ready < s.Actual.Desired, !s.InSync:
 		return "starting"
 	default:
 		return "running"
@@ -103,7 +118,7 @@ func printStatusTable(st statusResp) {
 	// this reads at a glance again.
 	lines := []line{{cells: head}}
 	for _, s := range st.Services {
-		mark := map[string]string{"running": "●", "starting": "◐", "out-of-sync": "○"}[state(s)]
+		mark := map[string]string{"running": "●", "starting": "◐", "failing": "○"}[state(s)]
 		reaches := strings.Join(s.Needs, ", ")
 		if reaches == "" {
 			reaches = "—"
@@ -177,17 +192,26 @@ func printStatusTable(st statusResp) {
 	if seen["starting"] {
 		notes = append(notes, "◐ starting")
 	}
-	if seen["out-of-sync"] {
+	if seen["failing"] {
 		notes = append(notes, "○ failing")
 	}
 	fmt.Printf("\n  %s\n", strings.Join(notes, "   "))
 
-	// The one thing the table cannot show, said only when it applies: a service
-	// that is not doing what it was told, and what the cluster says about it.
+	// The one thing the table cannot show, said only when it applies: what the
+	// cluster says about a service that is not doing what it was told.
+	//
+	// Printed for anything still starting as well, not only for failures. The
+	// reason a deploy is taking its time is the most useful sentence on the
+	// screen while it is taking its time — ImagePullBackOff reads the same
+	// whether or not Kubernetes has given up yet, and waiting three minutes to
+	// be told about a typo in an image name helps nobody.
 	for _, s := range st.Services {
-		if state(s) == "out-of-sync" && s.Actual.Message != "" {
-			fmt.Printf("  ○ %s: %s\n", s.Name, s.Actual.Message)
+		st := state(s)
+		if st == "running" || s.Actual.Message == "" {
+			continue
 		}
+		fmt.Printf("  %s %s: %s\n",
+			map[string]string{"starting": "◐", "failing": "○"}[st], s.Name, s.Actual.Message)
 	}
 	fmt.Printf("  %s today so far\n", formatUSD(st.UsageToday.MicroUSD))
 	fmt.Println()
