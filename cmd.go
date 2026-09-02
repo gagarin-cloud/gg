@@ -534,7 +534,7 @@ func newResourceCmd() *cobra.Command {
 }
 
 func newResourceAddCmd() *cobra.Command {
-	var storage int
+	var storage, size = 0, ""
 	cmd := &cobra.Command{
 		Use:   "add PROJECT/NAME TYPE",
 		Short: "provision a resource, e.g. `gg resource add shop/db postgres`",
@@ -547,7 +547,12 @@ func newResourceAddCmd() *cobra.Command {
              (It runs Valkey, the BSD-licensed fork; every redis client
              and every redis:// URL work unchanged.)
 
-You name it and say how big. Every other decision is the platform's.
+You name it, say how big its storage may get, and pick a size. Every
+other decision is the platform's.
+
+  --size s   0.5 vCPU / 1 GB, shared. Fine for development.
+  --size m   1 vCPU / 2 GB, dedicated. What a real database wants.
+  --size l   2 vCPU / 4 GB, dedicated.
 
 None of them is managed. One instance, one volume, no backups and no
 failover — see ` + "`gg resource secrets`" + ` for how to connect, and the docs for
@@ -556,13 +561,17 @@ what that means before you put a client's data in one.`,
 			"  e.g. gg resource add shop/db postgres\n"+
 			"  the types that exist are: postgres, mongo, redis"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdResourceAdd(args[0], args[1], storage)
+			return cmdResourceAdd(args[0], args[1], size, storage)
 		},
 	}
 	// The only knob, and it is honoured rather than negotiated. Anything else
 	// about how a resource runs is the platform's decision.
 	cmd.Flags().IntVar(&storage, "storage", 0,
 		"how big its storage may get, in GB (default 10).\nSet once, at creation; it cannot be resized afterwards.\nRefused for redis, which keeps nothing across a restart")
+	// Unlike --storage, this one can be changed afterwards: a size is cheap and
+	// reversible where a volume is neither.
+	cmd.Flags().StringVar(&size, "size", "",
+		"how much CPU and memory: s, m or l (default s).\nCan be changed later by restating the resource")
 	return cmd
 }
 

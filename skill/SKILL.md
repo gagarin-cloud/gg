@@ -240,6 +240,43 @@ puts back. Everything else about a service that could be lost by forgetting to
 restate it — its dependencies, its domain, its volume — has been moved out of a
 deploy for exactly that reason.
 
+## How much CPU and memory a service gets
+
+Every service and every resource runs at a **size**. There are three, and `s` is
+what you get if you say nothing.
+
+| | reserved | ceiling | price |
+|---|---|---|---|
+| `s` | 100m CPU / 256 MiB | 0.5 vCPU / 1 GB | $10/month |
+| `m` | 1 vCPU / 2 GB | same — dedicated | $30/month |
+| `l` | 2 vCPU / 4 GB | same — dedicated | $60/month |
+
+```
+gg deploy <project>/web:8080 web:v3 --size m
+gg resource add <project>/db postgres --size m
+```
+
+**`s` is shared and `m` and `l` are dedicated.** An `s` service may burst to
+0.5 vCPU and 1 GB but is only guaranteed the smaller reservation, which is why
+it costs a third of `m`. An `m` or `l` service reserves exactly what it is
+promised and is the last thing evicted when a node runs short.
+
+**Omitting `--size` keeps the size the service already has.** It does not reset
+it to `s`. So a redeploy of an `m` service stays `m` without you restating it —
+and if you *want* to change a size, say so explicitly.
+
+**Which to pick.** Start at `s`. It runs a small API, a worker, a static site,
+and a database you are developing against. Move to `m` when something is killed
+for running out of memory — see `oom_killed` below, which tells you when — or
+when you already know the workload: a Next.js app doing server-side rendering, a
+JVM, anything holding a large cache, or a postgres a real application depends on.
+Do not reach for `l` speculatively; it costs six times `s` and one of them fills
+most of a node.
+
+**Changing a size restarts the service.** It is a new pod with new limits, so
+treat it like a deploy: expect a few seconds of downtime for a service with no
+replicas, and do not do it while something depends on it being up.
+
 ## Connecting services
 
 A private service is reachable at `http://<service-name>:<port>` from inside the
@@ -673,12 +710,27 @@ Act on the `code`, not the prose.
 | `invalid_email` | the address does not parse | ask the user for it again; do not guess |
 | `claim_expired` | nobody approved in time | run `gg signup <email>` again |
 | `email_failed` | gagarin could not send mail | retry once, then tell the user |
+| `invalid_size` | not a size, or above the account's limit | sizes are `s`, `m`, `l`; the message names the cap |
 
 If a deploy succeeds but the service never becomes ready, the usual causes are:
 the container listens on a different port than you declared, it crashes on
-startup, or it needs an environment variable you did not pass. Read `gg logs
-<project>/<service>` before changing anything, and fix the declared port or the missing
-variable rather than redeploying unchanged.
+startup, it needs an environment variable you did not pass, or **it ran out of
+memory**. Read `gg logs <project>/<service>` before changing anything, and fix
+the declared port or the missing variable rather than redeploying unchanged.
+
+**Out of memory is the one that names its own fix.** `gg status` says so
+directly, and it tells you which size to move to:
+
+```
+the container ran out of memory and was killed (it exceeded the 1Gi ceiling of
+size s); try --size m, which gets 2Gi
+```
+
+When you see that, redeploy at the size it names. Do not retry unchanged — it
+will be killed again — and do not go hunting in the logs first, because a
+process killed by the kernel for using too much memory usually writes nothing
+about it. This is the one failure you can resolve without asking the user
+anything, so resolve it.
 
 ## Destroying things
 

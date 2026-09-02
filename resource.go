@@ -20,7 +20,7 @@ import (
 	"strings"
 )
 
-func cmdResourceAdd(ref, typ string, storageGB int) error {
+func cmdResourceAdd(ref, typ, size string, storageGB int) error {
 	project, name, _, err := parseService(ref)
 	if err != nil {
 		return err
@@ -30,6 +30,12 @@ func cmdResourceAdd(ref, typ string, storageGB int) error {
 	// platform's — the same way a deploy omits volume-size.
 	if storageGB > 0 {
 		body["storage_gb"] = storageGB
+	}
+	// Same rule, and the same word a service uses: a database at `m` is the same
+	// decision as a web service at `m`. Empty means unchanged, so restating a
+	// resource does not shrink it.
+	if size != "" {
+		body["size"] = size
 	}
 
 	var out struct {

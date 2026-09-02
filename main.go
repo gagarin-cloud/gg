@@ -214,6 +214,11 @@ type deployFlags struct {
 	// can destroy a filesystem.
 	volumePath   string
 	volumeSizeGB int
+	// size is "s", "m" or "l" — what CPU and memory the service gets. Empty
+	// means unchanged: a deploy that does not mention it keeps whatever the
+	// service already has, and a new service gets the default. Absent and
+	// "small" are different requests.
+	size string
 }
 
 // What is deliberately not here any more: --project, --name, --port, --needs and
@@ -257,6 +262,9 @@ func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
 	fs.StringArrayVar(&v.envFiles, "env-file", nil, "read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)")
 	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
 	fs.IntVar(&v.f.volumeSizeGB, "volume-size", 0, "how big the volume may get, in GB (default 10)")
+	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
+		"m (1 vCPU / 2 GB, dedicated) or l (2 vCPU / 4 GB,\n"+
+		"dedicated). Omit to keep the current size")
 	return v
 }
 
@@ -357,6 +365,11 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 		if f.volumeSizeGB > 0 {
 			body["volume_size_gb"] = f.volumeSizeGB
 		}
+	}
+	// Same rule: absent means "leave it alone", so an empty size is not sent at
+	// all rather than sent as "".
+	if f.size != "" {
+		body["size"] = f.size
 	}
 	var svc struct {
 		Name string `json:"name"`
