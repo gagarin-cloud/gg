@@ -21,20 +21,43 @@ func cmdSignup(email string) error {
 	var out struct {
 		Claim     string `json:"claim"`
 		ExpiresIn int    `json:"expires_in"`
+		// What happened to the email: "sent", "already_sent", or "logged".
+		// gg used to print "the email we just sent" whatever the answer was,
+		// which on 2026-09-01 was said twice about an email that was never
+		// sent — the control plane knew and the JSON did not carry it.
+		Delivery string `json:"delivery"`
 	}
 	body := map[string]string{"email": email, "client": clientName()}
 	if err := callAnon("POST", "/v1/signup", body, &out); err != nil {
 		return err
 	}
+
+	// One paragraph per outcome, because the instruction differs and not only
+	// the wording: "check your inbox" is useless advice when nothing was sent
+	// there, and "we just sent one" is wrong when the one that matters is ten
+	// minutes old.
+	said := fmt.Sprintf(`Tell your human to click the button in the email we just sent. It shows code
+%s, which should match this one. That single click creates the account and
+grants this machine access.`, out.Claim)
+
+	switch out.Delivery {
+	case "already_sent":
+		said = fmt.Sprintf(`An approval email for this code is already in their inbox and we did not send
+another. It shows code %s, which should match this one. That single click
+creates the account and grants this machine access.`, out.Claim)
+	case "logged":
+		said = fmt.Sprintf(`No email was sent: this gagarin has no mail provider configured, so the
+approval link went to the control plane's log instead. Somebody with access to
+those logs has to open it. It carries code %s, which should match this one.`, out.Claim)
+	}
+
 	fmt.Printf(`asked %s to approve this machine.
 
-Tell your human to click the button in the email we just sent. It shows code %s,
-which should match this one. That single click creates the account and grants
-this machine access.
+%s
 
 Then run:
   gg auth --claim %s
-`, email, out.Claim, out.Claim)
+`, email, said, out.Claim)
 	return nil
 }
 
