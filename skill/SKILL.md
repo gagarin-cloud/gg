@@ -439,7 +439,7 @@ gg resource add <project>/cache redis
 That is the whole of it. There is no image to choose, no version to pass, no
 Dockerfile — a resource is provisioned rather than deployed, and the only thing
 you may set is how big its storage can be (`--storage 20`, default 10GB, and it
-cannot be resized afterwards).
+can be grown later, never shrunk).
 
 **The three types, and the one difference that matters:**
 
@@ -514,7 +514,12 @@ Things worth knowing before you promise a user anything:
 - **Destroying it deletes the data**, and needs a human's approval like any
   other destructive act: `gg destroy <project>/db`. You do not have to say that
   it is a resource rather than a service — gg asks the platform, which knows.
-- **The storage cannot be resized.** Choose at creation.
+- **The storage can grow but never shrink.** Restate the resource with a bigger
+  `--storage` to raise the ceiling — `gg resource add <project>/db postgres
+  --storage 40` on an existing `db` grows it and changes nothing else. Asking for
+  a smaller number is refused with `volume_immutable`, because a volume cannot be
+  made smaller: to get one, destroy it and create it again, which deletes the
+  data.
 - **Mongo's URL carries `authSource=admin`,** and it is load-bearing: the user
   lives in the `admin` database, so a driver pointed anywhere else fails with an
   error that reads like a wrong password. Pass the URL as given.

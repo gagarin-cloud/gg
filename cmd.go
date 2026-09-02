@@ -567,7 +567,7 @@ what that means before you put a client's data in one.`,
 	// The only knob, and it is honoured rather than negotiated. Anything else
 	// about how a resource runs is the platform's decision.
 	cmd.Flags().IntVar(&storage, "storage", 0,
-		"how big its storage may get, in GB (default 10).\nSet once, at creation; it cannot be resized afterwards.\nRefused for redis, which keeps nothing across a restart")
+		"how big its storage may get, in GB (default 10).\nCan be raised later by restating the resource with a\nbigger number; it can never be made smaller.\nRefused for redis, which keeps nothing across a restart")
 	// Unlike --storage, this one can be changed afterwards: a size is cheap and
 	// reversible where a volume is neither.
 	cmd.Flags().StringVar(&size, "size", "",
