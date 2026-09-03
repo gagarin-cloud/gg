@@ -462,8 +462,11 @@ type domainStatus struct {
 type serviceStatus struct {
 	// Kind distinguishes a service from a resource. Absent from an older control
 	// plane, which had only services.
-	Kind  string `json:"kind"`
-	Name  string `json:"name"`
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	// Size is what CPU and memory this gets — "s", "m" or "l". Absent from an
+	// older control plane, which had one envelope for everything.
+	Size  string `json:"size"`
 	Image string `json:"image"`
 	Port  int    `json:"port"`
 	// What this service is allowed to reach. Server-side truth: it is the same

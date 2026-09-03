@@ -124,7 +124,13 @@ func printStatusTable(st statusResp) {
 	if anyResource {
 		head = append(head, "KIND")
 	}
-	head = append(head, "READY", "PORT", "REACHES", "IMAGE")
+	// SIZE is always shown, unlike VOLUME and KIND. Every service has one, so it
+	// is never a column of dashes — and its value is highest exactly when it is
+	// uniform and wrong: the first question after an out-of-memory kill is what
+	// the thing was running at, and needing a second command to find out is
+	// friction at the worst moment. It is also a price, and the total at the
+	// bottom of this page is unexplainable without it.
+	head = append(head, "SIZE", "READY", "PORT", "REACHES", "IMAGE")
 	if anyVolume {
 		head = append(head, "VOLUME")
 	}
@@ -148,6 +154,7 @@ func printStatusTable(st statusResp) {
 			row = append(row, kindLabel(s.Kind))
 		}
 		row = append(row,
+			sizeLabel(s.Size),
 			fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired),
 			fmt.Sprintf("%d", s.Port),
 			reaches, shortImage(s.Image, st.ProjectID),
@@ -288,4 +295,15 @@ func domainLine(d domainStatus) string {
 		out += "   " + describeDomainState(d.State, d.BlockedOn)
 	}
 	return out
+}
+
+// sizeLabel is the size as it should read in a table. An older control plane
+// does not send one, and a blank cell is a better answer than inventing "s" —
+// the platform, not this client, decides what a service that never named a size
+// gets, and guessing here would be a second opinion about somebody's bill.
+func sizeLabel(size string) string {
+	if size == "" {
+		return "—"
+	}
+	return size
 }
