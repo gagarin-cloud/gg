@@ -63,7 +63,19 @@ func call(method, path string, body any, out any) error {
 	if err != nil {
 		return err
 	}
-	return callTo(base, token, method, path, body, out)
+	return callToTimeout(base, token, method, path, body, out, 2*time.Minute)
+}
+
+// callSlow is call with a five-minute client, for the verbs that stream a
+// database through the control plane — backup and restore. The server allows
+// itself four minutes for those; the ordinary client would hang up first and
+// report a timeout for work that was still succeeding.
+func callSlow(method, path string, body any, out any) error {
+	base, token, err := resolveAuth()
+	if err != nil {
+		return err
+	}
+	return callToTimeout(base, token, method, path, body, out, 5*time.Minute)
 }
 
 // callAnon talks to the onboarding endpoints, which have no credential yet.
@@ -72,6 +84,10 @@ func callAnon(method, path string, body any, out any) error {
 }
 
 func callTo(base, token, method, path string, body any, out any) error {
+	return callToTimeout(base, token, method, path, body, out, 2*time.Minute)
+}
+
+func callToTimeout(base, token, method, path string, body any, out any, timeout time.Duration) error {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -93,7 +109,7 @@ func callTo(base, token, method, path string, body any, out any) error {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", clientName())
 
-	resp, err := (&http.Client{Timeout: 2 * time.Minute}).Do(req)
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		return fmt.Errorf("cannot reach control plane at %s: %w", base, err)
 	}

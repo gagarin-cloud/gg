@@ -529,7 +529,8 @@ func newResourceCmd() *cobra.Command {
 		Use:   "resource",
 		Short: "databases and the like: what a project has, rather than what it runs",
 	}
-	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd())
+	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd(),
+		newResourceBackupsCmd(), newResourceBackupCmd(), newResourceRestoreCmd())
 	return cmd
 }
 
@@ -554,9 +555,12 @@ other decision is the platform's.
   --size m   1 vCPU / 2 GB, dedicated. What a real database wants.
   --size l   2 vCPU / 4 GB, dedicated.
 
-None of them is managed. One instance, one volume, no backups and no
-failover — see ` + "`gg resource secrets`" + ` for how to connect, and the docs for
-what that means before you put a client's data in one.`,
+One instance, one volume, no failover. Postgres is dumped nightly and
+kept fourteen days — ` + "`gg resource backups`" + ` lists them, and
+` + "`gg resource restore`" + ` puts one back into a NEW resource. Redis keeps
+nothing across a restart, by design. See ` + "`gg resource secrets`" + ` for
+how to connect, and the docs for what all this means before you put a
+client's data in one.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
 			"  the types that exist are: postgres, mongo, redis"),
@@ -598,6 +602,79 @@ credentials are correct and the connection hangs.`,
 	}
 	cmd.Flags().StringVar(&format, "format", "env",
 		"env (KEY=VALUE lines, for --env-file) or json")
+	return cmd
+}
+
+func newResourceBackupsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backups PROJECT/NAME",
+		Short: "list its stored backups, newest last",
+		Long: `Every stored backup of this resource. Postgres is dumped nightly and
+kept fourteen days; the newest is the last line.
+
+A backup is used by restoring it into a NEW resource — never over this
+one. See ` + "`gg resource restore`" + `.`,
+		Args: usageArgs(1, 1, "usage: gg resource backups PROJECT/NAME\n  e.g. gg resource backups shop/db"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourceBackups(args[0])
+		},
+	}
+}
+
+func newResourceBackupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "backup PROJECT/NAME",
+		Short: "take a backup now, e.g. before something risky",
+		Long: `Dump the resource to backup storage right now and print the key.
+
+Safe to run any time: it reads the database and writes an object, nothing
+else. Run it before a migration you are not sure about, and the nightly
+schedule keeps running regardless. Kept fourteen days like every backup.`,
+		Args: usageArgs(1, 1, "usage: gg resource backup PROJECT/NAME\n  e.g. gg resource backup shop/db"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourceBackup(args[0])
+		},
+	}
+}
+
+func newResourceRestoreCmd() *cobra.Command {
+	var source, backupKey, size string
+	var storage int
+	cmd := &cobra.Command{
+		Use:   "restore PROJECT/NEW-NAME",
+		Short: "create a NEW resource from a backup",
+		Long: `Bring backed-up data back, as a new resource.
+
+This never overwrites anything: it provisions a fresh postgres under the
+name you give, waits for it to run, and fills it from the backup. The
+platform refuses to restore into a database that already holds data. So
+this command needs no approval and is safe to reach for at three in the
+morning.
+
+The rest of the recovery, once the data is verified:
+  1. gg deploy each dependent with --env-file <(gg resource secrets ...)
+  2. gg deps add each dependent to the new resource
+  3. remove the old resource — the one step that destroys data, and the
+     one that asks for human approval.
+
+Which backup: --source names the old resource and takes its newest dump
+(the old resource may already be destroyed — that is fine, its backups
+outlive it by fourteen days). --backup names an exact key from
+` + "`gg resource backups`" + `.`,
+		Args: usageArgs(1, 1, "usage: gg resource restore PROJECT/NEW-NAME --source OLD-NAME\n"+
+			"  e.g. gg resource restore shop/db2 --source db"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourceRestore(args[0], source, backupKey, size, storage)
+		},
+	}
+	cmd.Flags().StringVar(&source, "source", "",
+		"the resource whose newest backup to restore (it may already be destroyed)")
+	cmd.Flags().StringVar(&backupKey, "backup", "",
+		"an exact backup key, from `gg resource backups`")
+	cmd.Flags().StringVar(&size, "size", "",
+		"the new resource's size: s, m or l (default s)")
+	cmd.Flags().IntVar(&storage, "storage", 0,
+		"the new resource's storage ceiling in GB (default 10)")
 	return cmd
 }
 

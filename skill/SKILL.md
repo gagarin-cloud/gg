@@ -504,11 +504,33 @@ the path is open and there is nothing to authenticate with.
 
 Things worth knowing before you promise a user anything:
 
-- **None of them is managed.** One instance, one volume, no backups, no
-  point-in-time recovery, no failover. That is a deliberate decision about what
-  there is capacity to operate, not an oversight — say so plainly if a user asks
-  whether their data is safe, rather than implying an SLA nobody is on the hook
-  for.
+- **Postgres is backed up nightly; nothing else is.** A dump is taken every
+  night and kept **fourteen days**. `gg resource backups <project>/db` lists
+  them; `gg resource backup <project>/db` takes an extra one right now, which
+  is the correct move immediately before a risky migration. Redis is a cache
+  and keeps nothing across a restart, by documented decision; mongo has no
+  backups yet. There is still no point-in-time recovery and no failover — say
+  so plainly if a user asks whether their data is safe, rather than implying
+  an SLA nobody is on the hook for.
+- **A restore creates a NEW resource — it never overwrites an existing one.**
+  This is the platform's rule, not a convention: the engine refuses to restore
+  into any database that already holds data, which is exactly why a restore
+  needs no human approval and works at three in the morning. The recovery
+  runbook, in order:
+
+  ```
+  gg resource restore <project>/db2 --source db     # new resource, filled from db's newest dump
+  gg resource secrets <project>/db2                 # its NEW credentials (new password)
+  gg deploy <project>/api:8080 api --env-file <(gg resource secrets <project>/db2)
+  gg deps add <project>/api db2
+  gg destroy <project>/db                           # once everything reads from db2
+  ```
+
+  The old resource may already be destroyed when you restore — its backups
+  outlive it by fourteen days, and `--source db` still finds them. Only the
+  final `gg destroy` touches data that exists, and that is the one step that
+  asks for a human's approval. An exact point in time instead of the newest:
+  `--backup <key>` with a key from `gg resource backups`.
 - **It is one instance on one volume.** Deploys restart it rather than rolling,
   so a restart is a brief outage.
 - **Destroying it deletes the data**, and needs a human's approval like any
@@ -716,6 +738,12 @@ Act on the `code`, not the prose.
 | `claim_expired` | nobody approved in time | run `gg signup <email>` again |
 | `email_failed` | gagarin could not send mail | retry once, then tell the user |
 | `invalid_size` | not a size, or above the account's limit | sizes are `s`, `m`, `l`; the message names the cap |
+| `backup_unsupported` | this resource type has no backups (only postgres does) | nothing to retry; if the user needs durability, the data belongs in postgres |
+| `backup_unconfigured` | this gagarin runs without a backup bucket | not your fault; report it to the user |
+| `restore_target_not_empty` | the restore target already holds data | restore only fills a NEW resource; create one (`gg resource restore <project>/<new> --source <old>`) rather than reusing a live name |
+| `backup_mismatch` | the backup key belongs to a different project | list this project's with `gg resource backups`; never restore across projects |
+| `no_backups` | nothing stored for that source yet | the nightly pass takes the first one; `gg resource backup` takes one now |
+| `backup_failed` / `restore_failed` | the dump or restore itself failed | the resource must be running — check `gg status`, then retry once |
 
 If a deploy succeeds but the service never becomes ready, the usual causes are:
 the container listens on a different port than you declared, it crashes on
