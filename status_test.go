@@ -347,3 +347,111 @@ func TestASuspendedProjectReadsAsStoppedWithAReason(t *testing.T) {
 		t.Errorf("a stopped service was called starting:\n%s", out)
 	}
 }
+
+// --- externals in the table ------------------------------------------------
+
+func external(name string) serviceStatus {
+	return serviceStatus{Name: name, Kind: "resource:external"}
+}
+
+// The row an external gets. Without the state case it reads "failing" forever —
+// there is no Deployment, so Actual.Exists is false — and a reader goes looking
+// for a pod that was never meant to exist.
+func TestAnExternalDoesNotReadAsFailing(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{
+			Project: "shop", ProjectID: "p1",
+			Services: []serviceStatus{svc("web"), external("openai")},
+		})
+	})
+	if !strings.Contains(out, "\u25c6") {
+		t.Errorf("an external needs a mark from outside the pod-state set:\n%s", out)
+	}
+	if strings.Contains(out, "\u25cb failing") {
+		t.Errorf("an external is being reported as a failure:\n%s", out)
+	}
+	// The pod-shaped columns say "not applicable" rather than zero: a 0 port
+	// invites somebody to go looking for a listener.
+	if strings.Contains(out, "0/0") {
+		t.Errorf("an external was given a readiness count:\n%s", out)
+	}
+	// The prefix is derived from the name, so a reader who does not know the
+	// rule cannot guess it.
+	if !strings.Contains(out, "publishes OPENAI_*") {
+		t.Errorf("the table does not say what the external publishes:\n%s", out)
+	}
+}
+
+// The legend explains only what is on screen, and for an external it says what
+// the thing is rather than how it is — plus the one clause that stops the table
+// implying a guarantee it does not make.
+func TestTheExternalLegendSaysItGrantsNoEgress(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{
+			Project: "shop", ProjectID: "p1",
+			Services: []serviceStatus{external("openai")},
+		})
+	})
+	if !strings.Contains(out, "\u25c6 external") {
+		t.Errorf("no legend entry for the external mark:\n%s", out)
+	}
+	if !strings.Contains(out, "not egress") {
+		t.Errorf("the legend lets the table imply an egress guarantee:\n%s", out)
+	}
+}
+
+// And it is absent when nothing on screen is one.
+func TestNoExternalLegendWithoutAnExternal(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{
+			Project: "shop", ProjectID: "p1",
+			Services: []serviceStatus{svc("web")},
+		})
+	})
+	if strings.Contains(out, "\u25c6") {
+		t.Errorf("a legend explained a symbol that is not on screen:\n%s", out)
+	}
+}
+
+func TestExternalStateAndKindLabel(t *testing.T) {
+	if got := state(external("openai")); got != "external" {
+		t.Errorf("state = %q, want external", got)
+	}
+	if got := kindLabel("resource:external"); got != "external" {
+		t.Errorf("kindLabel = %q, want external", got)
+	}
+	if !isExternalKind("resource:external") {
+		t.Error("resource:external is not recognised as one")
+	}
+	for _, kind := range []string{"resource:postgres", "", "external"} {
+		if isExternalKind(kind) {
+			t.Errorf("%q was taken for an external", kind)
+		}
+	}
+	// Still a resource, so the KIND column appears for a project holding one.
+	if !isResourceKind("resource:external") {
+		t.Error("an external must still count as a resource for the KIND column")
+	}
+}
+
+// An edge to an external and an edge to a database do not mean the same thing —
+// one is enforced by a NetworkPolicy, the other is a note about who holds a key
+// — so the cell that lists them has to distinguish them. Otherwise a reader
+// concludes the graph guarantees the same thing about both.
+func TestAnEdgeToAnExternalIsMarked(t *testing.T) {
+	bot := svc("bot")
+	bot.Needs = []string{"openai", "pg"}
+	out := capture(t, func() {
+		printStatusTable(statusResp{
+			Project: "shop", ProjectID: "p1",
+			Services: []serviceStatus{bot, external("openai"),
+				{Name: "pg", Kind: "resource:postgres"}},
+		})
+	})
+	if !strings.Contains(out, "openai◆") {
+		t.Errorf("an edge to an external is indistinguishable from an enforced one:\n%s", out)
+	}
+	if strings.Contains(out, "pg◆") {
+		t.Errorf("an edge to a database was marked as inventory:\n%s", out)
+	}
+}

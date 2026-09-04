@@ -50,6 +50,9 @@ gg resource add shop/cache valkey   # postgres, ferretdb and valkey — valkey i
 gg deps add shop/web db             # let web reach it, and hand it DB_URL and the rest
 gg resource secrets shop/db         # the values, when something outside the project needs them
 
+gg resource add shop/openai external --env-file .env.openai   # a third-party key as a node on the graph
+gg deps add shop/bot openai         # bot now holds OPENAI_API_KEY; restate the resource to rotate it
+
 gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
 gg share shop teammate@example.com        # editors deploy and manage; viewers read
 gg destroy shop                           # asks your human, every time

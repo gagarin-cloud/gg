@@ -563,6 +563,7 @@ func newResourceCmd() *cobra.Command {
 
 func newResourceAddCmd() *cobra.Command {
 	var storage, size = 0, ""
+	var v *envFlagVars
 	cmd := &cobra.Command{
 		Use:   "add PROJECT/NAME TYPE",
 		Short: "provision a resource, e.g. `gg resource add shop/db postgres`",
@@ -577,6 +578,10 @@ func newResourceAddCmd() *cobra.Command {
              redis client and every redis:// URL work unchanged.
              --storage is refused, and a restart loses everything in
              it: this is a cache, not a database.
+  external   Something gagarin does NOT run: an OpenAI account, a Stripe
+             key, a bucket elsewhere. It holds the values you give it and
+             publishes them to whatever declares it needs them. No
+             container, so --size and --storage are refused.
 
 You name it, say how big its storage may get, and pick a size. Every
 other decision is the platform's.
@@ -591,12 +596,38 @@ kept fourteen days — ` + "`gg resource backups`" + ` lists them, and
 nothing across a restart, by design; ferretdb has no backups yet. See
 ` + "`gg deps add`" + ` for how to connect something to it — that one call opens
 the route and hands over the credentials — and the docs for what all this
-means before you put a client's data in one.`,
+means before you put a client's data in one.
+
+An external is the exception to most of the above. It runs nothing, so
+there is no size, no storage, no backup and nothing to be ready. You give
+it the values instead, and it publishes them under its own name:
+
+  gg resource add shop/openai external --env-file .env.openai
+
+An .env.openai holding API_KEY and BASE_URL makes shop/openai publish
+OPENAI_API_KEY and OPENAI_BASE_URL. Name the keys without the prefix —
+API_KEY, not OPENAI_API_KEY, which is refused rather than doubled.
+
+Prefer --env-file to --env. A key on the command line goes into your
+shell history and into the transcript of every agent that ran the
+command; a file does not.
+
+Restating an external replaces its values, which is how a key is
+rotated, and every service holding it is rolled. Restating one without
+--env leaves the values alone.
+
+Declaring a dependency on an external does NOT restrict egress. Anything
+in a project can already reach the internet; what the declaration grants
+is the credentials and a line on the graph saying who uses them.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
-			"  the types that exist are: postgres, ferretdb, valkey"),
+			"  the types that exist are: postgres, ferretdb, valkey, external"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdResourceAdd(args[0], args[1], size, storage)
+			e, err := v.finish()
+			if err != nil {
+				return err
+			}
+			return cmdResourceAdd(args[0], args[1], size, storage, e)
 		},
 	}
 	// The only knob, and it is honoured rather than negotiated. Anything else
@@ -607,6 +638,18 @@ means before you put a client's data in one.`,
 	// reversible where a volume is neither.
 	cmd.Flags().StringVar(&size, "size", "",
 		"how much CPU and memory: s, m or l (default s).\nCan be changed later by restating the resource")
+	// Only an external takes these, and cmdResourceAdd refuses them for every
+	// other type before it makes a request. Registered unconditionally because a
+	// flag that exists for one value of a positional argument cannot be hidden
+	// per-invocation — and a refusal naming the type is a better answer than
+	// "unknown flag" anyway.
+	//
+	// --env-file first in the help, because it is the one to use: a key passed
+	// on the command line is in the shell history and in every agent transcript
+	// that ran it.
+	v = bindEnvFlags(cmd.Flags(),
+		"a value an external publishes, K=V (repeatable).\nPrefer --env-file: this goes into your shell history",
+		"read an external's values from KEY=VALUE lines\n(repeatable; later files win, --env wins over all files)")
 	return cmd
 }
 

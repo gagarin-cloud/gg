@@ -280,21 +280,67 @@ type deployFlags struct {
 // of the artifact: it is what this revision ran with, it is what a rollback
 // restores, and `gg history` would mean less without it.
 
-// deployFlagVars holds the pflag.FlagSet destinations that need post-processing
-// once parsing is done: env vars and env files both feed the same map, and
-// precedence must not depend on the order they appeared in.
-type deployFlagVars struct {
-	f        *deployFlags
+// envFlagVars holds the --env and --env-file destinations, which need
+// post-processing once parsing is done: both feed one map, and precedence must
+// not depend on the order the flags appeared in.
+//
+// Extracted from deployFlagVars when `gg resource add` grew --env for external
+// resources. One copy of the precedence rule rather than two — the rule is
+// "files in order, then flags over all of them", and two implementations of it
+// would be two things to keep agreeing about a case nobody tests twice.
+type envFlagVars struct {
 	env      []string
 	envFiles []string
+}
+
+// bindEnvFlags registers the pair on any command that takes an environment.
+// usage differs between them — a deploy's env is the service's own, a resource's
+// is what it publishes — so the text is the caller's to supply.
+func bindEnvFlags(fs *pflag.FlagSet, envUsage, fileUsage string) *envFlagVars {
+	v := &envFlagVars{}
+	fs.StringArrayVar(&v.env, "env", nil, envUsage)
+	fs.StringArrayVar(&v.envFiles, "env-file", nil, fileUsage)
+	return v
+}
+
+// finish resolves the two into one map. Files first, in the order given, then
+// --env flags over the top of all of them.
+func (v *envFlagVars) finish() (map[string]string, error) {
+	out := map[string]string{}
+	for _, path := range v.envFiles {
+		vals, err := parseEnvFile(path)
+		if err != nil {
+			return nil, err
+		}
+		for k, val := range vals {
+			out[k] = val
+		}
+	}
+	for _, kv := range v.env {
+		k, val, ok := strings.Cut(kv, "=")
+		if !ok {
+			return nil, fmt.Errorf("--env expects K=V, got %q", kv)
+		}
+		out[k] = val
+	}
+	return out, nil
+}
+
+// deployFlagVars is the deploy-shaped flags plus that pair.
+type deployFlagVars struct {
+	f *deployFlags
+	*envFlagVars
 }
 
 // bindDeployFlags registers the flags that describe a deployed service, on both
 // `gg deploy` and `gg ship`, so the two cannot drift.
 func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
-	v := &deployFlagVars{f: &deployFlags{env: map[string]string{}}}
-	fs.StringArrayVar(&v.env, "env", nil, "set an env var K=V (repeatable)")
-	fs.StringArrayVar(&v.envFiles, "env-file", nil, "read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)")
+	v := &deployFlagVars{
+		f: &deployFlags{env: map[string]string{}},
+		envFlagVars: bindEnvFlags(fs,
+			"set an env var K=V (repeatable)",
+			"read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)"),
+	}
 	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
 	fs.IntVar(&v.f.volumeSizeGB, "volume-size", 0, "how big the volume may get, in GB (default 10)")
 	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
@@ -314,24 +360,13 @@ func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
 	return v
 }
 
-// finish applies env-file/-env precedence once flags have been parsed.
+// finish resolves the environment and then the flags that only a deploy has.
 func (v *deployFlagVars) finish() (*deployFlags, error) {
-	for _, path := range v.envFiles {
-		vals, err := parseEnvFile(path)
-		if err != nil {
-			return nil, err
-		}
-		for k, val := range vals {
-			v.f.env[k] = val
-		}
+	env, err := v.envFlagVars.finish()
+	if err != nil {
+		return nil, err
 	}
-	for _, kv := range v.env {
-		k, val, ok := strings.Cut(kv, "=")
-		if !ok {
-			return nil, fmt.Errorf("--env expects K=V, got %q", kv)
-		}
-		v.f.env[k] = val
-	}
+	v.f.env = env
 	// Dependency names are checked here rather than in deployImage, and the
 	// difference is paid for by `gg ship`: this runs before the command body, so
 	// a typo costs nothing, where a check inside deployImage would sit behind a

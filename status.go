@@ -39,6 +39,16 @@ import (
 // divergence it will fix on its own is not a fault to shout about.
 func state(s serviceStatus) string {
 	switch {
+	// A row that runs nothing, before anything asks whether it is running.
+	// Without this an external is "failing" forever: there is no Deployment, so
+	// Actual.Exists is false, and the first case below is the one it lands on.
+	//
+	// It is a state of its own rather than borrowed from "running", because an
+	// external is a different kind of thing and the table has to say so — a
+	// dot that means "the pod is up" next to a row with no pod is the sort of
+	// small lie that makes a reader distrust the whole screen.
+	case isExternalKind(s.Kind):
+		return "external"
 	case !s.Actual.Exists, s.Actual.Stalled:
 		return "failing"
 	// Nothing is meant to be running, so nothing missing. Today this means the
@@ -111,12 +121,21 @@ func printStatusTable(st statusResp) {
 	// Likewise a kind column: it only earns its place once a project has
 	// something in it that is not a service.
 	anyResource := false
+	// Which names in this project are externals, so an edge pointing at one can
+	// be marked where the edges are listed. Two edges in the same cell do not
+	// mean the same thing — reaching `pg` is enforced by a NetworkPolicy,
+	// reaching `openai` is a note about who uses a key — and a reader has to be
+	// able to see that without cross-referencing the rows below.
+	externals := map[string]bool{}
 	for _, s := range st.Services {
 		if s.VolumePath != "" {
 			anyVolume = true
 		}
 		if isResourceKind(s.Kind) {
 			anyResource = true
+		}
+		if isExternalKind(s.Kind) {
+			externals[s.Name] = true
 		}
 	}
 
@@ -142,10 +161,21 @@ func printStatusTable(st statusResp) {
 	// this reads at a glance again.
 	lines := []line{{cells: head}}
 	for _, s := range st.Services {
+		// The dots are all degrees of one question — is the pod up — so an
+		// external gets a shape from outside that set rather than a fifth
+		// shade of it.
 		mark := map[string]string{
 			"running": "●", "starting": "◐", "failing": "○", "stopped": "◌",
+			"external": "◆",
 		}[state(s)]
-		reaches := strings.Join(s.Needs, ", ")
+		marked := make([]string, 0, len(s.Needs))
+		for _, n := range s.Needs {
+			if externals[n] {
+				n += "◆"
+			}
+			marked = append(marked, n)
+		}
+		reaches := strings.Join(marked, ", ")
 		if reaches == "" {
 			reaches = "—"
 		}
@@ -153,12 +183,19 @@ func printStatusTable(st statusResp) {
 		if anyResource {
 			row = append(row, kindLabel(s.Kind))
 		}
-		row = append(row,
-			sizeLabel(s.Size),
-			fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired),
-			fmt.Sprintf("%d", s.Port),
-			reaches, shortImage(s.Image, st.ProjectID),
-		)
+		if isExternalKind(s.Kind) {
+			// Size, readiness, port and image are all facts about a container.
+			// A dash says "not applicable" where a zero would say "zero" and
+			// send somebody looking for the pod that is not listening on it.
+			row = append(row, "—", "—", "—", reaches, "—")
+		} else {
+			row = append(row,
+				sizeLabel(s.Size),
+				fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired),
+				fmt.Sprintf("%d", s.Port),
+				reaches, shortImage(s.Image, st.ProjectID),
+			)
+		}
 		if anyVolume {
 			v := "—"
 			if s.VolumePath != "" {
@@ -167,6 +204,15 @@ func printStatusTable(st statusResp) {
 			row = append(row, v)
 		}
 		lines = append(lines, line{cells: row})
+
+		// What an external publishes, under it, on the same pattern an address
+		// hangs under a service. It is the only fact about one worth a row, and
+		// the reader has to have it to write the application: the prefix is
+		// derived from the name, so a reader who does not know the rule cannot
+		// guess it.
+		if isExternalKind(s.Kind) {
+			lines = append(lines, line{text: fmt.Sprintf("◆  └ publishes %s_*", envPrefix(s.Name))})
+		}
 
 		// Every address the service answers on, under it, in the order the
 		// control plane put them: a name somebody owns first, because that is the
@@ -225,6 +271,14 @@ func printStatusTable(st statusResp) {
 	if seen["stopped"] {
 		notes = append(notes, "◌ stopped")
 	}
+	// Says what it is rather than how it is, because there is no how: nothing
+	// runs, so there is no state to be in. The clause about egress is here and
+	// not only in the docs — this table is where somebody forms their idea of
+	// what the graph guarantees, and an edge to an external guarantees nothing
+	// on the network.
+	if seen["external"] {
+		notes = append(notes, "◆ external (runs nothing; declaring it grants its variables, not egress)")
+	}
 	fmt.Printf("\n  %s\n", strings.Join(notes, "   "))
 
 	// The one thing the table cannot show, said only when it applies: what the
@@ -260,6 +314,12 @@ func formatUSD(microUSD int64) string {
 }
 
 func isResourceKind(kind string) bool { return strings.HasPrefix(kind, "resource:") }
+
+// isExternalKind is the one resource type gg renders differently, because it is
+// the one with no pod behind it. Compared as a string rather than asked of the
+// control plane: the status response carries the kind, and a table that needed a
+// second request to know how to draw a row would be a table that fails to draw.
+func isExternalKind(kind string) bool { return kind == "resource:"+typeExternal }
 
 // kindLabel is what the table shows. "service" rather than "container": this
 // table is at human altitude, and container is the word the platform uses to

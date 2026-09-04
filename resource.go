@@ -26,12 +26,37 @@ import (
 	"time"
 )
 
-func cmdResourceAdd(ref, typ, size string, storageGB int) error {
+// typeExternal is the one resource type gg has to know by name.
+//
+// Every other type is a string the control plane validates and gg passes
+// through — which is the whole reason `gg resource add` needs no case per type.
+// This one earns an exception because two things gg does locally depend on it:
+// --env is refused for anything else before a request is made, and the output
+// after a create says "it publishes X" rather than "gagarin is provisioning it",
+// which would be a wait for a pod that does not exist.
+const typeExternal = "external"
+
+func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string) error {
 	project, name, _, err := parseService(ref)
 	if err != nil {
 		return err
 	}
+	// An external is the one type the caller supplies values for, and the one
+	// the platform runs nothing for. Both halves of that show up below.
+	external := typ == typeExternal
+	if !external && len(env) > 0 {
+		return fmt.Errorf("only an external takes --env or --env-file: %s mints its own credentials\n  hint: gg resource secrets %s/%s reads them", typ, project, name)
+	}
+	if external && len(env) == 0 {
+		return fmt.Errorf("an external with no values publishes nothing\n  hint: gg resource add %s/%s external --env-file .env.%s", project, name, name)
+	}
 	body := map[string]any{"type": typ}
+	// Sent only when there is something to send, so a restatement that means to
+	// change nothing else does not clear the bundle: the control plane reads an
+	// absent env as "leave it as it is" and an explicit {} as "publish nothing".
+	if len(env) > 0 {
+		body["env"] = env
+	}
 	// Omitted rather than sent as zero, so the platform's default is the
 	// platform's — the same way a deploy omits volume-size.
 	if storageGB > 0 {
@@ -54,6 +79,31 @@ func cmdResourceAdd(ref, typ, size string, storageGB int) error {
 
 	if out.Sentence != "" {
 		fmt.Printf("%s\n", out.Sentence)
+	}
+	// An external is ready when this call returns — there is no pod to pull an
+	// image, so the "gagarin is provisioning it" line below would be a wait for
+	// nothing, and `gg status` has nothing to report becoming ready.
+	//
+	// The variable names are printed because they are the whole of what the
+	// resource does, and the caller has just typed the un-prefixed halves: they
+	// need to see what an application will actually read. Names only — the
+	// values are what they just supplied, and echoing a live key back into a
+	// terminal is how it reaches a scrollback.
+	if external {
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, envPrefix(name)+"_"+k)
+		}
+		sort.Strings(keys)
+		fmt.Printf("\nIt publishes %s\n", strings.Join(keys, ", "))
+		fmt.Printf(`
+Connect something to it:
+  gg deps add %s/<service> %s
+
+That hands the service those variables. It does not restrict egress —
+anything in this project can already reach the internet.
+`, project, name)
+		return nil
 	}
 	// Not waited for. This used to block for up to three minutes, on the grounds
 	// that the first pull is a hundred megabytes and a dependent that connects

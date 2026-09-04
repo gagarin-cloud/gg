@@ -467,13 +467,22 @@ Dockerfile — a resource is provisioned rather than deployed, and the only thin
 you may set is how big its storage can be (`--storage 20`, default 10GB, and it
 can be grown later, never shrunk).
 
-**The three types, and the one difference that matters:**
+There is a fourth type, `external`, which is not a database and not something
+gagarin runs at all — it is how a third-party API key becomes a node on the
+graph. See "Third-party APIs" below.
+
+**The types, and the differences that matter:**
 
 | type | what it is | storage |
 |---|---|---|
 | `postgres` | PostgreSQL 17 | on a volume; survives restarts |
 | `ferretdb` | MongoDB-compatible document DB | on a volume; survives restarts |
 | `valkey` | in-memory store, redis protocol | **none — a restart loses everything** |
+| `external` | a third-party API, run by nobody here | **none — it runs nothing at all** |
+
+The first three are things gagarin runs for you. `external` is the odd one and
+is covered in "Third-party APIs" below: no container, no port, no size, no
+backups — it holds credentials and publishes them, and that is all it does.
 
 The types are named for what actually runs, not for the products they stand in
 for — an honesty you can pass on when somebody asks.
@@ -496,6 +505,57 @@ not tell anyone their data is safe in it. **Valkey** is the BSD-licensed fork
 of Redis (whose licence also forbids hosting it), and this changes nothing you
 can observe: `redis://` URLs, `redis-cli`, and every client library work
 unchanged.
+
+### Third-party APIs: the `external` type
+
+An OpenAI account, a Stripe key, a bucket somewhere else. Not something gagarin
+runs — something your services need a credential for. Make it a resource anyway:
+
+```
+gg resource add <project>/openai external --env-file .env.openai
+gg deps add <project>/bot openai
+```
+
+An `.env.openai` holding `API_KEY` and `BASE_URL` makes `bot` hold
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`. Same naming rule as every other type:
+the resource's name, then the key. **Write the keys without the prefix** —
+`API_KEY`, not `OPENAI_API_KEY`, which is refused rather than doubled.
+
+**Why bother, instead of `--env OPENAI_API_KEY=…` on the deploy?** Because a key
+on a deploy is a copy. Three services using one key means three copies, rotating
+it means three deploys, and a deploy you forget leaves a service authenticating
+with a revoked key. As a resource it is one row: restate it and every service
+holding it is rolled with the new value.
+
+```
+gg resource add <project>/openai external --env-file .env.openai.new
+```
+
+That is the rotation. Nothing else to do — no deploys, no list of which services
+were affected.
+
+**It runs nothing.** No container, no port, no size, no storage, no backups,
+nothing to become ready. `gg status` shows it with a `◆` rather than a state dot,
+and a line under it saying what it publishes.
+
+**Use `--env-file`, not `--env`.** A key passed on the command line is in the
+shell history and in the transcript of every agent session that ran it. If the
+user hands you a key in chat, write it to a file first, use the file, and tell
+them the file has a live credential in it.
+
+**Declaring an external does NOT restrict egress.** This is the one thing not to
+get wrong when you explain it. Everything in a project can already reach the
+whole internet; the mail ports are the only exception, and that is it. What the
+declaration gives you is the credentials and a line on the graph saying which
+services use them. It is **not** a firewall, and an undeclared service can still
+call `api.openai.com` — it just has no key. `gg status` marks these edges with a
+`◆` for exactly this reason: `openai◆, pg` in a REACHES column means one enforced
+edge and one that is an inventory note.
+
+**What it is genuinely worth:** the project's dependencies are legible. `gg
+status` answers "what does this thing actually depend on, including things we do
+not run" — and destroying an external is refused while anything still declares
+it, so a key cannot be dropped out from under a running service.
 
 ### Anything we do not have a type for
 
