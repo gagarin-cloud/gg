@@ -47,8 +47,8 @@ gg logs shop/web
 
 gg resource add shop/db postgres    # a database; you choose the name and the size, nothing else
 gg resource add shop/cache valkey   # postgres, ferretdb and valkey — valkey is in-memory and loses data on restart
-gg resource secrets shop/db         # its credentials, to pass to a deploy like any other env
-gg deps add shop/web db             # and let web reach it — without this the connection hangs
+gg deps add shop/web db             # let web reach it, and hand it DB_URL and the rest
+gg resource secrets shop/db         # the values, when something outside the project needs them
 
 gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
 gg share shop teammate@example.com        # editors deploy and manage; viewers read
@@ -82,12 +82,27 @@ lapsed. An agent cannot grant itself that capability by asking.
 **Errors are meant to be acted on.** Every failure carries a stable `code`, a
 message, and a `fix_hint`. Agents should branch on the code, not the prose.
 
-**A deploy changes the image and the environment, and nothing else.** What a
-service is allowed to reach (`gg deps`), the addresses it answers on
-(`gg domain`) and the volume it keeps are declared separately and survive every
-deploy — none of them can be released by a deploy that forgets to restate it.
-That includes being on the internet at all: `gg ship` can neither give a service
-an address nor take one away, and taking one away asks a human first.
+**A deploy changes the image and the environment.** What a service is allowed to
+reach (`gg deps`), the addresses it answers on (`gg domain`) and the volume it
+keeps are declared separately and survive every deploy — none of them can be
+released by a deploy that forgets to restate it. That includes being on the
+internet at all: `gg ship` can neither give a service an address nor take one
+away, and taking one away asks a human first.
+
+`gg deploy --deps db` and `gg ship --deps db` are the one exception, and only in
+the direction that cannot lose anything: they add to what a service may reach,
+so that a service needing a database can be declared and deployed in one call
+instead of starting into a window where it cannot reach one. Withdrawing is
+`gg deps rm`, and a deploy that omits `--deps` changes the graph not at all.
+
+**Declaring a dependency on a resource hands over its credentials.** `gg deps add
+shop/web db` opens the route and puts `DB_URL`, `DB_HOST`, `DB_PORT`, `DB_USER`,
+`DB_PASSWORD` and `DB_DATABASE` in `web`'s environment — named after the
+resource, so a service can reach two databases without a collision. The platform
+derives them from the graph every time it starts the pod rather than copying them
+into the service's stored environment, so they cannot go stale and no redeploy
+can forget them. `gg resource secrets` prints the values for anything outside the
+project that needs them.
 
 ## Building from source
 

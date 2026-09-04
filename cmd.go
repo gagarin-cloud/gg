@@ -201,7 +201,7 @@ architecture succeeds here and fails much later at pull time.`,
 		},
 	}
 	bindBuildFlags(cmd, &f)
-	cmd.Flags().BoolVar(&f.push, "push", false, "upload it afterwards, as `gg push` would")
+	cmd.Flags().BoolVar(&f.push, "push", false, "upload it afterwards, as \"gg push\" would")
 	return cmd
 }
 
@@ -243,15 +243,31 @@ you say out loud, because the two mistakes do not cost the same: a service
 that should have been public fails the first time somebody opens it, and a
 service that should have been private does not fail at all.
 
-A deploy changes the image and the environment, and nothing else. It
-cannot give a service an address or take one away, move a volume, or
-change what this service is allowed to reach: those are declared by
-"gg domain", by the first deploy, and by "gg deps", and none of them can
-be released by a deploy that forgets to mention them.
+A deploy changes the image and the environment. It cannot give a service
+an address or take one away, move a volume, or withdraw anything this
+service is allowed to reach: those are declared by "gg domain", by the
+first deploy, and by "gg deps", and none of them can be released by a
+deploy that forgets to mention them.
+
+  gg deploy shop/api:8080 api:v3 --deps db
+
+--deps is the one thing here that touches the graph, and it only ever
+adds. It is for the service that needs a database on its very first
+deploy: declaring it in the same call means the pod never starts into a
+window where it cannot reach the database and does not hold its
+password. Forgetting it on the next deploy changes nothing, which is why
+it is safe where the old --needs flag was not.
 
 Environment is replaced wholesale, because it is part of what this
 revision ran with and is what a rollback puts back. Pass every variable
-the service needs, every time.`,
+the service needs, every time.
+
+What the service holds is that environment plus the connection variables
+of any resource it reaches. Those are not passed here and are not stored
+against the revision — the platform derives them from the graph every
+time it starts the pod, so they cannot go stale and a redeploy cannot
+forget them. A rollback restores the image and the environment you
+deployed with, never an old password.`,
 		Args: usageArgs(2, 2, "usage: gg deploy PROJECT/SERVICE[:PORT] IMAGE[:TAG]\n"+
 			"  e.g. gg deploy shop/web:8080 api:v3\n"+
 			"  build one first with gg build, or gg ship to do both"),
@@ -285,9 +301,14 @@ The image is named after the service and tagged from the clock, since
 somebody shipping does not have a name in mind for this particular build.
 It is printed, so it can be deployed again later.
 
-As with "gg deploy", this changes the image and the environment and
-nothing else. A new service is private until "gg domain add" gives it an
-address, and one that already has an address keeps it.`,
+As with "gg deploy", this changes the image and the environment — and
+takes the same --deps, which adds to what the service may reach and
+hands it the connection variables of any resource among them:
+
+  gg ship shop/api:8080 --deps db
+
+A new service is private until "gg domain add" gives it an address, and
+one that already has an address keeps it.`,
 		Args: usageArgs(1, 1, "usage: gg ship PROJECT/SERVICE[:PORT]\n"+
 			"  e.g. gg ship shop/web:8080 --context ./web"),
 	}
@@ -352,12 +373,18 @@ not fail fast, it hangs until the client gives up.
 The direction matters. The declaration goes on the caller: if api queries
 db, it is api that needs db, never the other way round.
 
-This opens a route and grants nothing else. Credentials are passed as
-environment on the deploy — see "gg resource secrets". Both halves are
-required, and they fail differently: without the credentials you get an
-authentication error, without the route you get a hang.
+When the thing reached is a resource, this also hands the caller that
+resource's connection variables — "gg deps add shop/api db" gives api
+DB_URL, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_DATABASE, and the
+command prints which ones arrived. They are named after the resource
+rather than the protocol, so a service can reach two databases without
+their variables colliding. "gg resource secrets" prints the values.
 
-A deploy never changes any of this.`,
+So connecting is this one call. It used to be two — read the credentials,
+pass them to a deploy — and that is no longer necessary.
+
+A deploy cannot withdraw any of this, and "gg deploy --deps" can only add
+to it. Withdrawing is "gg deps rm", here, and nowhere else.`,
 	}
 	cmd.AddCommand(newDepsListCmd(), newDepsAddCmd(), newDepsRemoveCmd())
 	return cmd
@@ -378,7 +405,7 @@ func newDepsListCmd() *cobra.Command {
 func newDepsAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add PROJECT/SERVICE NAME...",
-		Short: "let it reach these as well",
+		Short: "let it reach these as well, and hold their credentials",
 		Args: atLeastArgs(2, "usage: gg deps add PROJECT/SERVICE NAME...\n"+
 			"  e.g. gg deps add shop/api db cache\n"+
 			"  the names are services in the same project; there is no reaching across one"),
@@ -392,7 +419,7 @@ func newDepsRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "rm PROJECT/SERVICE NAME...",
 		Aliases: []string{"remove"},
-		Short:   "stop it reaching these",
+		Short:   "stop it reaching these, and take their credentials away",
 		Args: atLeastArgs(2, "usage: gg deps rm PROJECT/SERVICE NAME...\n"+
 			"  e.g. gg deps rm shop/api cache"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -562,8 +589,9 @@ One instance, one volume, no failover. Postgres is dumped nightly and
 kept fourteen days — ` + "`gg resource backups`" + ` lists them, and
 ` + "`gg resource restore`" + ` puts one back into a NEW resource. Valkey keeps
 nothing across a restart, by design; ferretdb has no backups yet. See
-` + "`gg resource secrets`" + ` for how to connect, and the docs for what all
-this means before you put a client's data in one.`,
+` + "`gg deps add`" + ` for how to connect something to it — that one call opens
+the route and hands over the credentials — and the docs for what all this
+means before you put a client's data in one.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
 			"  the types that exist are: postgres, ferretdb, valkey"),
@@ -586,18 +614,22 @@ func newResourceSecretsCmd() *cobra.Command {
 	var format string
 	cmd := &cobra.Command{
 		Use:   "secrets PROJECT/NAME",
-		Short: "the credentials for connecting to it",
+		Short: "print its credentials, for a human or a client outside gagarin",
 		Long: `Print what a caller needs to connect, and nothing else.
 
-Nothing is injected anywhere. Connecting is two steps and they do
-different things:
+You do not need this to connect a service in the same project. That is
+one call, and it grants the variables as well as the route:
 
-  gg deploy shop/api:8080 api:v3 --env-file <(gg resource secrets shop/db)
   gg deps add shop/api db
 
-The first supplies the credentials, the second opens the route. Without
-the credentials you get an authentication error; without the route the
-credentials are correct and the connection hangs.`,
+This command is for the cases where something else needs the values: a
+psql on your laptop, checking what an application is being handed, or a
+client running outside gagarin. It prints the same variables the platform
+injects — named after the resource, so a postgres called db gives DB_URL,
+DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_DATABASE.
+
+Treat the output as a credential. It is a live password, and --format env
+exists to be piped, not pasted into a terminal somebody is sharing.`,
 		Args: usageArgs(1, 1, "usage: gg resource secrets PROJECT/NAME\n  e.g. gg resource secrets shop/db"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdResourceSecrets(args[0], format)
@@ -655,10 +687,15 @@ this command needs no approval and is safe to reach for at three in the
 morning.
 
 The rest of the recovery, once the data is verified:
-  1. gg deploy each dependent with --env-file <(gg resource secrets ...)
-  2. gg deps add each dependent to the new resource
+  1. gg deps add each dependent to the new resource, which also hands it
+     the new resource's variables
+  2. gg deps rm each dependent off the old one
   3. remove the old resource — the one step that destroys data, and the
      one that asks for human approval.
+
+The variables are named after the resource, so they change with the
+name: what read DB_URL now reads DB2_URL. A dependent that hard-codes
+the old spelling in its own config needs a deploy as well.
 
 Which backup: --source names the old resource and takes its newest dump
 (the old resource may already be destroyed — that is fine, its backups
@@ -673,7 +710,7 @@ outlive it by fourteen days). --backup names an exact key from
 	cmd.Flags().StringVar(&source, "source", "",
 		"the resource whose newest backup to restore (it may already be destroyed)")
 	cmd.Flags().StringVar(&backupKey, "backup", "",
-		"an exact backup key, from `gg resource backups`")
+		"an exact backup `KEY`, from \"gg resource backups\"")
 	cmd.Flags().StringVar(&size, "size", "",
 		"the new resource's size: s, m or l (default s)")
 	cmd.Flags().IntVar(&storage, "storage", 0,

@@ -235,6 +235,20 @@ type deployFlags struct {
 	// service already has, and a new service gets the default. Absent and
 	// "small" are different requests.
 	size string
+	// deps is edges to add to the dependency graph, and the one field here that
+	// is not part of the artifact.
+	//
+	// It adds and never removes. Absent means "change nothing", which is what
+	// makes it safe where the old --needs was not: that flag sent the whole set
+	// and so a redeploy that forgot it withdrew a path, silently, because an
+	// undeclared call hangs rather than failing. A union cannot be released by
+	// omission.
+	//
+	// It exists for one shape that was otherwise two calls with a broken window
+	// between them: deploying a service that needs a database before `gg deps`
+	// has run starts a pod that cannot reach it and does not hold its
+	// credentials. Withdrawing is still `gg deps rm`, wholesale, in one place.
+	deps []string
 }
 
 // What is deliberately not here any more: --project, --name, --port, --needs and
@@ -248,6 +262,11 @@ type deployFlags struct {
 // break the caller; an undeclared call is dropped rather than refused, so it
 // hangs. A capability you can lose by forgetting to mention it is the failure
 // nobody sees.
+//
+// --deps is not that flag coming back, and the difference is the whole reason
+// it was allowed: it unions onto the declared set instead of replacing it, so
+// forgetting it changes nothing. The failure that killed --needs is not
+// reachable from an add-only field.
 //
 // --public left last and for the sharpest version of the same reason. It handed
 // out an address on the internet, and an address is not part of the artifact — it
@@ -281,6 +300,17 @@ func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
 	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
 		"m (1 vCPU / 2 GB, dedicated) or l (2 vCPU / 4 GB,\n"+
 		"dedicated). Omit to keep the current size")
+	// Additive, and the help says so because a reader who used --needs will
+	// assume it replaces. Declaring a dependency is also what hands this service
+	// that resource's connection variables, which is worth saying here: it is
+	// the reason to reach for this flag rather than deploy and connect after.
+	// The backquoted word is not decoration: pflag's UnquoteUsage renders the
+	// first one as the flag's value placeholder, so `NAME` is what makes this
+	// print as "--deps NAME". Prose in backticks would be printed there instead.
+	fs.StringArrayVar(&v.f.deps, "deps", nil, "also let this service reach `NAME`, and hold its\n"+
+		"connection variables if NAME is a resource (repeatable).\n"+
+		"Adds to what it already reaches and never removes;\n"+
+		"use \"gg deps rm\" to withdraw one")
 	return v
 }
 
@@ -301,6 +331,16 @@ func (v *deployFlagVars) finish() (*deployFlags, error) {
 			return nil, fmt.Errorf("--env expects K=V, got %q", kv)
 		}
 		v.f.env[k] = val
+	}
+	// Dependency names are checked here rather than in deployImage, and the
+	// difference is paid for by `gg ship`: this runs before the command body, so
+	// a typo costs nothing, where a check inside deployImage would sit behind a
+	// build and a push. The common mistake is spelling one as a reference —
+	// `--deps shop/db` — and checkNames answers that in a line.
+	if len(v.f.deps) > 0 {
+		if err := checkNames(v.f.deps); err != nil {
+			return nil, err
+		}
 	}
 	return v.f, nil
 }
@@ -387,6 +427,13 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	if f.size != "" {
 		body["size"] = f.size
 	}
+	// Only when asked for, and for a sharper reason than the others: the server
+	// unions what arrives here, so an empty list would be a no-op — but sending
+	// one anyway would put a graph write in the audit trail of every deploy that
+	// never mentioned the graph.
+	if len(f.deps) > 0 {
+		body["deps"] = f.deps
+	}
 	var svc struct {
 		Name string `json:"name"`
 	}
@@ -412,6 +459,16 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	// about the running state is more honest than saying something unchecked, and
 	// it is one fewer place for the answer to disagree with `gg status`.
 	fmt.Printf("  %s\n", t.short())
+	// What --deps did, said once and no more than the response establishes. The
+	// edges are declared — the write returned 200 — but this endpoint answers
+	// with the service row and no `injected` list, unlike `PUT .../needs`. So
+	// the variables are pointed at rather than named: naming them from the
+	// request would be gg inventing an answer the platform did not give it.
+	if len(f.deps) > 0 {
+		fmt.Printf("  reaching %s as well, and holding the connection variables of\n"+
+			"  whichever of those are resources — `gg deps ls %s/%s` lists the edges\n",
+			strings.Join(f.deps, " and "), project, service)
+	}
 	// Deliberately silent about where the service can be reached.
 	//
 	// A deploy no longer decides that — it cannot add an address and it cannot

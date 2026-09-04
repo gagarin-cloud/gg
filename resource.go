@@ -7,11 +7,16 @@ package main
 // is why `add` takes almost no flags: a knob here would be a decision the
 // platform should be making.
 //
-// Credentials are read, never injected. `gg deps add api db` means what
-// `--needs db` used to mean — this service may reach that one — and grants no
-// environment. To connect, ask for the credentials and pass them to a deploy
-// like any other variable, so a deploy stays the only thing that sets an
-// environment.
+// Declaring the dependency is what connects something to a resource.
+// `gg deps add api db` opens the route *and* puts db's connection variables in
+// api's environment — DB_URL and the parts, named after the resource rather than
+// the protocol. So connecting is one call, not a deploy carrying credentials
+// somebody read out of a second one.
+//
+// `gg resource secrets` still exists and still prints them, because reading a
+// password is a real thing to want: pasting it into a psql on a laptop, checking
+// what an application is being handed, pointing a service outside gagarin at it.
+// It is no longer a step in connecting one.
 
 import (
 	"encoding/json"
@@ -57,21 +62,37 @@ func cmdResourceAdd(ref, typ, size string, storageGB int) error {
 	// connecting, which `gg status` is for, and a command that blocks for three
 	// minutes is a command an agent will run twice.
 	fmt.Printf("\ngagarin is provisioning it. `gg status %s` says when it is ready.\n", project)
-	// The two things to do next, in order. Deliberately no connection string
-	// here: printing one would put a password in every terminal scrollback and
-	// agent transcript that ever created a database.
-	// The two halves, in order, and both are required. Without the credentials
-	// there is nothing to authenticate with; without the dependency the
-	// credentials are correct and the connection hangs.
+	// The one thing to do next. Deliberately no connection string here: printing
+	// one would put a password in every terminal scrollback and agent transcript
+	// that ever created a database — and it is not needed, because the
+	// declaration below is what hands the credentials over.
+	//
+	// This used to print two commands, a deploy carrying the credentials and a
+	// `gg deps add` opening the route, with a note that both were required and
+	// failed differently. One of them is now the whole of it.
 	fmt.Printf(`
-Connect something to it, in two steps:
-  gg deploy %s/api:8080 api --env-file <(gg resource secrets %s/%s)
+Connect something to it, in one step:
   gg deps add %s/api %s
 
-The first passes the credentials. The second opens the route — without it the
-connection is not refused, it hangs.
-`, project, project, name, project, name)
+That opens the route and hands api the connection variables — %s_URL and the
+parts. Or declare it on the deploy itself, so the service never starts without
+them:
+  gg deploy %s/api:8080 api --deps %s
+`, project, name, envPrefix(name), project, name)
 	return nil
+}
+
+// envPrefix is the prefix a resource's variables are published under: its own
+// name, upper-cased, with dashes as underscores. A postgres called `orders-db`
+// publishes ORDERS_DB_URL.
+//
+// Duplicated from the control plane rather than asked of it, and only ever to
+// print a hint. The rule is three lines and stable, and a round trip to render
+// one line of help would be a round trip that can fail. Nothing branches on
+// this: what a service actually holds is what `gg deps add` reported and what
+// `gg resource secrets` prints, both of which come from the platform.
+func envPrefix(name string) string {
+	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 }
 
 // cmdResourceSecrets prints what a caller needs to connect, and nothing else.
@@ -235,13 +256,25 @@ func cmdResourceRestore(ref, source, backupKey string, size string, storageGB in
 	}
 
 	fmt.Printf("restored %s into %s/%s\n", out.Restored, project, name)
+	// The old resource's name is only known when --source named it. Restoring an
+	// exact --backup key gives gg no reliable way to say which resource the key
+	// came from, and guessing by parsing the key would be a name printed into a
+	// recovery runbook that might not be the right one.
+	old := source
+	if old == "" {
+		old = "<old>"
+	}
 	fmt.Printf(`
 The data is back, under a new name. To finish the recovery:
-  gg deploy ... --env-file <(gg resource secrets %s/%s)   # point each dependent here
-  gg deps add %s/<dependent> %s
+  gg deps add %s/<dependent> %s     # each dependent, which also hands it %s_*
+  gg deps rm  %s/<dependent> %s     # and stop it reading the old one
 and once everything reads from %s, remove the old resource. That last step
 destroys data, so it is the one that asks for human approval.
-`, project, name, project, name, name)
+
+The variables are named after the resource, so they changed with the name: a
+dependent that read %s_URL now reads %s_URL. Anything holding the old spelling
+in its own config needs a deploy too.
+`, project, name, envPrefix(name), project, old, name, envPrefix(old), envPrefix(name))
 	return nil
 }
 

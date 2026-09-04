@@ -17,11 +17,26 @@ package main
 // So a dependency is a standing declaration now, like a domain and like a
 // resource. A deploy neither grants one nor takes one away.
 //
-// What it grants is a network path and nothing else. Credentials are still
-// passed as environment on the deploy — `gg deps add api db` opens the route to
-// the database and gives `api` no way to authenticate with it, which is
-// deliberate: a value that appeared from somewhere other than the deploy would
-// make a deploy stop describing what it runs.
+// What it grants is the network path *and*, when the thing reached is a
+// resource, that resource's connection variables. `gg deps add api db` opens the
+// route to the database and hands `api` DB_URL, DB_HOST, DB_PORT, DB_USER,
+// DB_PASSWORD and DB_DATABASE. This reverses the older rule, under which a
+// declaration granted no environment and the credentials were read with
+// `gg resource secrets` and passed to a deploy by hand.
+//
+// It is still not a second way to set an environment, which is the only reason
+// it was allowed. The variables are not copied into the service's stored env at
+// declaration time; the platform derives them from the graph every time it
+// renders the pod. So the deploy remains the one writer of your own environment,
+// `gg deps` remains the one writer of the graph, and what the container holds is
+// the union — computed in one place, with nothing to go stale and no redeploy
+// able to forget it.
+//
+// The variables are named after the resource, not the protocol: a postgres
+// called `orders-db` publishes ORDERS_DB_URL. So two databases can be reached by
+// one service without colliding, and the name says which of them answers. They
+// also outrank a user-set variable of the same name — the one place anything
+// beats what a deploy said, because only the resource knows the real value.
 
 import (
 	"fmt"
@@ -51,7 +66,12 @@ func serviceNeeds(project, service string) ([]string, error) {
 // state that only one of them could describe.
 func setNeeds(project, service string, needs []string) error {
 	var out struct {
-		Needs    []string `json:"needs"`
+		Needs []string `json:"needs"`
+		// Injected is the variables the service now holds because of the set
+		// above — names only, never values. The endpoint answers with these
+		// because this call is what hands a service its credentials, so it has
+		// to say which ones arrived.
+		Injected []string `json:"injected"`
 		Sentence string   `json:"sentence"`
 	}
 	path := fmt.Sprintf("/v1/projects/%s/services/%s/needs", project, service)
@@ -60,6 +80,20 @@ func setNeeds(project, service string, needs []string) error {
 	}
 	if out.Sentence != "" {
 		fmt.Println(out.Sentence)
+	}
+	// Printed by name and never by value. The values are one call away at
+	// `gg resource secrets`, behind the same role, and printing a password into a
+	// terminal that asked about a graph would put it in every scrollback and
+	// agent transcript that ever connected a database.
+	//
+	// This is the set the service holds *now*, not the ones this call added, so
+	// `gg deps rm` prints the remainder — variables come away as surely as they
+	// arrive, and the reader needs the state rather than the delta. When a
+	// withdrawal empties it there is nothing to print, and the sentence above
+	// has already said the service reaches nothing else.
+	if len(out.Injected) > 0 {
+		fmt.Printf("\n%s now holds %s\n", service, strings.Join(out.Injected, ", "))
+		fmt.Printf("  in its environment, from the resources it reaches. Values: gg resource secrets.\n")
 	}
 	return nil
 }
