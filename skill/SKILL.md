@@ -40,8 +40,9 @@ call the API. There is no manifest file, no config file, and nothing to commit.
     service that has an address keeps it across every deploy; one that does not
     stays private until somebody says otherwise.
 - A project owns **resources**: things gagarin provides rather than things you
-  built. `postgres`, `mongo` and `redis`. You name it and say how big; every
-  other decision is the platform's. See "Databases and caches" below.
+  built. `postgres`, `ferretdb` (MongoDB-compatible) and `valkey` (redis
+  protocol). You name it and say how big; every other decision is the
+  platform's. See "Databases and caches" below.
 - Gagarin runs images **only from its own registry**. Building, pushing and
   deploying are three separate verbs — `gg build`, `gg push`, `gg deploy` — and
   `gg ship` is all three at once, which is what you want most of the time. To run
@@ -50,7 +51,7 @@ call the API. There is no manifest file, no config file, and nothing to commit.
   Dockerfile that only says `FROM`; that is the same thing, worse.
   **If a resource type exists, use it.** `gg resource add <project>/db postgres` beats
   copying a postgres image in and deploying it as a service — that was the old
-  workaround, and it is now the wrong answer for postgres, mongo and redis.
+  workaround, and it is now the wrong answer for postgres, ferretdb and valkey.
   **For anything else it is still the right answer**: gagarin does not have a
   type for DuckDB, Cassandra, ClickHouse or a vector database, and a service
   with a volume is the ordinary way to run one, not a hack. See "Anything we
@@ -432,8 +433,8 @@ goes away. It is a real answer and it is meant to be used.
 
 ```
 gg resource add <project>/db postgres
-gg resource add <project>/docs mongo
-gg resource add <project>/cache redis
+gg resource add <project>/docs ferretdb
+gg resource add <project>/cache valkey
 ```
 
 That is the whole of it. There is no image to choose, no version to pass, no
@@ -446,18 +447,30 @@ can be grown later, never shrunk).
 | type | what it is | storage |
 |---|---|---|
 | `postgres` | PostgreSQL 17 | on a volume; survives restarts |
-| `mongo` | MongoDB 8 | on a volume; survives restarts |
-| `redis` | in-memory store | **none — a restart loses everything** |
+| `ferretdb` | MongoDB-compatible document DB | on a volume; survives restarts |
+| `valkey` | in-memory store, redis protocol | **none — a restart loses everything** |
 
-`redis` is a cache, not a database. There is no volume, so `--storage` is
+The types are named for what actually runs, not for the products they stand in
+for — an honesty you can pass on when somebody asks.
+
+`ferretdb` is **FerretDB**, the Apache-licensed MongoDB alternative, storing
+into Postgres. It speaks the MongoDB wire protocol: `mongodb://` URLs, the
+official drivers, Mongoose and every ODM work unchanged, and for ordinary CRUD,
+indexes and aggregation you cannot tell. It is not MongoDB — gagarin does not
+run MongoDB because MongoDB's licence (SSPL) forbids offering it as a service —
+so an app leaning on an exotic corner of the surface may notice; if one does,
+run real MongoDB yourself as a service with a volume (next section), where the
+licence is not gagarin's problem and not yours either, because serving your own
+app is not "offering MongoDB as a service".
+
+`valkey` is a cache, not a database. There is no volume, so `--storage` is
 refused (`no_storage`) rather than quietly ignored, and anything in it is gone
 when the pod restarts — which happens on a node drain, not only when somebody
 asks. Do not put a session store there that a user would notice losing, and do
-not tell anyone their data is safe in it.
-
-It runs **Valkey**, the BSD-licensed fork of Redis, because Redis's own licence
-forbids offering it as a hosted service. This changes nothing you can observe:
-`redis://` URLs, `redis-cli`, and every client library work unchanged.
+not tell anyone their data is safe in it. **Valkey** is the BSD-licensed fork
+of Redis (whose licence also forbids hosting it), and this changes nothing you
+can observe: `redis://` URLs, `redis-cli`, and every client library work
+unchanged.
 
 ### Anything we do not have a type for
 
@@ -492,7 +505,9 @@ gg deps add <project>/api db
 
 `gg resource secrets` prints whichever set fits the type — `DATABASE_URL` and
 the `PG*` variables for postgres, `MONGODB_URI`/`MONGO_URL` and the `MONGO_*`
-variables for mongo, `REDIS_URL` and the `REDIS_*` variables for redis. Nothing
+variables for ferretdb, `REDIS_URL` and the `REDIS_*` variables for valkey.
+The variable names follow the *protocol* each type speaks rather than its own
+name, because that is what applications and client libraries read. Nothing
 is injected anywhere: `gg deps add` opens the network path and grants no
 environment, so the credentials are passed exactly the way every other variable
 is. That is deliberate — a value that appeared from somewhere other than the
@@ -507,8 +522,8 @@ Things worth knowing before you promise a user anything:
 - **Postgres is backed up nightly; nothing else is.** A dump is taken every
   night and kept **fourteen days**. `gg resource backups <project>/db` lists
   them; `gg resource backup <project>/db` takes an extra one right now, which
-  is the correct move immediately before a risky migration. Redis is a cache
-  and keeps nothing across a restart, by documented decision; mongo has no
+  is the correct move immediately before a risky migration. Valkey is a cache
+  and keeps nothing across a restart, by documented decision; ferretdb has no
   backups yet. There is still no point-in-time recovery and no failover — say
   so plainly if a user asks whether their data is safe, rather than implying
   an SLA nobody is on the hook for.
@@ -542,9 +557,11 @@ Things worth knowing before you promise a user anything:
   a smaller number is refused with `volume_immutable`, because a volume cannot be
   made smaller: to get one, destroy it and create it again, which deletes the
   data.
-- **Mongo's URL carries `authSource=admin`,** and it is load-bearing: the user
-  lives in the `admin` database, so a driver pointed anywhere else fails with an
-  error that reads like a wrong password. Pass the URL as given.
+- **Ferretdb's URL carries no `authSource`, and does not want one.** There is
+  no `admin` database to authenticate against — FerretDB checks the credentials
+  itself and takes them whatever database the driver names. If you are porting
+  config that hard-codes `authSource=admin` for a previous MongoDB, drop it and
+  pass the URL as given.
 - A resource cannot be deployed over, and cannot be rolled back — it has no
   deploy history. `gg deploy <project>/db` against a resource is refused with
   `not_a_service`, which is telling you the name is already a database. Nor can
