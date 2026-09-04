@@ -38,6 +38,10 @@ binary, so it never disagrees with the CLI you have.
 ```
 gg signup you@example.com      # a human clicks a button in an email; that is the whole signup
 gg auth --claim ABCD-1234      # waits for that click, stores credentials, logs docker in
+
+gg credentials                                     # what has access to this account
+gg credentials create --name "github actions"      # mint one for CI: deploy-only, expiring, printed once
+gg credentials revoke 7                            # take one away
 gg init shop                   # create a project
 
 gg ship shop/web:8080          # build the current directory, push it, run it

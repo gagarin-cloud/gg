@@ -83,6 +83,7 @@ Environment (overrides the file; meant for CI):
 		newPushCmd(),
 		newDeployCmd(),
 		newShipCmd(),
+		newCredentialsCmd(),
 		newStatusCmd(),
 		newLogsCmd(),
 		newDepsCmd(),
@@ -346,6 +347,112 @@ func newLogsCmd() *cobra.Command {
 		Args:  usageArgs(1, 1, "usage: gg logs PROJECT/SERVICE\n  e.g. gg logs shop/web"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdLogs(args[0])
+		},
+	}
+}
+
+// --- credentials -----------------------------------------------------------
+
+// newCredentialsCmd is what has access to this account, and how CI gets some.
+//
+// It exists because the endpoints did and nothing called them: setting up a
+// pipeline meant reading gg's source, and what that turned up was the
+// human-approval flow run with a scratch XDG_CONFIG_HOME and a faked
+// GITHUB_ACTIONS to get a recognisable label. That works and it is nobody's
+// fault but ours — there was no other way.
+func newCredentialsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "credentials",
+		Aliases: []string{"credential", "creds"},
+		Short:   "what has access to this account, and how to give CI some",
+		Long: `Every credential on this account: the machines a human approved, and
+the ones minted for automation.
+
+  gg credentials                                    what has access
+  gg credentials create --name "github actions"     mint one for CI
+  gg credentials revoke 7                           take one away
+
+A credential minted here is deliberately weaker than the one that made
+it. It can deploy. It cannot destroy — a pipeline holding it cannot
+delete a project, a service or a database, and no flag turns that on. It
+expires. And it cannot mint another, so a leaked one cannot issue its
+own replacements while you are busy revoking it.
+
+The secret is shown once and gagarin keeps only a hash. Lose it and you
+revoke it and mint another; there is no command that reads one back.`,
+	}
+	cmd.AddCommand(newCredentialsListCmd(), newCredentialsCreateCmd(), newCredentialsRevokeCmd())
+	// Bare `gg credentials` lists, because that is what somebody typing the
+	// noun on its own wants — and a bare noun that prints help is a command
+	// that makes you type it twice.
+	cmd.RunE = func(cmd *cobra.Command, args []string) error { return cmdCredentialsList() }
+	cmd.Args = usageArgs(0, 0, "usage: gg credentials\n  gg credentials create --name NAME to mint one")
+	return cmd
+}
+
+func newCredentialsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "ls",
+		Aliases: []string{"list"},
+		Short:   "what has access to this account",
+		Args:    usageArgs(0, 0, "usage: gg credentials ls"),
+		RunE:    func(cmd *cobra.Command, args []string) error { return cmdCredentialsList() },
+	}
+}
+
+func newCredentialsCreateCmd() *cobra.Command {
+	var name string
+	var days int
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "mint a credential for CI, printed once",
+		Long: `Mint a credential from the one this machine already holds. No email, no
+approval, nothing written to disk.
+
+  gg credentials create --name "github actions: acme/web"
+
+The secret is printed on stdout, alone on its line, and everything else
+goes to stderr — so piping it somewhere is a sane thing to do:
+
+  gh secret set GAGARIN_TOKEN --body "$(gg credentials create --name ci 2>/dev/null)"
+
+CI reads it from GAGARIN_TOKEN. Nothing else is needed: no gg auth, no
+credentials file, no home directory.
+
+What it can do is fixed and narrower than what you hold. Deploy, yes.
+Destroy, never — and that is not a flag, because a long-lived token that
+could delete a database is the one thing you least want in a repository.
+It expires, defaulting to 90 days, and it cannot mint another.
+
+Name it after where it will live. It is what you read in
+` + "`gg credentials`" + ` months later when deciding whether it is still wanted,
+and "token" tells you nothing then.`,
+		Args: usageArgs(0, 0, "usage: gg credentials create --name NAME\n"+
+			`  e.g. gg credentials create --name "github actions: acme/web"`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdCredentialsCreate(name, days)
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "",
+		"what this credential is for, e.g. \"github actions: acme/web\".\nRequired: it is what you read in the list later")
+	cmd.Flags().IntVar(&days, "expires", 0,
+		"days until it expires (default 90, maximum 365).\nThere is no never")
+	return cmd
+}
+
+func newCredentialsRevokeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "revoke ID",
+		Aliases: []string{"rm"},
+		Short:   "take a credential away",
+		Long: `Revoke a credential by its id, which ` + "`gg credentials`" + ` prints.
+
+Takes effect immediately and needs no approval: taking access away is
+always safe, and requiring a human to authorise it would mean a machine
+you no longer trust could not be locked out promptly.`,
+		Args: usageArgs(1, 1, "usage: gg credentials revoke ID\n  gg credentials lists the ids"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdCredentialsRevoke(args[0])
 		},
 	}
 }

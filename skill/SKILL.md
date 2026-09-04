@@ -116,6 +116,51 @@ just stored — there is no second account and nothing to type. If that step is
 skipped because `docker` was not installed yet, run `gg registry login` once the
 machine has it.
 
+### Giving CI a credential
+
+**Do not run `gg signup` in CI, and do not copy this machine's credential into
+it.** A pipeline gets its own, minted from the one you already hold:
+
+```
+gg credentials create --name "github actions: acme/web"
+```
+
+The secret is printed on stdout, alone on its line, and everything else goes to
+stderr — so it pipes:
+
+```
+gh secret set GAGARIN_TOKEN --body "$(gg credentials create --name "github actions: acme/web" 2>/dev/null)"
+```
+
+CI reads `GAGARIN_TOKEN` from the environment and needs nothing else: no
+`gg auth`, no credentials file, no home directory. In a workflow:
+
+```yaml
+env:
+  GAGARIN_TOKEN: ${{ secrets.GAGARIN_TOKEN }}
+```
+
+**It is shown once.** gagarin keeps a hash, not the secret. If it is lost, revoke
+it and mint another — there is no command that reads one back.
+
+**It is deliberately weaker than yours.** It can deploy. It cannot destroy, so a
+pipeline holding it cannot delete a project, a service or a database; no flag
+turns that on. It expires (90 days by default, 365 maximum, and there is no
+never). And it cannot mint another, so a leaked one cannot issue its own
+replacements while you are revoking it.
+
+Name it after where it will live. `gg credentials` is a list somebody reads
+months later deciding what is still wanted, and "token" tells them nothing.
+
+```
+gg credentials              what has access, and which are minted
+gg credentials revoke 7     take one away, immediately, no approval needed
+```
+
+If you are ever tempted to set `XDG_CONFIG_HOME` to a scratch directory and run
+the signup flow again to get a second credential: that used to be the only way
+and it is not any more. Use `gg credentials create`.
+
 ## Deploying a project
 
 1. **Confirm there is a Dockerfile** for each service you intend to deploy.
@@ -939,6 +984,9 @@ Act on the `code`, not the prose.
 | code | what it means | what to do |
 |---|---|---|
 | `unauthorized` | this machine has no usable credential | run `gg whoami`, then the "Getting access" steps — never ask the user for a token |
+| `cannot_delegate` | a minted credential tried to mint another | mint it from the machine a human approved; `gg whoami` names the one you are holding |
+| `name_required` | `gg credentials create` with no `--name` | name it after where it will live — it is what you read in the list months later |
+| `invalid_expiry` | `--expires` outside 1–365 days | there is no never; leave it out for 90 |
 | `approval_required` | a human must approve a deletion | tell the user, pass on the code, wait, retry the same command |
 | `project_not_found` | no such project, **or** you have no access to it | `gg projects` lists what you can reach; `gg init <project>` creates one; if it is somebody else's, ask them to `gg share` it with you |
 | `insufficient_role` | you can see the project but only as a viewer | ask the owner or an editor for edit access; do not retry |
