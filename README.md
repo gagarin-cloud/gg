@@ -51,7 +51,9 @@ gg deps add shop/web db             # let web reach it, and hand it DB_URL and t
 gg resource secrets shop/db         # the values, when something outside the project needs them
 
 gg resource add shop/openai external --env-file .env.openai   # a third-party key as a node on the graph
-gg deps add shop/bot openai         # bot now holds OPENAI_API_KEY; restate the resource to rotate it
+gg deps add shop/bot openai         # bot now holds OPENAI_API_KEY
+gg resource rotate shop/openai --env-file .env.new   # new key, and every holder rolls
+gg resource rotate shop/db          # a database: gagarin mints it, no downtime
 
 gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
 gg share shop teammate@example.com        # editors deploy and manage; viewers read

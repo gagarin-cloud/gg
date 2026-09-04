@@ -524,15 +524,20 @@ the resource's name, then the key. **Write the keys without the prefix** —
 **Why bother, instead of `--env OPENAI_API_KEY=…` on the deploy?** Because a key
 on a deploy is a copy. Three services using one key means three copies, rotating
 it means three deploys, and a deploy you forget leaves a service authenticating
-with a revoked key. As a resource it is one row: restate it and every service
-holding it is rolled with the new value.
+with a revoked key. As a resource it is one row, and rotating it is one command:
 
 ```
-gg resource add <project>/openai external --env-file .env.openai.new
+gg resource rotate <project>/openai --env-file .env.openai.new
 ```
 
-That is the rotation. Nothing else to do — no deploys, no list of which services
-were affected.
+Every service holding the old value is restarted with the new one. Nothing else
+to do — no deploys, and no working out which services were affected, because the
+command tells you which ones it rolled.
+
+Note it is `rotate`, not `add`. Restating an external with `gg resource add` is
+**refused** once it exists, and that refusal is deliberate: restating it from an
+old `.env` file would have rolled the key *backwards*, and the failure would have
+been an authentication error nobody would connect to the command they ran.
 
 **It runs nothing.** No container, no port, no size, no storage, no backups,
 nothing to become ready. `gg status` shows it with a `◆` rather than a state dot,
@@ -556,6 +561,42 @@ edge and one that is an inventory note.
 status` answers "what does this thing actually depend on, including things we do
 not run" — and destroying an external is refused while anything still declares
 it, so a key cannot be dropped out from under a running service.
+
+### Rotating credentials
+
+Every resource type rotates with one command, and everything holding the old
+credential is restarted with the new one:
+
+```
+gg resource rotate <project>/db                                a database
+gg resource rotate <project>/openai --env-file .env.new         an external
+```
+
+**Who supplies the new value is the only difference.** For `postgres`,
+`ferretdb` and `valkey` gagarin mints one and `--env` is **refused** — a password
+you chose is one the running server has never heard of. For an `external` the
+values are yours, so `--env` or `--env-file` is **required**.
+
+**The costs are not the same, and a user will want to know before you run it:**
+
+| type | what happens | downtime |
+|---|---|---|
+| `postgres` | the running server is told immediately | none |
+| `ferretdb` | the same, in the Postgres it stores into | none |
+| `valkey` | the pod is replaced, because the password is read at startup | **the cache is emptied** |
+| `external` | nothing of ours runs, so nothing of ours restarts | none |
+
+In every case the *dependents* restart, because their environment changed. That
+is the point of the command.
+
+**If it fails, nothing changed.** The old credential is still in use and the
+command is safe to run again. Say that to the user rather than leaving them
+wondering what state a half-failed rotation left behind — there is no half.
+
+**Rotate after a leak, and say so plainly.** If a key has been in a chat log, a
+commit, or a screenshot, rotating is the fix and it takes one command. For an
+external, note that gagarin forgets the old value but cannot *revoke* it — that
+is a thing to do in the third party's own console, and the user has to do it.
 
 ### Anything we do not have a type for
 
@@ -913,6 +954,11 @@ Act on the `code`, not the prose.
 | `invalid_port` | port out of range | set the port the container actually listens on |
 | `invalid_needs` | a dependency list gg would not send: a blank name, or a service naming itself | correct the names; a service reaches itself without being told to |
 | `invalid_deps` | the same, on the `--deps` of a deploy or a ship | correct the names; `gg deps ls` shows what is already declared |
+| `already_exists` | `gg resource add` with `--env` on an external that is already there | `gg resource rotate` is how values change — this refusal stops an old file rolling a key backwards |
+| `env_required` | `gg resource rotate` on an external with no values | an external's values are the user's; pass `--env-file` |
+| `no_env` | `--env` on a type that mints its own credentials | drop it; `gg resource secrets` reads what gagarin minted |
+| `rotate_failed` | the running server could not be told its new password | **nothing changed** — the old credential still works and it is safe to retry; check `gg status` for a resource that is not running |
+| `cannot_rotate` | the resource has no credentials recorded to replace | `gg resource secrets` shows what it holds; this is a bug worth reporting |
 | `no_such_service` | a name in `gg deps add` or in `--deps` is not a service or resource in this project | `gg status <project>` lists them; create it first |
 | `apply_failed` | desired state saved, cluster update failed | retry the same command; it is idempotent |
 | `cluster_error` | gagarin could not reach infrastructure | not your fault; report it to the user |

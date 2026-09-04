@@ -556,7 +556,7 @@ func newResourceCmd() *cobra.Command {
 		Use:   "resource",
 		Short: "databases and the like: what a project has, rather than what it runs",
 	}
-	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd(),
+	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd(), newResourceRotateCmd(),
 		newResourceBackupsCmd(), newResourceBackupCmd(), newResourceRestoreCmd())
 	return cmd
 }
@@ -604,6 +604,10 @@ it the values instead, and it publishes them under its own name:
 
   gg resource add shop/openai external --env-file .env.openai
 
+Restating a resource cannot change what it publishes — that is
+` + "`gg resource rotate`" + `, deliberately a separate verb so that restating
+one from an old file cannot roll a key backwards by accident.
+
 An .env.openai holding API_KEY and BASE_URL makes shop/openai publish
 OPENAI_API_KEY and OPENAI_BASE_URL. Name the keys without the prefix —
 API_KEY, not OPENAI_API_KEY, which is refused rather than doubled.
@@ -612,9 +616,8 @@ Prefer --env-file to --env. A key on the command line goes into your
 shell history and into the transcript of every agent that ran the
 command; a file does not.
 
-Restating an external replaces its values, which is how a key is
-rotated, and every service holding it is rolled. Restating one without
---env leaves the values alone.
+An external's values are set here, once, when it is created. Changing
+them afterwards is ` + "`gg resource rotate`" + `.
 
 Declaring a dependency on an external does NOT restrict egress. Anything
 in a project can already reach the internet; what the declaration grants
@@ -680,6 +683,68 @@ exists to be piped, not pasted into a terminal somebody is sharing.`,
 	}
 	cmd.Flags().StringVar(&format, "format", "env",
 		"env (KEY=VALUE lines, for --env-file) or json")
+	return cmd
+}
+
+// newResourceRotateCmd is its own verb rather than a flag or a restatement,
+// and that separation is the fix for a footgun rather than a preference.
+//
+// An external's values used to be replaceable by restating the resource, which
+// meant restating it from a stale .env file silently rotated the key backwards —
+// and the failure was an authentication error nobody would connect to the
+// command they ran. A declaration says what something should be; replacing a
+// live credential is an act with a moment, and the two want different verbs.
+func newResourceRotateCmd() *cobra.Command {
+	var v *envFlagVars
+	cmd := &cobra.Command{
+		Use:   "rotate PROJECT/NAME",
+		Short: "replace its credentials, and roll everything holding them",
+		Long: `Give a resource new credentials. Everything that declares it needs the
+resource is restarted with them.
+
+  gg resource rotate shop/db                                 a database
+  gg resource rotate shop/openai --env-file .env.openai.new  an external
+
+Who supplies the new value is the only difference between the types. For
+a postgres, ferretdb or valkey, gagarin mints one and --env is refused —
+a password you chose is one the running server has never heard of. For an
+external the values are yours, so --env or --env-file is required.
+
+Nothing is printed but the names of the variables. Read the values with
+"gg resource secrets" if you need them.
+
+What happens per type, because the costs are not the same:
+
+  postgres   The running server is told immediately. No restart, no
+             downtime, no dropped connections beyond the ones that were
+             mid-authentication.
+  ferretdb   The same, in the Postgres it stores into.
+  valkey     The password is read when the server starts, so the pod is
+             replaced — which empties the cache. That is what a restart
+             of a valkey always does, but it is worth knowing before you
+             run this on a hot one.
+  external   Nothing of ours runs, so nothing of ours restarts. Only the
+             services holding the values are rolled.
+
+If it fails, nothing changed: the old credential is still in use and the
+command is safe to run again.`,
+		Args: usageArgs(1, 1, "usage: gg resource rotate PROJECT/NAME\n"+
+			"  e.g. gg resource rotate shop/db\n"+
+			"  for an external: gg resource rotate shop/openai --env-file .env.new"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			e, err := v.finish()
+			if err != nil {
+				return err
+			}
+			return cmdResourceRotate(args[0], e)
+		},
+	}
+	// Same pair as `gg resource add`, and --env-file for the same reason: a key
+	// on the command line is in the shell history and in every agent transcript
+	// that ran it.
+	v = bindEnvFlags(cmd.Flags(),
+		"a new value for an external, K=V (repeatable).\nPrefer --env-file: this goes into your shell history",
+		"read an external's new values from KEY=VALUE lines\n(repeatable; later files win, --env wins over all files)")
 	return cmd
 }
 

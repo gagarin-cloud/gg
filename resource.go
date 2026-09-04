@@ -371,3 +371,59 @@ func sizeHuman(b int64) string {
 		return fmt.Sprintf("%.2f GB", float64(b)/(1024*1024*1024))
 	}
 }
+
+// cmdResourceRotate replaces a resource's credentials and reports what moved.
+//
+// One verb for every type, because it is one idea. What differs is who supplies
+// the new value: for an external it is the caller, and for everything else the
+// platform mints one. gg refuses the wrong combination locally rather than
+// spending a round trip on it — and names the flag or its absence, because
+// "invalid request" would leave the caller guessing which half was wrong.
+func cmdResourceRotate(ref string, env map[string]string) error {
+	project, name, _, err := parseService(ref)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{}
+	if len(env) > 0 {
+		body["env"] = env
+	}
+
+	var out struct {
+		Resource string   `json:"resource"`
+		Type     string   `json:"type"`
+		Rotated  []string `json:"rotated"`
+		// Dependents is what was restarted, which is the answer to the question
+		// a caller would otherwise have to work out for themselves.
+		Dependents []string `json:"dependents"`
+		// Restarted is whether the resource itself came down. True only for a
+		// valkey, whose password is read at startup — and a valkey restart
+		// empties it, so this has to be said rather than discovered.
+		Restarted bool   `json:"restarted"`
+		Sentence  string `json:"sentence"`
+	}
+	path := fmt.Sprintf("/v1/projects/%s/resources/%s/rotate", project, name)
+	if err := callSlow("POST", path, body, &out); err != nil {
+		return err
+	}
+
+	if out.Sentence != "" {
+		fmt.Println(out.Sentence)
+	}
+	// Names, never values — the same rule `gg deps add` follows. This command
+	// exists because a credential changed, so printing one here would put the
+	// replacement in the scrollback of the terminal that replaced it.
+	if len(out.Rotated) > 0 {
+		sort.Strings(out.Rotated)
+		fmt.Printf("\n%s publishes %s\n", name, strings.Join(out.Rotated, ", "))
+		fmt.Printf("  Values: gg resource secrets %s/%s\n", project, name)
+	}
+	if out.Restarted {
+		fmt.Printf("\n%s was restarted to pick up its own new password, so anything it\nheld in memory is gone. That is what a restart of this type always does.\n", name)
+	}
+	if len(out.Dependents) == 0 {
+		fmt.Printf("\nNothing declares %s yet, so nothing needed restarting.\n", name)
+		fmt.Printf("  gg deps add %s/<service> %s\n", project, name)
+	}
+	return nil
+}
