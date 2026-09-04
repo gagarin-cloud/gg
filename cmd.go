@@ -542,11 +542,14 @@ func newResourceAddCmd() *cobra.Command {
 		Long: `Provision something gagarin runs for you, rather than something you built.
 
   postgres   PostgreSQL 17, on a volume. Survives restarts.
-  mongo      MongoDB 8, on a volume. Survives restarts.
-  redis      An in-memory store. --storage is refused, and a restart
-             loses everything in it: this is a cache, not a database.
-             (It runs Valkey, the BSD-licensed fork; every redis client
-             and every redis:// URL work unchanged.)
+  ferretdb   A MongoDB-compatible document database, on a volume.
+             Survives restarts. Your mongodb:// URL, driver and ODM work
+             unchanged; what runs is FerretDB, the Apache-licensed
+             implementation, storing into Postgres.
+  valkey     An in-memory store speaking the redis protocol — every
+             redis client and every redis:// URL work unchanged.
+             --storage is refused, and a restart loses everything in
+             it: this is a cache, not a database.
 
 You name it, say how big its storage may get, and pick a size. Every
 other decision is the platform's.
@@ -557,13 +560,13 @@ other decision is the platform's.
 
 One instance, one volume, no failover. Postgres is dumped nightly and
 kept fourteen days — ` + "`gg resource backups`" + ` lists them, and
-` + "`gg resource restore`" + ` puts one back into a NEW resource. Redis keeps
-nothing across a restart, by design. See ` + "`gg resource secrets`" + ` for
-how to connect, and the docs for what all this means before you put a
-client's data in one.`,
+` + "`gg resource restore`" + ` puts one back into a NEW resource. Valkey keeps
+nothing across a restart, by design; ferretdb has no backups yet. See
+` + "`gg resource secrets`" + ` for how to connect, and the docs for what all
+this means before you put a client's data in one.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
-			"  the types that exist are: postgres, mongo, redis"),
+			"  the types that exist are: postgres, ferretdb, valkey"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdResourceAdd(args[0], args[1], size, storage)
 		},
@@ -571,7 +574,7 @@ client's data in one.`,
 	// The only knob, and it is honoured rather than negotiated. Anything else
 	// about how a resource runs is the platform's decision.
 	cmd.Flags().IntVar(&storage, "storage", 0,
-		"how big its storage may get, in GB (default 10).\nCan be raised later by restating the resource with a\nbigger number; it can never be made smaller.\nRefused for redis, which keeps nothing across a restart")
+		"how big its storage may get, in GB (default 10).\nCan be raised later by restating the resource with a\nbigger number; it can never be made smaller.\nRefused for valkey, which keeps nothing across a restart")
 	// Unlike --storage, this one can be changed afterwards: a size is cheap and
 	// reversible where a volume is neither.
 	cmd.Flags().StringVar(&size, "size", "",

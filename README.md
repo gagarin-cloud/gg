@@ -46,7 +46,7 @@ gg status shop                 # what gagarin intends, and what the cluster is a
 gg logs shop/web
 
 gg resource add shop/db postgres    # a database; you choose the name and the size, nothing else
-gg resource add shop/cache redis    # postgres, mongo and redis — redis is in-memory and loses data on restart
+gg resource add shop/cache valkey   # postgres, ferretdb and valkey — valkey is in-memory and loses data on restart
 gg resource secrets shop/db         # its credentials, to pass to a deploy like any other env
 gg deps add shop/web db             # and let web reach it — without this the connection hangs
 
