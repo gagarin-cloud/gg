@@ -96,12 +96,16 @@ func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string)
 		}
 		sort.Strings(keys)
 		fmt.Printf("\nIt publishes %s\n", strings.Join(keys, ", "))
+		// The egress caveat is here as one clause rather than the paragraph the
+		// control plane's sentence already carries, and it is here at all on
+		// purpose: it is the claim that must not be lost, so gg says it itself
+		// instead of depending on the server's prose to. Short enough to read
+		// as a reminder rather than the same paragraph twice.
 		fmt.Printf(`
 Connect something to it:
   gg deps add %s/<service> %s
 
-That hands the service those variables. It does not restrict egress —
-anything in this project can already reach the internet.
+That hands the service those variables — not egress, which was already open.
 `, project, name)
 		return nil
 	}
