@@ -2,3 +2,8 @@ gg
 dist/
 .env
 .env.*
+
+# Worktrees and local agent scratch. .claude/worktrees holds checked-out
+# branches, which git sees as embedded repositories and would otherwise commit
+# as a bare gitlink pointing at a commit nobody else can fetch.
+.claude/
