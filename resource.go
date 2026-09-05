@@ -7,11 +7,16 @@ package main
 // is why `add` takes almost no flags: a knob here would be a decision the
 // platform should be making.
 //
-// Credentials are read, never injected. `gg deps add api db` means what
-// `--needs db` used to mean — this service may reach that one — and grants no
-// environment. To connect, ask for the credentials and pass them to a deploy
-// like any other variable, so a deploy stays the only thing that sets an
-// environment.
+// Declaring the dependency is what connects something to a resource.
+// `gg deps add api db` opens the route *and* puts db's connection variables in
+// api's environment — DB_URL and the parts, named after the resource rather than
+// the protocol. So connecting is one call, not a deploy carrying credentials
+// somebody read out of a second one.
+//
+// `gg resource secrets` still exists and still prints them, because reading a
+// password is a real thing to want: pasting it into a psql on a laptop, checking
+// what an application is being handed, pointing a service outside gagarin at it.
+// It is no longer a step in connecting one.
 
 import (
 	"encoding/json"
@@ -21,12 +26,37 @@ import (
 	"time"
 )
 
-func cmdResourceAdd(ref, typ, size string, storageGB int) error {
+// typeExternal is the one resource type gg has to know by name.
+//
+// Every other type is a string the control plane validates and gg passes
+// through — which is the whole reason `gg resource add` needs no case per type.
+// This one earns an exception because two things gg does locally depend on it:
+// --env is refused for anything else before a request is made, and the output
+// after a create says "it publishes X" rather than "gagarin is provisioning it",
+// which would be a wait for a pod that does not exist.
+const typeExternal = "external"
+
+func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string) error {
 	project, name, _, err := parseService(ref)
 	if err != nil {
 		return err
 	}
+	// An external is the one type the caller supplies values for, and the one
+	// the platform runs nothing for. Both halves of that show up below.
+	external := typ == typeExternal
+	if !external && len(env) > 0 {
+		return fmt.Errorf("only an external takes --env or --env-file: %s mints its own credentials\n  hint: gg resource secrets %s/%s reads them", typ, project, name)
+	}
+	if external && len(env) == 0 {
+		return fmt.Errorf("an external with no values publishes nothing\n  hint: gg resource add %s/%s external --env-file .env.%s", project, name, name)
+	}
 	body := map[string]any{"type": typ}
+	// Sent only when there is something to send, so a restatement that means to
+	// change nothing else does not clear the bundle: the control plane reads an
+	// absent env as "leave it as it is" and an explicit {} as "publish nothing".
+	if len(env) > 0 {
+		body["env"] = env
+	}
 	// Omitted rather than sent as zero, so the platform's default is the
 	// platform's — the same way a deploy omits volume-size.
 	if storageGB > 0 {
@@ -50,6 +80,35 @@ func cmdResourceAdd(ref, typ, size string, storageGB int) error {
 	if out.Sentence != "" {
 		fmt.Printf("%s\n", out.Sentence)
 	}
+	// An external is ready when this call returns — there is no pod to pull an
+	// image, so the "gagarin is provisioning it" line below would be a wait for
+	// nothing, and `gg status` has nothing to report becoming ready.
+	//
+	// The variable names are printed because they are the whole of what the
+	// resource does, and the caller has just typed the un-prefixed halves: they
+	// need to see what an application will actually read. Names only — the
+	// values are what they just supplied, and echoing a live key back into a
+	// terminal is how it reaches a scrollback.
+	if external {
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, envPrefix(name)+"_"+k)
+		}
+		sort.Strings(keys)
+		fmt.Printf("\nIt publishes %s\n", strings.Join(keys, ", "))
+		// The egress caveat is here as one clause rather than the paragraph the
+		// control plane's sentence already carries, and it is here at all on
+		// purpose: it is the claim that must not be lost, so gg says it itself
+		// instead of depending on the server's prose to. Short enough to read
+		// as a reminder rather than the same paragraph twice.
+		fmt.Printf(`
+Connect something to it:
+  gg deps add %s/<service> %s
+
+That hands the service those variables — not egress, which was already open.
+`, project, name)
+		return nil
+	}
 	// Not waited for. This used to block for up to three minutes, on the grounds
 	// that the first pull is a hundred megabytes and a dependent that connects
 	// too early gets an error reading like a bug in gagarin. That reasoning was
@@ -57,21 +116,37 @@ func cmdResourceAdd(ref, typ, size string, storageGB int) error {
 	// connecting, which `gg status` is for, and a command that blocks for three
 	// minutes is a command an agent will run twice.
 	fmt.Printf("\ngagarin is provisioning it. `gg status %s` says when it is ready.\n", project)
-	// The two things to do next, in order. Deliberately no connection string
-	// here: printing one would put a password in every terminal scrollback and
-	// agent transcript that ever created a database.
-	// The two halves, in order, and both are required. Without the credentials
-	// there is nothing to authenticate with; without the dependency the
-	// credentials are correct and the connection hangs.
+	// The one thing to do next. Deliberately no connection string here: printing
+	// one would put a password in every terminal scrollback and agent transcript
+	// that ever created a database — and it is not needed, because the
+	// declaration below is what hands the credentials over.
+	//
+	// This used to print two commands, a deploy carrying the credentials and a
+	// `gg deps add` opening the route, with a note that both were required and
+	// failed differently. One of them is now the whole of it.
 	fmt.Printf(`
-Connect something to it, in two steps:
-  gg deploy %s/api:8080 api --env-file <(gg resource secrets %s/%s)
+Connect something to it, in one step:
   gg deps add %s/api %s
 
-The first passes the credentials. The second opens the route — without it the
-connection is not refused, it hangs.
-`, project, project, name, project, name)
+That opens the route and hands api the connection variables — %s_URL and the
+parts. Or declare it on the deploy itself, so the service never starts without
+them:
+  gg deploy %s/api:8080 api --deps %s
+`, project, name, envPrefix(name), project, name)
 	return nil
+}
+
+// envPrefix is the prefix a resource's variables are published under: its own
+// name, upper-cased, with dashes as underscores. A postgres called `orders-db`
+// publishes ORDERS_DB_URL.
+//
+// Duplicated from the control plane rather than asked of it, and only ever to
+// print a hint. The rule is three lines and stable, and a round trip to render
+// one line of help would be a round trip that can fail. Nothing branches on
+// this: what a service actually holds is what `gg deps add` reported and what
+// `gg resource secrets` prints, both of which come from the platform.
+func envPrefix(name string) string {
+	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 }
 
 // cmdResourceSecrets prints what a caller needs to connect, and nothing else.
@@ -235,13 +310,25 @@ func cmdResourceRestore(ref, source, backupKey string, size string, storageGB in
 	}
 
 	fmt.Printf("restored %s into %s/%s\n", out.Restored, project, name)
+	// The old resource's name is only known when --source named it. Restoring an
+	// exact --backup key gives gg no reliable way to say which resource the key
+	// came from, and guessing by parsing the key would be a name printed into a
+	// recovery runbook that might not be the right one.
+	old := source
+	if old == "" {
+		old = "<old>"
+	}
 	fmt.Printf(`
 The data is back, under a new name. To finish the recovery:
-  gg deploy ... --env-file <(gg resource secrets %s/%s)   # point each dependent here
-  gg deps add %s/<dependent> %s
+  gg deps add %s/<dependent> %s     # each dependent, which also hands it %s_*
+  gg deps rm  %s/<dependent> %s     # and stop it reading the old one
 and once everything reads from %s, remove the old resource. That last step
 destroys data, so it is the one that asks for human approval.
-`, project, name, project, name, name)
+
+The variables are named after the resource, so they changed with the name: a
+dependent that read %s_URL now reads %s_URL. Anything holding the old spelling
+in its own config needs a deploy too.
+`, project, name, envPrefix(name), project, old, name, envPrefix(old), envPrefix(name))
 	return nil
 }
 
@@ -283,4 +370,60 @@ func sizeHuman(b int64) string {
 	default:
 		return fmt.Sprintf("%.2f GB", float64(b)/(1024*1024*1024))
 	}
+}
+
+// cmdResourceRotate replaces a resource's credentials and reports what moved.
+//
+// One verb for every type, because it is one idea. What differs is who supplies
+// the new value: for an external it is the caller, and for everything else the
+// platform mints one. gg refuses the wrong combination locally rather than
+// spending a round trip on it — and names the flag or its absence, because
+// "invalid request" would leave the caller guessing which half was wrong.
+func cmdResourceRotate(ref string, env map[string]string) error {
+	project, name, _, err := parseService(ref)
+	if err != nil {
+		return err
+	}
+	body := map[string]any{}
+	if len(env) > 0 {
+		body["env"] = env
+	}
+
+	var out struct {
+		Resource string   `json:"resource"`
+		Type     string   `json:"type"`
+		Rotated  []string `json:"rotated"`
+		// Dependents is what was restarted, which is the answer to the question
+		// a caller would otherwise have to work out for themselves.
+		Dependents []string `json:"dependents"`
+		// Restarted is whether the resource itself came down. True only for a
+		// valkey, whose password is read at startup — and a valkey restart
+		// empties it, so this has to be said rather than discovered.
+		Restarted bool   `json:"restarted"`
+		Sentence  string `json:"sentence"`
+	}
+	path := fmt.Sprintf("/v1/projects/%s/resources/%s/rotate", project, name)
+	if err := callSlow("POST", path, body, &out); err != nil {
+		return err
+	}
+
+	if out.Sentence != "" {
+		fmt.Println(out.Sentence)
+	}
+	// Names, never values — the same rule `gg deps add` follows. This command
+	// exists because a credential changed, so printing one here would put the
+	// replacement in the scrollback of the terminal that replaced it.
+	if len(out.Rotated) > 0 {
+		sort.Strings(out.Rotated)
+		fmt.Printf("\n%s publishes %s\n", name, strings.Join(out.Rotated, ", "))
+		fmt.Printf("  Values: gg resource secrets %s/%s\n", project, name)
+	}
+	if out.Restarted {
+		fmt.Printf("\n%s was restarted to pick up its own new password, so anything it\nheld in memory is gone. That is what a restart of this type always does.\n", name)
+	}
+	if len(out.Dependents) == 0 {
+		fmt.Printf("\nNothing declares %s yet, so nothing needed restarting.\n", name)
+		fmt.Printf("  gg deps add %s/<service> %s\n", project, name)
+	}
+	return nil
 }

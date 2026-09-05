@@ -235,6 +235,20 @@ type deployFlags struct {
 	// service already has, and a new service gets the default. Absent and
 	// "small" are different requests.
 	size string
+	// deps is edges to add to the dependency graph, and the one field here that
+	// is not part of the artifact.
+	//
+	// It adds and never removes. Absent means "change nothing", which is what
+	// makes it safe where the old --needs was not: that flag sent the whole set
+	// and so a redeploy that forgot it withdrew a path, silently, because an
+	// undeclared call hangs rather than failing. A union cannot be released by
+	// omission.
+	//
+	// It exists for one shape that was otherwise two calls with a broken window
+	// between them: deploying a service that needs a database before `gg deps`
+	// has run starts a pod that cannot reach it and does not hold its
+	// credentials. Withdrawing is still `gg deps rm`, wholesale, in one place.
+	deps []string
 }
 
 // What is deliberately not here any more: --project, --name, --port, --needs and
@@ -249,6 +263,11 @@ type deployFlags struct {
 // hangs. A capability you can lose by forgetting to mention it is the failure
 // nobody sees.
 //
+// --deps is not that flag coming back, and the difference is the whole reason
+// it was allowed: it unions onto the declared set instead of replacing it, so
+// forgetting it changes nothing. The failure that killed --needs is not
+// reachable from an add-only field.
+//
 // --public left last and for the sharpest version of the same reason. It handed
 // out an address on the internet, and an address is not part of the artifact — it
 // is a name people have, in a browser, a webhook, a colleague's bookmark. Carried
@@ -261,38 +280,40 @@ type deployFlags struct {
 // of the artifact: it is what this revision ran with, it is what a rollback
 // restores, and `gg history` would mean less without it.
 
-// deployFlagVars holds the pflag.FlagSet destinations that need post-processing
-// once parsing is done: env vars and env files both feed the same map, and
-// precedence must not depend on the order they appeared in.
-type deployFlagVars struct {
-	f        *deployFlags
+// envFlagVars holds the --env and --env-file destinations, which need
+// post-processing once parsing is done: both feed one map, and precedence must
+// not depend on the order the flags appeared in.
+//
+// Extracted from deployFlagVars when `gg resource add` grew --env for external
+// resources. One copy of the precedence rule rather than two — the rule is
+// "files in order, then flags over all of them", and two implementations of it
+// would be two things to keep agreeing about a case nobody tests twice.
+type envFlagVars struct {
 	env      []string
 	envFiles []string
 }
 
-// bindDeployFlags registers the flags that describe a deployed service, on both
-// `gg deploy` and `gg ship`, so the two cannot drift.
-func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
-	v := &deployFlagVars{f: &deployFlags{env: map[string]string{}}}
-	fs.StringArrayVar(&v.env, "env", nil, "set an env var K=V (repeatable)")
-	fs.StringArrayVar(&v.envFiles, "env-file", nil, "read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)")
-	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
-	fs.IntVar(&v.f.volumeSizeGB, "volume-size", 0, "how big the volume may get, in GB (default 10)")
-	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
-		"m (1 vCPU / 2 GB, dedicated) or l (2 vCPU / 4 GB,\n"+
-		"dedicated). Omit to keep the current size")
+// bindEnvFlags registers the pair on any command that takes an environment.
+// usage differs between them — a deploy's env is the service's own, a resource's
+// is what it publishes — so the text is the caller's to supply.
+func bindEnvFlags(fs *pflag.FlagSet, envUsage, fileUsage string) *envFlagVars {
+	v := &envFlagVars{}
+	fs.StringArrayVar(&v.env, "env", nil, envUsage)
+	fs.StringArrayVar(&v.envFiles, "env-file", nil, fileUsage)
 	return v
 }
 
-// finish applies env-file/-env precedence once flags have been parsed.
-func (v *deployFlagVars) finish() (*deployFlags, error) {
+// finish resolves the two into one map. Files first, in the order given, then
+// --env flags over the top of all of them.
+func (v *envFlagVars) finish() (map[string]string, error) {
+	out := map[string]string{}
 	for _, path := range v.envFiles {
 		vals, err := parseEnvFile(path)
 		if err != nil {
 			return nil, err
 		}
 		for k, val := range vals {
-			v.f.env[k] = val
+			out[k] = val
 		}
 	}
 	for _, kv := range v.env {
@@ -300,7 +321,61 @@ func (v *deployFlagVars) finish() (*deployFlags, error) {
 		if !ok {
 			return nil, fmt.Errorf("--env expects K=V, got %q", kv)
 		}
-		v.f.env[k] = val
+		out[k] = val
+	}
+	return out, nil
+}
+
+// deployFlagVars is the deploy-shaped flags plus that pair.
+type deployFlagVars struct {
+	f *deployFlags
+	*envFlagVars
+}
+
+// bindDeployFlags registers the flags that describe a deployed service, on both
+// `gg deploy` and `gg ship`, so the two cannot drift.
+func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
+	v := &deployFlagVars{
+		f: &deployFlags{env: map[string]string{}},
+		envFlagVars: bindEnvFlags(fs,
+			"set an env var K=V (repeatable)",
+			"read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)"),
+	}
+	fs.StringVar(&v.f.volumePath, "volume", "", "keep this directory across restarts, e.g.\n/var/lib/postgresql/data. Set once, at the first\ndeploy; a later deploy cannot move or resize it")
+	fs.IntVar(&v.f.volumeSizeGB, "volume-size", 0, "how big the volume may get, in GB (default 10)")
+	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
+		"m (1 vCPU / 2 GB, dedicated) or l (2 vCPU / 4 GB,\n"+
+		"dedicated). Omit to keep the current size")
+	// Additive, and the help says so because a reader who used --needs will
+	// assume it replaces. Declaring a dependency is also what hands this service
+	// that resource's connection variables, which is worth saying here: it is
+	// the reason to reach for this flag rather than deploy and connect after.
+	// The backquoted word is not decoration: pflag's UnquoteUsage renders the
+	// first one as the flag's value placeholder, so `NAME` is what makes this
+	// print as "--deps NAME". Prose in backticks would be printed there instead.
+	fs.StringArrayVar(&v.f.deps, "deps", nil, "also let this service reach `NAME`, and hold its\n"+
+		"connection variables if NAME is a resource (repeatable).\n"+
+		"Adds to what it already reaches and never removes;\n"+
+		"use \"gg deps rm\" to withdraw one")
+	return v
+}
+
+// finish resolves the environment and then the flags that only a deploy has.
+func (v *deployFlagVars) finish() (*deployFlags, error) {
+	env, err := v.envFlagVars.finish()
+	if err != nil {
+		return nil, err
+	}
+	v.f.env = env
+	// Dependency names are checked here rather than in deployImage, and the
+	// difference is paid for by `gg ship`: this runs before the command body, so
+	// a typo costs nothing, where a check inside deployImage would sit behind a
+	// build and a push. The common mistake is spelling one as a reference —
+	// `--deps shop/db` — and checkNames answers that in a line.
+	if len(v.f.deps) > 0 {
+		if err := checkNames(v.f.deps); err != nil {
+			return nil, err
+		}
 	}
 	return v.f, nil
 }
@@ -387,6 +462,13 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	if f.size != "" {
 		body["size"] = f.size
 	}
+	// Only when asked for, and for a sharper reason than the others: the server
+	// unions what arrives here, so an empty list would be a no-op — but sending
+	// one anyway would put a graph write in the audit trail of every deploy that
+	// never mentioned the graph.
+	if len(f.deps) > 0 {
+		body["deps"] = f.deps
+	}
 	var svc struct {
 		Name string `json:"name"`
 	}
@@ -412,6 +494,16 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	// about the running state is more honest than saying something unchecked, and
 	// it is one fewer place for the answer to disagree with `gg status`.
 	fmt.Printf("  %s\n", t.short())
+	// What --deps did, said once and no more than the response establishes. The
+	// edges are declared — the write returned 200 — but this endpoint answers
+	// with the service row and no `injected` list, unlike `PUT .../needs`. So
+	// the variables are pointed at rather than named: naming them from the
+	// request would be gg inventing an answer the platform did not give it.
+	if len(f.deps) > 0 {
+		fmt.Printf("  reaching %s as well, and holding the connection variables of\n"+
+			"  whichever of those are resources — `gg deps ls %s/%s` lists the edges\n",
+			strings.Join(f.deps, " and "), project, service)
+	}
 	// Deliberately silent about where the service can be reached.
 	//
 	// A deploy no longer decides that — it cannot add an address and it cannot

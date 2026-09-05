@@ -116,6 +116,51 @@ just stored — there is no second account and nothing to type. If that step is
 skipped because `docker` was not installed yet, run `gg registry login` once the
 machine has it.
 
+### Giving CI a credential
+
+**Do not run `gg signup` in CI, and do not copy this machine's credential into
+it.** A pipeline gets its own, minted from the one you already hold:
+
+```
+gg credentials create --name "github actions: acme/web"
+```
+
+The secret is printed on stdout, alone on its line, and everything else goes to
+stderr — so it pipes:
+
+```
+gh secret set GAGARIN_TOKEN --body "$(gg credentials create --name "github actions: acme/web" 2>/dev/null)"
+```
+
+CI reads `GAGARIN_TOKEN` from the environment and needs nothing else: no
+`gg auth`, no credentials file, no home directory. In a workflow:
+
+```yaml
+env:
+  GAGARIN_TOKEN: ${{ secrets.GAGARIN_TOKEN }}
+```
+
+**It is shown once.** gagarin keeps a hash, not the secret. If it is lost, revoke
+it and mint another — there is no command that reads one back.
+
+**It is deliberately weaker than yours.** It can deploy. It cannot destroy, so a
+pipeline holding it cannot delete a project, a service or a database; no flag
+turns that on. It expires (90 days by default, 365 maximum, and there is no
+never). And it cannot mint another, so a leaked one cannot issue its own
+replacements while you are revoking it.
+
+Name it after where it will live. `gg credentials` is a list somebody reads
+months later deciding what is still wanted, and "token" tells them nothing.
+
+```
+gg credentials              what has access, and which are minted
+gg credentials revoke 7     take one away, immediately, no approval needed
+```
+
+If you are ever tempted to set `XDG_CONFIG_HOME` to a scratch directory and run
+the signup flow again to get a second credential: that used to be the only way
+and it is not any more. Use `gg credentials create`.
+
 ## Deploying a project
 
 1. **Confirm there is a Dockerfile** for each service you intend to deploy.
@@ -153,6 +198,12 @@ machine has it.
    the failure is a hang rather than an error. See "Connecting services" below.
    Order does not matter here the way it used to: both services have to exist
    before you can declare an edge between them, so ship first and connect after.
+
+   If what it reaches is a **resource**, this one call also hands `web` that
+   resource's credentials, so there is nothing else to do — no reading a password
+   and passing it to a deploy. `gg deploy --deps` and `gg ship --deps` declare it
+   in the same call as the deploy, which is what you want for a service that
+   cannot start without a database.
 
 5. **Verify, and only then give the user the URL:**
    ```
@@ -224,6 +275,12 @@ gg ship   <project>/web:8080 --env-file .env
 
 - `--env-file` is **not** picked up automatically. If the user has a `.env` and
   wants it used, pass the flag; never assume a file should be read.
+- **What the container holds is this plus the connection variables of every
+  resource it reaches.** Those are not set here and do not belong in a `.env` —
+  the platform adds them from the dependency graph every time it starts the pod.
+  A resource's variable wins over one of the same name set here, which is the
+  only exception to the rule that a deploy decides a service's environment. See
+  "Resources".
 - `--env` flags override any file. Later `--env-file` flags override earlier ones.
 - There is **no interpolation**: `B=${A}` sets `B` to the literal text `${A}`.
 - Env is part of a service's desired state and is **replaced** on each deploy, not
@@ -293,6 +350,10 @@ gg deps add <project>/api db
 declaration the address still resolves and the connection is simply never
 answered.
 
+**If the thing being reached is a resource, this also hands over its
+credentials** — see "Resources" below. For an ordinary service it grants the
+route and nothing else, because a service has no credentials to publish.
+
 **This is the part that will waste your time if you skip it.** A call nobody
 declared is not refused — it is dropped. So it does not fail fast with
 "connection refused"; it **hangs until the client's timeout**, which for a
@@ -315,13 +376,21 @@ that is your hang, and the fix is one command:
 gg deps add <project>/web the-missing-one
 ```
 
-The three verbs, and they are the only things that change the graph:
+The three verbs:
 
 ```
 gg deps ls  <project>/api            what it reaches today
 gg deps add <project>/api db cache   and these as well
 gg deps rm  <project>/api cache      and no longer that one
 ```
+
+`add` and `rm` are the only things that can *withdraw* an edge or declare one
+wholesale. A deploy can add to the set — `gg deploy … --deps db`, and the same
+flag on `gg ship` — which exists so that a service needing a database can be
+declared and deployed in one call rather than starting into a window where it
+cannot reach one. It only ever adds: a deploy that omits `--deps` leaves the
+graph exactly as it was, which is what makes it safe where the old `--needs`
+was not.
 
 Two things about this are worth knowing:
 
@@ -341,13 +410,14 @@ Two things about this are worth knowing:
   Do not read a still-working request as a failed withdrawal without checking
   `gg status` first, which reports what the platform is actually enforcing.
 
-**A deploy never touches any of this.** That is new, and it matters: this used to
-be a `--needs` flag on `gg deploy`, replaced wholesale on every deploy, so a
-redeploy that failed to restate a dependency silently withdrew it — and because
-an undeclared call hangs rather than failing, the service did not break, it went
+**A deploy can never take any of this away.** That matters: this used to be a
+`--needs` flag on `gg deploy`, replaced wholesale on every deploy, so a redeploy
+that failed to restate a dependency silently withdrew it — and because an
+undeclared call hangs rather than failing, the service did not break, it went
 quiet. If you are working from memory or from an older skill and reach for
-`--needs`, it is gone; `gg deps` is where it went. Deploy as often as you like;
-the graph stays where you put it.
+`--needs`, it is gone. `--deps` is not it coming back: it adds and never
+replaces, so forgetting it costs nothing. Deploy as often as you like; the graph
+stays where you put it.
 
 To take a service away entirely, `gg destroy <project>/<name>`. It is refused
 while anything still needs it, and names what does — `gg deps rm` that first.
@@ -442,13 +512,22 @@ Dockerfile — a resource is provisioned rather than deployed, and the only thin
 you may set is how big its storage can be (`--storage 20`, default 10GB, and it
 can be grown later, never shrunk).
 
-**The three types, and the one difference that matters:**
+There is a fourth type, `external`, which is not a database and not something
+gagarin runs at all — it is how a third-party API key becomes a node on the
+graph. See "Third-party APIs" below.
+
+**The types, and the differences that matter:**
 
 | type | what it is | storage |
 |---|---|---|
 | `postgres` | PostgreSQL 17 | on a volume; survives restarts |
 | `ferretdb` | MongoDB-compatible document DB | on a volume; survives restarts |
 | `valkey` | in-memory store, redis protocol | **none — a restart loses everything** |
+| `external` | a third-party API, run by nobody here | **none — it runs nothing at all** |
+
+The first three are things gagarin runs for you. `external` is the odd one and
+is covered in "Third-party APIs" below: no container, no port, no size, no
+backups — it holds credentials and publishes them, and that is all it does.
 
 The types are named for what actually runs, not for the products they stand in
 for — an honesty you can pass on when somebody asks.
@@ -471,6 +550,98 @@ not tell anyone their data is safe in it. **Valkey** is the BSD-licensed fork
 of Redis (whose licence also forbids hosting it), and this changes nothing you
 can observe: `redis://` URLs, `redis-cli`, and every client library work
 unchanged.
+
+### Third-party APIs: the `external` type
+
+An OpenAI account, a Stripe key, a bucket somewhere else. Not something gagarin
+runs — something your services need a credential for. Make it a resource anyway:
+
+```
+gg resource add <project>/openai external --env-file .env.openai
+gg deps add <project>/bot openai
+```
+
+An `.env.openai` holding `API_KEY` and `BASE_URL` makes `bot` hold
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`. Same naming rule as every other type:
+the resource's name, then the key. **Write the keys without the prefix** —
+`API_KEY`, not `OPENAI_API_KEY`, which is refused rather than doubled.
+
+**Why bother, instead of `--env OPENAI_API_KEY=…` on the deploy?** Because a key
+on a deploy is a copy. Three services using one key means three copies, rotating
+it means three deploys, and a deploy you forget leaves a service authenticating
+with a revoked key. As a resource it is one row, and rotating it is one command:
+
+```
+gg resource rotate <project>/openai --env-file .env.openai.new
+```
+
+Every service holding the old value is restarted with the new one. Nothing else
+to do — no deploys, and no working out which services were affected, because the
+command tells you which ones it rolled.
+
+Note it is `rotate`, not `add`. Restating an external with `gg resource add` is
+**refused** once it exists, and that refusal is deliberate: restating it from an
+old `.env` file would have rolled the key *backwards*, and the failure would have
+been an authentication error nobody would connect to the command they ran.
+
+**It runs nothing.** No container, no port, no size, no storage, no backups,
+nothing to become ready. `gg status` shows it with a `◆` rather than a state dot,
+and a line under it saying what it publishes.
+
+**Use `--env-file`, not `--env`.** A key passed on the command line is in the
+shell history and in the transcript of every agent session that ran it. If the
+user hands you a key in chat, write it to a file first, use the file, and tell
+them the file has a live credential in it.
+
+**Declaring an external does NOT restrict egress.** This is the one thing not to
+get wrong when you explain it. Everything in a project can already reach the
+whole internet; the mail ports are the only exception, and that is it. What the
+declaration gives you is the credentials and a line on the graph saying which
+services use them. It is **not** a firewall, and an undeclared service can still
+call `api.openai.com` — it just has no key. `gg status` marks these edges with a
+`◆` for exactly this reason: `openai◆, pg` in a REACHES column means one enforced
+edge and one that is an inventory note.
+
+**What it is genuinely worth:** the project's dependencies are legible. `gg
+status` answers "what does this thing actually depend on, including things we do
+not run" — and destroying an external is refused while anything still declares
+it, so a key cannot be dropped out from under a running service.
+
+### Rotating credentials
+
+Every resource type rotates with one command, and everything holding the old
+credential is restarted with the new one:
+
+```
+gg resource rotate <project>/db                                a database
+gg resource rotate <project>/openai --env-file .env.new         an external
+```
+
+**Who supplies the new value is the only difference.** For `postgres`,
+`ferretdb` and `valkey` gagarin mints one and `--env` is **refused** — a password
+you chose is one the running server has never heard of. For an `external` the
+values are yours, so `--env` or `--env-file` is **required**.
+
+**The costs are not the same, and a user will want to know before you run it:**
+
+| type | what happens | downtime |
+|---|---|---|
+| `postgres` | the running server is told immediately | none |
+| `ferretdb` | the same, in the Postgres it stores into | none |
+| `valkey` | the pod is replaced, because the password is read at startup | **the cache is emptied** |
+| `external` | nothing of ours runs, so nothing of ours restarts | none |
+
+In every case the *dependents* restart, because their environment changed. That
+is the point of the command.
+
+**If it fails, nothing changed.** The old credential is still in use and the
+command is safe to run again. Say that to the user rather than leaving them
+wondering what state a half-failed rotation left behind — there is no half.
+
+**Rotate after a leak, and say so plainly.** If a key has been in a chat log, a
+commit, or a screenshot, rotating is the fix and it takes one command. For an
+external, note that gagarin forgets the old value but cannot *revoke* it — that
+is a thing to do in the third party's own console, and the user has to do it.
 
 ### Anything we do not have a type for
 
@@ -495,27 +666,102 @@ tuning and consequences are yours.
 So: **if a type exists, use the resource** — fewer decisions, fewer ways to get
 it wrong. If it does not, this is not a workaround, it is the normal path.
 
-**Connecting to it is two steps, and the second one is an ordinary deploy.**
+**Connecting to it is one command, and it is the same one that opens the route.**
 
 ```
-gg resource secrets <project>/db                        # KEY=VALUE lines
-gg deploy <project>/api:8080 api:v3 --env-file <(gg resource secrets <project>/db)
 gg deps add <project>/api db
 ```
 
-`gg resource secrets` prints whichever set fits the type — `DATABASE_URL` and
-the `PG*` variables for postgres, `MONGODB_URI`/`MONGO_URL` and the `MONGO_*`
-variables for ferretdb, `REDIS_URL` and the `REDIS_*` variables for valkey.
-The variable names follow the *protocol* each type speaks rather than its own
-name, because that is what applications and client libraries read. Nothing
-is injected anywhere: `gg deps add` opens the network path and grants no
-environment, so the credentials are passed exactly the way every other variable
-is. That is deliberate — a value that appeared from somewhere other than the
-deploy would mean a deploy no longer describes what it runs.
+That declares the dependency *and* puts the database's connection variables in
+`api`'s environment. `api` can now reach `db` and authenticate with it, and the
+command prints which variables arrived:
 
-Both halves are required and they do different things. Without the dependency,
-the credentials are correct and the connection hangs. Without the credentials,
-the path is open and there is nothing to authenticate with.
+```
+api reaches db, and nothing else.
+
+api now holds DB_DATABASE, DB_HOST, DB_PASSWORD, DB_PORT, DB_URL, DB_USER
+  in its environment, from the resources it reaches. Values: gg resource secrets.
+```
+
+Or declare it on the deploy, so the service never starts without them:
+
+```
+gg deploy <project>/api:8080 api:v3 --deps db
+```
+
+**The variables are named after the resource, not the protocol.** The rule is the
+resource's own name, upper-cased with dashes as underscores, plus one of six
+suffixes:
+
+| suffix | postgres | valkey | ferretdb |
+|---|---|---|---|
+| `<NAME>_URL` | `postgres://…?sslmode=disable` | `redis://:pass@…` | `mongodb://…` |
+| `<NAME>_HOST` | ✅ | ✅ | ✅ |
+| `<NAME>_PORT` | 5432 | 6379 | 27017 |
+| `<NAME>_USER` | ✅ | — | ✅ |
+| `<NAME>_PASSWORD` | ✅ | ✅ | ✅ |
+| `<NAME>_DATABASE` | ✅ | — | ✅ |
+
+So a postgres called `db` publishes `DB_URL`; one called `orders-db` publishes
+`ORDERS_DB_URL`; a valkey called `cache` publishes `CACHE_URL`, and no
+`CACHE_USER`, because valkey has no users. A type omits the suffixes it has no
+answer for rather than publishing them empty.
+
+Two things follow, and both are the point. A service can reach two databases
+without their variables colliding — which the old protocol-named scheme could
+not express. And there are six suffixes to learn instead of a different set per
+type.
+
+**These names are not the ones your framework expects, and that is deliberate.**
+There is no `DATABASE_URL`, no `PGHOST`, no `REDIS_URL`, no `MONGODB_URI`. The
+first thing to try is to have the application read `DB_URL` — one line in the
+app, and nothing about it can go stale.
+
+If you genuinely cannot change the application, read the value and pass it under
+the name it wants:
+
+```
+gg deploy <project>/api:8080 api:v3 --deps db \
+  --env DATABASE_URL="$(gg resource secrets <project>/db --format json | jq -r .env.DB_URL)"
+```
+
+Note what that is: **a copy**, and the only stale thing in the model. `$DB_URL`
+on its own would not work here — the injected variables exist inside the pod, not
+in the shell running `gg`, which is why the value has to be read out explicitly.
+Say so to the user rather than leaving a second copy of a password in a deploy
+nobody remembers making.
+
+**Injected variables outrank your own.** If you set `DB_URL` yourself on a deploy
+and the service also reaches a resource called `db`, the resource's value wins.
+It is the only place in gagarin where something beats what a deploy said, and the
+reason is that only the resource knows the real password — a shadowed `DB_URL`
+would fail as a connection error pointing nowhere near its cause.
+
+**Nothing is copied into the service's stored environment.** The platform unions
+these in every time it renders the pod, from the graph as it stands then. So they
+cannot go stale, no redeploy can forget them, and a rollback restores the image
+and the environment you deployed with — never an old password. `gg deps rm` takes
+them away again just as surely.
+
+**Reaching still implies declaring.** Holding the credentials is not enough: an
+undeclared service with a correct password still cannot reach the port, because
+the network policy is the boundary and it is a separate thing from the
+environment. You cannot get the credentials without the declaration that opens
+the route, so this is no longer a trap — but do not conclude from a working
+password that the route is open for some *other* service you did not declare.
+
+**`gg resource secrets` prints the values**, and you do not need it to connect a
+service in the same project — that is `gg deps add`. Reach for it when something
+else needs them: a `psql` on the user's laptop, a client running outside gagarin,
+or checking what an application is actually being handed.
+
+```
+gg resource secrets <project>/db                 # KEY=VALUE lines
+gg resource secrets <project>/db --format json   # for jq
+```
+
+It prints the same variables the platform injects. Treat the output as a live
+credential: do not echo it into a chat, a commit, or a summary for the user.
 
 Things worth knowing before you promise a user anything:
 
@@ -535,11 +781,18 @@ Things worth knowing before you promise a user anything:
 
   ```
   gg resource restore <project>/db2 --source db     # new resource, filled from db's newest dump
-  gg resource secrets <project>/db2                 # its NEW credentials (new password)
-  gg deploy <project>/api:8080 api --env-file <(gg resource secrets <project>/db2)
-  gg deps add <project>/api db2
+  gg deps add <project>/api db2                     # hands api DB2_URL and the rest
+  gg deps rm  <project>/api db                      # and stop it reading the old one
   gg destroy <project>/db                           # once everything reads from db2
   ```
+
+  **The variables change with the name.** The restored resource is called `db2`,
+  so it publishes `DB2_URL`, not `DB_URL`. An application reading `DB_URL` from
+  its environment will not find one after the `gg deps rm`, so either name the
+  new resource what the old one was called (only possible once the old one is
+  destroyed) or expect to touch the application. This is the one place the
+  per-resource naming costs something, and it is worth knowing before three in
+  the morning.
 
   The old resource may already be destroyed when you restore — its backups
   outlive it by fourteen days, and `--source db` still finds them. Only the
@@ -561,7 +814,10 @@ Things worth knowing before you promise a user anything:
   no `admin` database to authenticate against — FerretDB checks the credentials
   itself and takes them whatever database the driver names. If you are porting
   config that hard-codes `authSource=admin` for a previous MongoDB, drop it and
-  pass the URL as given.
+  pass `<NAME>_URL` as given. It publishes one URL, not the two spellings the
+  MongoDB ecosystem never chose between — under a per-resource prefix neither
+  `MONGODB_URI` nor `MONGO_URL` would have matched what a library looks for
+  anyway.
 - A resource cannot be deployed over, and cannot be rolled back — it has no
   deploy history. `gg deploy <project>/db` against a resource is refused with
   `not_a_service`, which is telling you the name is already a database. Nor can
@@ -728,6 +984,9 @@ Act on the `code`, not the prose.
 | code | what it means | what to do |
 |---|---|---|
 | `unauthorized` | this machine has no usable credential | run `gg whoami`, then the "Getting access" steps — never ask the user for a token |
+| `cannot_delegate` | a minted credential tried to mint another | mint it from the machine a human approved; `gg whoami` names the one you are holding |
+| `name_required` | `gg credentials create` with no `--name` | name it after where it will live — it is what you read in the list months later |
+| `invalid_expiry` | `--expires` outside 1–365 days | there is no never; leave it out for 90 |
 | `approval_required` | a human must approve a deletion | tell the user, pass on the code, wait, retry the same command |
 | `project_not_found` | no such project, **or** you have no access to it | `gg projects` lists what you can reach; `gg init <project>` creates one; if it is somebody else's, ask them to `gg share` it with you |
 | `insufficient_role` | you can see the project but only as a viewer | ask the owner or an editor for edit access; do not retry |
@@ -742,7 +1001,13 @@ Act on the `code`, not the prose.
 | `invalid_digest` | the digest is not a sha256 one | pass what `docker push` reported, or leave it out |
 | `invalid_port` | port out of range | set the port the container actually listens on |
 | `invalid_needs` | a dependency list gg would not send: a blank name, or a service naming itself | correct the names; a service reaches itself without being told to |
-| `no_such_service` | a name in `gg deps add` is not a service in this project | `gg status <project>` lists them; ship it first |
+| `invalid_deps` | the same, on the `--deps` of a deploy or a ship | correct the names; `gg deps ls` shows what is already declared |
+| `already_exists` | `gg resource add` with `--env` on an external that is already there | `gg resource rotate` is how values change — this refusal stops an old file rolling a key backwards |
+| `env_required` | `gg resource rotate` on an external with no values | an external's values are the user's; pass `--env-file` |
+| `no_env` | `--env` on a type that mints its own credentials | drop it; `gg resource secrets` reads what gagarin minted |
+| `rotate_failed` | the running server could not be told its new password | **nothing changed** — the old credential still works and it is safe to retry; check `gg status` for a resource that is not running |
+| `cannot_rotate` | the resource has no credentials recorded to replace | `gg resource secrets` shows what it holds; this is a bug worth reporting |
+| `no_such_service` | a name in `gg deps add` or in `--deps` is not a service or resource in this project | `gg status <project>` lists them; create it first |
 | `apply_failed` | desired state saved, cluster update failed | retry the same command; it is idempotent |
 | `cluster_error` | gagarin could not reach infrastructure | not your fault; report it to the user |
 | `logs_unavailable` | no running pod yet | check `gg status <project>` first |

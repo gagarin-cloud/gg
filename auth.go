@@ -161,6 +161,22 @@ func cmdWhoami() error {
 // clientName is what the approval email will call this machine. Named honestly:
 // the human is about to make a security decision from this string, so it should
 // say what is really asking, and where.
+//
+// Every part of it is a hint the client supplies about itself, and none of it is
+// verified by anything — which is exactly why it always ends in a hostname the
+// reader can recognise. "Claude Code on viktor-mbp" is useful because of the
+// second half; the first half is only a convenience.
+//
+// GITHUB_ACTIONS used to be in this list and returned the bare string "GitHub
+// Actions", with no host at all. It is gone, for two reasons that point the same
+// way. It was the one entry that produced a *credible institutional* name rather
+// than a description of a machine, so anything that could get a human to approve
+// a request while GITHUB_ACTIONS was set in the environment could have that
+// approval read as a CI system rather than as whatever was really asking. And it
+// was never needed: CI does not sign up. A pipeline gets its credential from
+// `gg credentials create`, run by a human on a machine that is already
+// authorised, which is a name the caller states outright rather than one gg
+// guesses from the environment.
 func clientName() string {
 	host, err := os.Hostname()
 	if err != nil || host == "" {
@@ -168,7 +184,7 @@ func clientName() string {
 	}
 	// Agent harnesses advertise themselves in the environment. Using that means
 	// the email says "Claude Code on viktor-mbp" rather than "gg".
-	for _, key := range []string{"CLAUDECODE", "CLAUDE_CODE", "CURSOR_AGENT", "AIDER", "GITHUB_ACTIONS"} {
+	for _, key := range []string{"CLAUDECODE", "CLAUDE_CODE", "CURSOR_AGENT", "AIDER"} {
 		if os.Getenv(key) == "" {
 			continue
 		}
@@ -179,8 +195,6 @@ func clientName() string {
 			return "Cursor on " + host
 		case "AIDER":
 			return "Aider on " + host
-		case "GITHUB_ACTIONS":
-			return "GitHub Actions"
 		}
 	}
 	return "gg on " + host

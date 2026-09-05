@@ -83,6 +83,7 @@ Environment (overrides the file; meant for CI):
 		newPushCmd(),
 		newDeployCmd(),
 		newShipCmd(),
+		newCredentialsCmd(),
 		newStatusCmd(),
 		newLogsCmd(),
 		newDepsCmd(),
@@ -201,7 +202,7 @@ architecture succeeds here and fails much later at pull time.`,
 		},
 	}
 	bindBuildFlags(cmd, &f)
-	cmd.Flags().BoolVar(&f.push, "push", false, "upload it afterwards, as `gg push` would")
+	cmd.Flags().BoolVar(&f.push, "push", false, "upload it afterwards, as \"gg push\" would")
 	return cmd
 }
 
@@ -243,15 +244,31 @@ you say out loud, because the two mistakes do not cost the same: a service
 that should have been public fails the first time somebody opens it, and a
 service that should have been private does not fail at all.
 
-A deploy changes the image and the environment, and nothing else. It
-cannot give a service an address or take one away, move a volume, or
-change what this service is allowed to reach: those are declared by
-"gg domain", by the first deploy, and by "gg deps", and none of them can
-be released by a deploy that forgets to mention them.
+A deploy changes the image and the environment. It cannot give a service
+an address or take one away, move a volume, or withdraw anything this
+service is allowed to reach: those are declared by "gg domain", by the
+first deploy, and by "gg deps", and none of them can be released by a
+deploy that forgets to mention them.
+
+  gg deploy shop/api:8080 api:v3 --deps db
+
+--deps is the one thing here that touches the graph, and it only ever
+adds. It is for the service that needs a database on its very first
+deploy: declaring it in the same call means the pod never starts into a
+window where it cannot reach the database and does not hold its
+password. Forgetting it on the next deploy changes nothing, which is why
+it is safe where the old --needs flag was not.
 
 Environment is replaced wholesale, because it is part of what this
 revision ran with and is what a rollback puts back. Pass every variable
-the service needs, every time.`,
+the service needs, every time.
+
+What the service holds is that environment plus the connection variables
+of any resource it reaches. Those are not passed here and are not stored
+against the revision — the platform derives them from the graph every
+time it starts the pod, so they cannot go stale and a redeploy cannot
+forget them. A rollback restores the image and the environment you
+deployed with, never an old password.`,
 		Args: usageArgs(2, 2, "usage: gg deploy PROJECT/SERVICE[:PORT] IMAGE[:TAG]\n"+
 			"  e.g. gg deploy shop/web:8080 api:v3\n"+
 			"  build one first with gg build, or gg ship to do both"),
@@ -285,9 +302,14 @@ The image is named after the service and tagged from the clock, since
 somebody shipping does not have a name in mind for this particular build.
 It is printed, so it can be deployed again later.
 
-As with "gg deploy", this changes the image and the environment and
-nothing else. A new service is private until "gg domain add" gives it an
-address, and one that already has an address keeps it.`,
+As with "gg deploy", this changes the image and the environment — and
+takes the same --deps, which adds to what the service may reach and
+hands it the connection variables of any resource among them:
+
+  gg ship shop/api:8080 --deps db
+
+A new service is private until "gg domain add" gives it an address, and
+one that already has an address keeps it.`,
 		Args: usageArgs(1, 1, "usage: gg ship PROJECT/SERVICE[:PORT]\n"+
 			"  e.g. gg ship shop/web:8080 --context ./web"),
 	}
@@ -329,6 +351,112 @@ func newLogsCmd() *cobra.Command {
 	}
 }
 
+// --- credentials -----------------------------------------------------------
+
+// newCredentialsCmd is what has access to this account, and how CI gets some.
+//
+// It exists because the endpoints did and nothing called them: setting up a
+// pipeline meant reading gg's source, and what that turned up was the
+// human-approval flow run with a scratch XDG_CONFIG_HOME and a faked
+// GITHUB_ACTIONS to get a recognisable label. That works and it is nobody's
+// fault but ours — there was no other way.
+func newCredentialsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "credentials",
+		Aliases: []string{"credential", "creds"},
+		Short:   "what has access to this account, and how to give CI some",
+		Long: `Every credential on this account: the machines a human approved, and
+the ones minted for automation.
+
+  gg credentials                                    what has access
+  gg credentials create --name "github actions"     mint one for CI
+  gg credentials revoke 7                           take one away
+
+A credential minted here is deliberately weaker than the one that made
+it. It can deploy. It cannot destroy — a pipeline holding it cannot
+delete a project, a service or a database, and no flag turns that on. It
+expires. And it cannot mint another, so a leaked one cannot issue its
+own replacements while you are busy revoking it.
+
+The secret is shown once and gagarin keeps only a hash. Lose it and you
+revoke it and mint another; there is no command that reads one back.`,
+	}
+	cmd.AddCommand(newCredentialsListCmd(), newCredentialsCreateCmd(), newCredentialsRevokeCmd())
+	// Bare `gg credentials` lists, because that is what somebody typing the
+	// noun on its own wants — and a bare noun that prints help is a command
+	// that makes you type it twice.
+	cmd.RunE = func(cmd *cobra.Command, args []string) error { return cmdCredentialsList() }
+	cmd.Args = usageArgs(0, 0, "usage: gg credentials\n  gg credentials create --name NAME to mint one")
+	return cmd
+}
+
+func newCredentialsListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "ls",
+		Aliases: []string{"list"},
+		Short:   "what has access to this account",
+		Args:    usageArgs(0, 0, "usage: gg credentials ls"),
+		RunE:    func(cmd *cobra.Command, args []string) error { return cmdCredentialsList() },
+	}
+}
+
+func newCredentialsCreateCmd() *cobra.Command {
+	var name string
+	var days int
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "mint a credential for CI, printed once",
+		Long: `Mint a credential from the one this machine already holds. No email, no
+approval, nothing written to disk.
+
+  gg credentials create --name "github actions: acme/web"
+
+The secret is printed on stdout, alone on its line, and everything else
+goes to stderr — so piping it somewhere is a sane thing to do:
+
+  gh secret set GAGARIN_TOKEN --body "$(gg credentials create --name ci 2>/dev/null)"
+
+CI reads it from GAGARIN_TOKEN. Nothing else is needed: no gg auth, no
+credentials file, no home directory.
+
+What it can do is fixed and narrower than what you hold. Deploy, yes.
+Destroy, never — and that is not a flag, because a long-lived token that
+could delete a database is the one thing you least want in a repository.
+It expires, defaulting to 90 days, and it cannot mint another.
+
+Name it after where it will live. It is what you read in
+` + "`gg credentials`" + ` months later when deciding whether it is still wanted,
+and "token" tells you nothing then.`,
+		Args: usageArgs(0, 0, "usage: gg credentials create --name NAME\n"+
+			`  e.g. gg credentials create --name "github actions: acme/web"`),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdCredentialsCreate(name, days)
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "",
+		"what this credential is for, e.g. \"github actions: acme/web\".\nRequired: it is what you read in the list later")
+	cmd.Flags().IntVar(&days, "expires", 0,
+		"days until it expires (default 90, maximum 365).\nThere is no never")
+	return cmd
+}
+
+func newCredentialsRevokeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "revoke ID",
+		Aliases: []string{"rm"},
+		Short:   "take a credential away",
+		Long: `Revoke a credential by its id, which ` + "`gg credentials`" + ` prints.
+
+Takes effect immediately and needs no approval: taking access away is
+always safe, and requiring a human to authorise it would mean a machine
+you no longer trust could not be locked out promptly.`,
+		Args: usageArgs(1, 1, "usage: gg credentials revoke ID\n  gg credentials lists the ids"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdCredentialsRevoke(args[0])
+		},
+	}
+}
+
 // --- the dependency graph --------------------------------------------------
 
 // newDepsCmd is its own verb rather than a flag on deploy, for the reason
@@ -352,12 +480,18 @@ not fail fast, it hangs until the client gives up.
 The direction matters. The declaration goes on the caller: if api queries
 db, it is api that needs db, never the other way round.
 
-This opens a route and grants nothing else. Credentials are passed as
-environment on the deploy — see "gg resource secrets". Both halves are
-required, and they fail differently: without the credentials you get an
-authentication error, without the route you get a hang.
+When the thing reached is a resource, this also hands the caller that
+resource's connection variables — "gg deps add shop/api db" gives api
+DB_URL, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_DATABASE, and the
+command prints which ones arrived. They are named after the resource
+rather than the protocol, so a service can reach two databases without
+their variables colliding. "gg resource secrets" prints the values.
 
-A deploy never changes any of this.`,
+So connecting is this one call. It used to be two — read the credentials,
+pass them to a deploy — and that is no longer necessary.
+
+A deploy cannot withdraw any of this, and "gg deploy --deps" can only add
+to it. Withdrawing is "gg deps rm", here, and nowhere else.`,
 	}
 	cmd.AddCommand(newDepsListCmd(), newDepsAddCmd(), newDepsRemoveCmd())
 	return cmd
@@ -378,7 +512,7 @@ func newDepsListCmd() *cobra.Command {
 func newDepsAddCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "add PROJECT/SERVICE NAME...",
-		Short: "let it reach these as well",
+		Short: "let it reach these as well, and hold their credentials",
 		Args: atLeastArgs(2, "usage: gg deps add PROJECT/SERVICE NAME...\n"+
 			"  e.g. gg deps add shop/api db cache\n"+
 			"  the names are services in the same project; there is no reaching across one"),
@@ -392,7 +526,7 @@ func newDepsRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "rm PROJECT/SERVICE NAME...",
 		Aliases: []string{"remove"},
-		Short:   "stop it reaching these",
+		Short:   "stop it reaching these, and take their credentials away",
 		Args: atLeastArgs(2, "usage: gg deps rm PROJECT/SERVICE NAME...\n"+
 			"  e.g. gg deps rm shop/api cache"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -529,13 +663,14 @@ func newResourceCmd() *cobra.Command {
 		Use:   "resource",
 		Short: "databases and the like: what a project has, rather than what it runs",
 	}
-	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd(),
+	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd(), newResourceRotateCmd(),
 		newResourceBackupsCmd(), newResourceBackupCmd(), newResourceRestoreCmd())
 	return cmd
 }
 
 func newResourceAddCmd() *cobra.Command {
 	var storage, size = 0, ""
+	var v *envFlagVars
 	cmd := &cobra.Command{
 		Use:   "add PROJECT/NAME TYPE",
 		Short: "provision a resource, e.g. `gg resource add shop/db postgres`",
@@ -550,6 +685,10 @@ func newResourceAddCmd() *cobra.Command {
              redis client and every redis:// URL work unchanged.
              --storage is refused, and a restart loses everything in
              it: this is a cache, not a database.
+  external   Something gagarin does NOT run: an OpenAI account, a Stripe
+             key, a bucket elsewhere. It holds the values you give it and
+             publishes them to whatever declares it needs them. No
+             container, so --size and --storage are refused.
 
 You name it, say how big its storage may get, and pick a size. Every
 other decision is the platform's.
@@ -562,13 +701,43 @@ One instance, one volume, no failover. Postgres is dumped nightly and
 kept fourteen days — ` + "`gg resource backups`" + ` lists them, and
 ` + "`gg resource restore`" + ` puts one back into a NEW resource. Valkey keeps
 nothing across a restart, by design; ferretdb has no backups yet. See
-` + "`gg resource secrets`" + ` for how to connect, and the docs for what all
-this means before you put a client's data in one.`,
+` + "`gg deps add`" + ` for how to connect something to it — that one call opens
+the route and hands over the credentials — and the docs for what all this
+means before you put a client's data in one.
+
+An external is the exception to most of the above. It runs nothing, so
+there is no size, no storage, no backup and nothing to be ready. You give
+it the values instead, and it publishes them under its own name:
+
+  gg resource add shop/openai external --env-file .env.openai
+
+Restating a resource cannot change what it publishes — that is
+` + "`gg resource rotate`" + `, deliberately a separate verb so that restating
+one from an old file cannot roll a key backwards by accident.
+
+An .env.openai holding API_KEY and BASE_URL makes shop/openai publish
+OPENAI_API_KEY and OPENAI_BASE_URL. Name the keys without the prefix —
+API_KEY, not OPENAI_API_KEY, which is refused rather than doubled.
+
+Prefer --env-file to --env. A key on the command line goes into your
+shell history and into the transcript of every agent that ran the
+command; a file does not.
+
+An external's values are set here, once, when it is created. Changing
+them afterwards is ` + "`gg resource rotate`" + `.
+
+Declaring a dependency on an external does NOT restrict egress. Anything
+in a project can already reach the internet; what the declaration grants
+is the credentials and a line on the graph saying who uses them.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
-			"  the types that exist are: postgres, ferretdb, valkey"),
+			"  the types that exist are: postgres, ferretdb, valkey, external"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdResourceAdd(args[0], args[1], size, storage)
+			e, err := v.finish()
+			if err != nil {
+				return err
+			}
+			return cmdResourceAdd(args[0], args[1], size, storage, e)
 		},
 	}
 	// The only knob, and it is honoured rather than negotiated. Anything else
@@ -579,6 +748,18 @@ this means before you put a client's data in one.`,
 	// reversible where a volume is neither.
 	cmd.Flags().StringVar(&size, "size", "",
 		"how much CPU and memory: s, m or l (default s).\nCan be changed later by restating the resource")
+	// Only an external takes these, and cmdResourceAdd refuses them for every
+	// other type before it makes a request. Registered unconditionally because a
+	// flag that exists for one value of a positional argument cannot be hidden
+	// per-invocation — and a refusal naming the type is a better answer than
+	// "unknown flag" anyway.
+	//
+	// --env-file first in the help, because it is the one to use: a key passed
+	// on the command line is in the shell history and in every agent transcript
+	// that ran it.
+	v = bindEnvFlags(cmd.Flags(),
+		"a value an external publishes, K=V (repeatable).\nPrefer --env-file: this goes into your shell history",
+		"read an external's values from KEY=VALUE lines\n(repeatable; later files win, --env wins over all files)")
 	return cmd
 }
 
@@ -586,18 +767,22 @@ func newResourceSecretsCmd() *cobra.Command {
 	var format string
 	cmd := &cobra.Command{
 		Use:   "secrets PROJECT/NAME",
-		Short: "the credentials for connecting to it",
+		Short: "print its credentials, for a human or a client outside gagarin",
 		Long: `Print what a caller needs to connect, and nothing else.
 
-Nothing is injected anywhere. Connecting is two steps and they do
-different things:
+You do not need this to connect a service in the same project. That is
+one call, and it grants the variables as well as the route:
 
-  gg deploy shop/api:8080 api:v3 --env-file <(gg resource secrets shop/db)
   gg deps add shop/api db
 
-The first supplies the credentials, the second opens the route. Without
-the credentials you get an authentication error; without the route the
-credentials are correct and the connection hangs.`,
+This command is for the cases where something else needs the values: a
+psql on your laptop, checking what an application is being handed, or a
+client running outside gagarin. It prints the same variables the platform
+injects — named after the resource, so a postgres called db gives DB_URL,
+DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_DATABASE.
+
+Treat the output as a credential. It is a live password, and --format env
+exists to be piped, not pasted into a terminal somebody is sharing.`,
 		Args: usageArgs(1, 1, "usage: gg resource secrets PROJECT/NAME\n  e.g. gg resource secrets shop/db"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdResourceSecrets(args[0], format)
@@ -605,6 +790,68 @@ credentials are correct and the connection hangs.`,
 	}
 	cmd.Flags().StringVar(&format, "format", "env",
 		"env (KEY=VALUE lines, for --env-file) or json")
+	return cmd
+}
+
+// newResourceRotateCmd is its own verb rather than a flag or a restatement,
+// and that separation is the fix for a footgun rather than a preference.
+//
+// An external's values used to be replaceable by restating the resource, which
+// meant restating it from a stale .env file silently rotated the key backwards —
+// and the failure was an authentication error nobody would connect to the
+// command they ran. A declaration says what something should be; replacing a
+// live credential is an act with a moment, and the two want different verbs.
+func newResourceRotateCmd() *cobra.Command {
+	var v *envFlagVars
+	cmd := &cobra.Command{
+		Use:   "rotate PROJECT/NAME",
+		Short: "replace its credentials, and roll everything holding them",
+		Long: `Give a resource new credentials. Everything that declares it needs the
+resource is restarted with them.
+
+  gg resource rotate shop/db                                 a database
+  gg resource rotate shop/openai --env-file .env.openai.new  an external
+
+Who supplies the new value is the only difference between the types. For
+a postgres, ferretdb or valkey, gagarin mints one and --env is refused —
+a password you chose is one the running server has never heard of. For an
+external the values are yours, so --env or --env-file is required.
+
+Nothing is printed but the names of the variables. Read the values with
+"gg resource secrets" if you need them.
+
+What happens per type, because the costs are not the same:
+
+  postgres   The running server is told immediately. No restart, no
+             downtime, no dropped connections beyond the ones that were
+             mid-authentication.
+  ferretdb   The same, in the Postgres it stores into.
+  valkey     The password is read when the server starts, so the pod is
+             replaced — which empties the cache. That is what a restart
+             of a valkey always does, but it is worth knowing before you
+             run this on a hot one.
+  external   Nothing of ours runs, so nothing of ours restarts. Only the
+             services holding the values are rolled.
+
+If it fails, nothing changed: the old credential is still in use and the
+command is safe to run again.`,
+		Args: usageArgs(1, 1, "usage: gg resource rotate PROJECT/NAME\n"+
+			"  e.g. gg resource rotate shop/db\n"+
+			"  for an external: gg resource rotate shop/openai --env-file .env.new"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			e, err := v.finish()
+			if err != nil {
+				return err
+			}
+			return cmdResourceRotate(args[0], e)
+		},
+	}
+	// Same pair as `gg resource add`, and --env-file for the same reason: a key
+	// on the command line is in the shell history and in every agent transcript
+	// that ran it.
+	v = bindEnvFlags(cmd.Flags(),
+		"a new value for an external, K=V (repeatable).\nPrefer --env-file: this goes into your shell history",
+		"read an external's new values from KEY=VALUE lines\n(repeatable; later files win, --env wins over all files)")
 	return cmd
 }
 
@@ -655,10 +902,15 @@ this command needs no approval and is safe to reach for at three in the
 morning.
 
 The rest of the recovery, once the data is verified:
-  1. gg deploy each dependent with --env-file <(gg resource secrets ...)
-  2. gg deps add each dependent to the new resource
+  1. gg deps add each dependent to the new resource, which also hands it
+     the new resource's variables
+  2. gg deps rm each dependent off the old one
   3. remove the old resource — the one step that destroys data, and the
      one that asks for human approval.
+
+The variables are named after the resource, so they change with the
+name: what read DB_URL now reads DB2_URL. A dependent that hard-codes
+the old spelling in its own config needs a deploy as well.
 
 Which backup: --source names the old resource and takes its newest dump
 (the old resource may already be destroyed — that is fine, its backups
@@ -673,7 +925,7 @@ outlive it by fourteen days). --backup names an exact key from
 	cmd.Flags().StringVar(&source, "source", "",
 		"the resource whose newest backup to restore (it may already be destroyed)")
 	cmd.Flags().StringVar(&backupKey, "backup", "",
-		"an exact backup key, from `gg resource backups`")
+		"an exact backup `KEY`, from \"gg resource backups\"")
 	cmd.Flags().StringVar(&size, "size", "",
 		"the new resource's size: s, m or l (default s)")
 	cmd.Flags().IntVar(&storage, "storage", 0,

@@ -131,3 +131,64 @@ func TestDeployMissingEnvFileIsAnError(t *testing.T) {
 		t.Error("expected deploy parsing to fail on a missing env file")
 	}
 }
+
+// --- --deps ----------------------------------------------------------------
+
+// Repeatable and order-preserving. It is a StringArrayVar rather than a
+// StringSliceVar on purpose: a comma is not a separator here, because a service
+// name cannot contain one and pretending otherwise would silently accept
+// `--deps db,cache` as a single name that does not exist.
+func TestDeployDepsAreRepeatable(t *testing.T) {
+	f, err := parseDeploy([]string{"--deps", "db", "--deps", "cache"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.deps) != 2 || f.deps[0] != "db" || f.deps[1] != "cache" {
+		t.Errorf("deps = %#v, want [db cache]", f.deps)
+	}
+}
+
+// Absent means "change nothing", and it has to arrive as nil rather than an
+// empty slice: deployImage only sends the field when it is non-empty, and a
+// deploy that never mentioned the graph must not write to it.
+func TestDeployWithoutDepsSendsNothing(t *testing.T) {
+	f, err := parseDeploy(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.deps) != 0 {
+		t.Errorf("deps = %#v, want empty", f.deps)
+	}
+}
+
+// Refused at parse time, which is what keeps `gg ship --deps shop/db` from
+// paying for a build and a push before failing.
+func TestDeployDepsRejectsAReference(t *testing.T) {
+	if _, err := parseDeploy([]string{"--deps", "shop/db"}); err == nil {
+		t.Error("expected --deps shop/db to be refused: a service reaches only its own project")
+	}
+}
+
+func TestDeployDepsRejectsAnUnusableName(t *testing.T) {
+	for _, name := range []string{"Not_A_Label", "1leading-digit", ""} {
+		if _, err := parseDeploy([]string{"--deps", name}); err == nil {
+			t.Errorf("expected --deps %q to be refused", name)
+		}
+	}
+}
+
+// The prefix rule the platform publishes under, duplicated in gg only to print
+// hints. If this ever disagrees with the engine's resource.EnvPrefix, the hints
+// name variables that do not exist.
+func TestEnvPrefix(t *testing.T) {
+	for in, want := range map[string]string{
+		"db":        "DB",
+		"pg":        "PG",
+		"orders-db": "ORDERS_DB",
+		"a-b-c":     "A_B_C",
+	} {
+		if got := envPrefix(in); got != want {
+			t.Errorf("envPrefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
