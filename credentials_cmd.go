@@ -12,7 +12,7 @@ package main
 // decision, and the whole dance still needed a click in an inbox for something
 // that has no inbox.
 //
-// So: `gg credentials create` mints one from the credential you already hold. No
+// So: `gg creds create` mints one from the credential you already hold. No
 // email, no approval, and nothing written to disk — the secret is printed once,
 // because a CI credential's destination is a secret store somewhere else.
 
@@ -73,7 +73,7 @@ func cmdCredentialsList() error {
 
 	fmt.Printf("\n  * the credential this command used\n")
 	fmt.Printf("  approved = a human clicked a link for it; minted = issued by another credential\n")
-	fmt.Printf("\n  gg credentials revoke <id>\n")
+	fmt.Printf("\n  gg creds revoke <id>\n")
 	return nil
 }
 
@@ -86,8 +86,8 @@ func cmdCredentialsList() error {
 func cmdCredentialsCreate(name string, days int) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("say what this credential is for\n" +
-			"  hint: gg credentials create --name \"github actions: acme/web\"\n" +
-			"  it is what you will read in `gg credentials` when deciding whether it is still wanted")
+			"  hint: gg creds create --name \"github actions: acme/web\"\n" +
+			"  it is what you will read in `gg creds` when deciding whether it is still wanted")
 	}
 	body := map[string]any{"name": name}
 	if days > 0 {
@@ -112,7 +112,7 @@ func cmdCredentialsCreate(name string, days int) error {
 	fmt.Fprintf(os.Stderr, "minted %q for %s\n", out.Name, out.Account)
 	fmt.Fprintf(os.Stderr, "  can       %s\n", strings.Join(out.Scopes, ", "))
 	fmt.Fprintf(os.Stderr, "  expires   %s\n", out.ExpiresAt.Format("2 January 2006"))
-	fmt.Fprintf(os.Stderr, "  id        %d   (gg credentials revoke %d)\n\n", out.ID, out.ID)
+	fmt.Fprintf(os.Stderr, "  id        %d   (gg creds revoke %d)\n\n", out.ID, out.ID)
 
 	fmt.Println(out.Credential)
 

@@ -41,7 +41,7 @@ func TestTheSecretIsAloneOnStdout(t *testing.T) {
 		}
 	})
 	if strings.TrimSpace(out) != "gg_secret_value" {
-		t.Errorf("stdout is not exactly the secret, so `--body \"$(gg credentials create ...)\"` would carry prose:\n%q", out)
+		t.Errorf("stdout is not exactly the secret, so `--body \"$(gg creds create ...)\"` would carry prose:\n%q", out)
 	}
 }
 

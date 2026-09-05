@@ -93,17 +93,26 @@ Run `gg whoami`. If it answers with an account, this machine is already
 authorised and you can skip this section. There is nothing to export and no token to ask the user for —
 if you find yourself wanting a secret, you are doing this wrong.
 
-If it says the machine has no credentials:
+If it says the machine has no credentials, sign up. Any address works: there is
+no list to be on and nothing to wait for. One email, one button, and the account
+starts with $5 on it; no card is asked for.
 
 1. **Ask the user for their email address.** Do not guess it, and do not use an
    address you found in the repository or in git history — a deploy that lands in
    a stranger's account is worse than no deploy.
 2. `gg signup <email>`
-3. **Tell the user to click the button in the email.** That single click creates
-   the account and authorises this machine. Say the code `gg signup` printed, so
-   they can check the email is the one you triggered.
-4. `gg auth --claim <code>` — this waits for the click, then stores credentials in
-   `~/.config/gagarin/credentials.json`.
+3. **Tell the user to press the button in the email.** If they have no account
+   yet, that press creates one; either way it authorises this machine. Say the
+   code `gg signup` printed, so they can check the email is the one you
+   triggered.
+4. `gg auth --claim <code>` — this waits for the press, then stores credentials
+   in `~/.config/gagarin/credentials.json`.
+
+Signing up and authorising another machine are the same request, and the
+response is the same whether or not the address already has an account. The
+moment an account is created it gets its $5 starting balance and the address
+joins gagarin's customer list; https://gagarin.cloud/privacy says what that list
+is for. If the user asks, that is the answer.
 
 The credential this produces can deploy, read status, and read logs. It **cannot
 delete anything**: see "Destroying things" below.
@@ -122,14 +131,14 @@ machine has it.
 it.** A pipeline gets its own, minted from the one you already hold:
 
 ```
-gg credentials create --name "github actions: acme/web"
+gg creds create --name "github actions: acme/web"
 ```
 
 The secret is printed on stdout, alone on its line, and everything else goes to
 stderr — so it pipes:
 
 ```
-gh secret set GAGARIN_TOKEN --body "$(gg credentials create --name "github actions: acme/web" 2>/dev/null)"
+gh secret set GAGARIN_TOKEN --body "$(gg creds create --name "github actions: acme/web" 2>/dev/null)"
 ```
 
 CI reads `GAGARIN_TOKEN` from the environment and needs nothing else: no
@@ -149,17 +158,17 @@ turns that on. It expires (90 days by default, 365 maximum, and there is no
 never). And it cannot mint another, so a leaked one cannot issue its own
 replacements while you are revoking it.
 
-Name it after where it will live. `gg credentials` is a list somebody reads
+Name it after where it will live. `gg creds` is a list somebody reads
 months later deciding what is still wanted, and "token" tells them nothing.
 
 ```
-gg credentials              what has access, and which are minted
-gg credentials revoke 7     take one away, immediately, no approval needed
+gg creds              what has access, and which are minted
+gg creds revoke 7     take one away, immediately, no approval needed
 ```
 
 If you are ever tempted to set `XDG_CONFIG_HOME` to a scratch directory and run
 the signup flow again to get a second credential: that used to be the only way
-and it is not any more. Use `gg credentials create`.
+and it is not any more. Use `gg creds create`.
 
 ## Deploying a project
 
@@ -984,11 +993,15 @@ Act on the `code`, not the prose.
 | code | what it means | what to do |
 |---|---|---|
 | `unauthorized` | this machine has no usable credential | run `gg whoami`, then the "Getting access" steps — never ask the user for a token |
+| `insufficient_scope` | this credential does not carry that right — a browser session cannot deploy | deploy from the CLI, with the credential `gg auth` stored; the dashboard has no deploy button on purpose |
 | `cannot_delegate` | a minted credential tried to mint another | mint it from the machine a human approved; `gg whoami` names the one you are holding |
-| `name_required` | `gg credentials create` with no `--name` | name it after where it will live — it is what you read in the list months later |
+| `name_required` | `gg creds create` with no `--name` | name it after where it will live — it is what you read in the list months later |
 | `invalid_expiry` | `--expires` outside 1–365 days | there is no never; leave it out for 90 |
+| `name_too_long` | a credential name over 120 characters | it appears in a list; shorten it |
 | `approval_required` | a human must approve a deletion | tell the user, pass on the code, wait, retry the same command |
 | `project_not_found` | no such project, **or** you have no access to it | `gg projects` lists what you can reach; `gg init <project>` creates one; if it is somebody else's, ask them to `gg share` it with you |
+| `project_suspended` | the project is stopped and accepts no writes; reads still work | the message says why. Out of credit: the user adds some at https://my.gagarin.cloud/billing and it restarts by itself. Anything else: only support can lift it, so tell the user and stop — nobody next to you can fix this |
+| `project_limit` | the account already has as many projects as it may hold | `gg destroy` one that is no longer needed, or the user writes to support@mail.gagarin.cloud for more |
 | `insufficient_role` | you can see the project but only as a viewer | ask the owner or an editor for edit access; do not retry |
 | `owner_only` | only the account that pays for the project may do this (deleting it) | tell the user to run it themselves; nobody can grant this, so do not retry |
 | `invalid_role` | roles are `editor` and `viewer` | `owner` cannot be granted — it is the account that pays |
@@ -1000,14 +1013,32 @@ Act on the `code`, not the prose.
 | `image_not_yours` | the image is not in this project's registry space | `gg build`/`gg push` into this project and deploy that; gg builds the path for you |
 | `invalid_digest` | the digest is not a sha256 one | pass what `docker push` reported, or leave it out |
 | `invalid_port` | port out of range | set the port the container actually listens on |
+| `invalid_volume` | the volume path will not do | an absolute path inside the container, e.g. `/var/lib/postgresql/data` |
+| `volume_immutable` | a volume is set once and never moves | keep the path and size it has, or destroy the service and deploy it again — which throws the data away |
+| `invalid_domain` | not a hostname | a name the user owns, e.g. `shop.example.com`; no scheme, no port, no path |
+| `domain_taken` | another service already holds that name | pick another, or release it wherever it is declared; the refusal does not say who has it |
+| `domain_attached` | the service still has custom names declared | `gg domain rm <project>/<service> <name>` for each one first, or the user's DNS keeps pointing at a host that no longer answers |
 | `invalid_needs` | a dependency list gg would not send: a blank name, or a service naming itself | correct the names; a service reaches itself without being told to |
 | `invalid_deps` | the same, on the `--deps` of a deploy or a ship | correct the names; `gg deps ls` shows what is already declared |
+| `not_a_service` | that name is a resource: you tried to deploy over it, roll it back or give it an address | a resource is reached by name from inside the project and is never public; `gg status <project>` shows which is which |
+| `not_a_resource` | that name is a service, not a resource | `gg status <project>` shows which is which; use the service verbs |
+| `no_such_resource` | this project has no resource by that name | `gg status <project>` lists what it has |
+| `service_in_use` | something still declares that it needs this | `gg deps rm` the edge first; the refusal names what depends on it |
+| `unknown_resource_type` | no such resource type | `postgres`, `ferretdb`, `valkey` or `external` |
+| `wrong_resource_type` | a resource of another type already has that name | destroy it and create the one you meant — which throws its data away — or pick another name |
+| `invalid_storage` | storage size out of range | 1 to 100 GB, set once, at creation |
+| `no_storage` | this type has no volume to size | drop `--storage`; a valkey keeps everything in memory and an external runs nothing |
+| `no_size` | an external has no container to size | drop `--size`; it is a set of values, not something gagarin runs |
+| `invalid_env` | a key in `--env-file` will not do | every variable is published under the resource's own name, so write `API_KEY`, not `OPENAI_API_KEY` |
 | `already_exists` | `gg resource add` with `--env` on an external that is already there | `gg resource rotate` is how values change — this refusal stops an old file rolling a key backwards |
 | `env_required` | `gg resource rotate` on an external with no values | an external's values are the user's; pass `--env-file` |
 | `no_env` | `--env` on a type that mints its own credentials | drop it; `gg resource secrets` reads what gagarin minted |
 | `rotate_failed` | the running server could not be told its new password | **nothing changed** — the old credential still works and it is safe to retry; check `gg status` for a resource that is not running |
 | `cannot_rotate` | the resource has no credentials recorded to replace | `gg resource secrets` shows what it holds; this is a bug worth reporting |
 | `no_such_service` | a name in `gg deps add` or in `--deps` is not a service or resource in this project | `gg status <project>` lists them; create it first |
+| `no_such_revision` | the service never had that revision | `gg history <project>/<service>` lists the ones it did |
+| `nothing_to_roll_back_to` | the service has only ever been deployed once | nothing to do; this is not a bad call |
+| `eject_failed` | the export would not assemble | a bug in gagarin, not in your call; report it |
 | `apply_failed` | desired state saved, cluster update failed | retry the same command; it is idempotent |
 | `cluster_error` | gagarin could not reach infrastructure | not your fault; report it to the user |
 | `logs_unavailable` | no running pod yet | check `gg status <project>` first |
@@ -1018,6 +1049,8 @@ Act on the `code`, not the prose.
 | `rate_limited` | too many requests, too fast | wait a minute; never retry in a tight loop |
 | `invalid_email` | the address does not parse | ask the user for it again; do not guess |
 | `claim_expired` | nobody approved in time | run `gg signup <email>` again |
+| `no_such_claim` | that code does not exist | run `gg signup <email>` again for a fresh one |
+| `claim_collected` | another machine already collected the credential for that code | run `gg signup <email>` again to authorise this one |
 | `email_failed` | gagarin could not send mail | retry once, then tell the user |
 | `invalid_size` | not a size, or above the account's limit | sizes are `s`, `m`, `l`; the message names the cap |
 | `backup_unsupported` | this resource type has no backups (only postgres does) | nothing to retry; if the user needs durability, the data belongs in postgres |
@@ -1025,6 +1058,7 @@ Act on the `code`, not the prose.
 | `restore_target_not_empty` | the restore target already holds data | restore only fills a NEW resource; create one (`gg resource restore <project>/<new> --source <old>`) rather than reusing a live name |
 | `backup_mismatch` | the backup key belongs to a different project | list this project's with `gg resource backups`; never restore across projects |
 | `no_backups` | nothing stored for that source yet | the nightly pass takes the first one; `gg resource backup` takes one now |
+| `backup_list_failed` | the bucket could not be listed | retry once; if it happens again, tell the user |
 | `backup_failed` / `restore_failed` | the dump or restore itself failed | the resource must be running — check `gg status`, then retry once |
 
 If a deploy succeeds but the service never becomes ready, the usual causes are:
