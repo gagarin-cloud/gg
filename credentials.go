@@ -7,7 +7,7 @@ package main
 // anyone exporting anything. An env var still works for CI, where there is no
 // human to click and no home directory worth writing to.
 //
-// Where CI's credential comes from is `gg credentials create`, run once by a
+// Where CI's credential comes from is `gg creds create`, run once by a
 // human on a machine that is already authorised — see credentials_cmd.go. It is
 // worth saying here because this file used to be the whole answer, and the
 // answer people found in it was the wrong one: XDG_CONFIG_HOME below redirects

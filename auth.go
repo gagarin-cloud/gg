@@ -36,15 +36,17 @@ func cmdSignup(email string) error {
 	// the wording: "check your inbox" is useless advice when nothing was sent
 	// there, and "we just sent one" is wrong when the one that matters is ten
 	// minutes old.
-	said := fmt.Sprintf(`Tell your human to click the button in the email we just sent. It shows code
-%s, which should match this one. That single click creates the account and
-grants this machine access.`, out.Claim)
+	said := fmt.Sprintf(`Tell your human to press the button in the email we just sent. It shows code
+%s, which should match this one. If they have no account yet, that press
+creates one, with $5 on it and no card asked for. Either way it grants this
+machine access.`, out.Claim)
 
 	switch out.Delivery {
 	case "already_sent":
 		said = fmt.Sprintf(`An approval email for this code is already in their inbox and we did not send
-another. It shows code %s, which should match this one. That single click
-creates the account and grants this machine access.`, out.Claim)
+another. It shows code %s, which should match this one. If they have no
+account yet, pressing its button creates one, with $5 on it and no card asked
+for. Either way it grants this machine access.`, out.Claim)
 	case "logged":
 		said = fmt.Sprintf(`No email was sent: this gagarin has no mail provider configured, so the
 approval link went to the control plane's log instead. Somebody with access to
@@ -174,7 +176,7 @@ func cmdWhoami() error {
 // a request while GITHUB_ACTIONS was set in the environment could have that
 // approval read as a CI system rather than as whatever was really asking. And it
 // was never needed: CI does not sign up. A pipeline gets its credential from
-// `gg credentials create`, run by a human on a machine that is already
+// `gg creds create`, run by a human on a machine that is already
 // authorised, which is a name the caller states outright rather than one gg
 // guesses from the environment.
 func clientName() string {
