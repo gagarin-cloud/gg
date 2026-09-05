@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -23,7 +22,7 @@ import (
 func captureBody(t *testing.T, f func() error) (map[string]any, error) {
 	t.Helper()
 	var last map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if b, err := io.ReadAll(r.Body); err == nil && len(b) > 0 {
 			_ = json.Unmarshal(b, &last)
 		}
@@ -40,9 +39,7 @@ func captureBody(t *testing.T, f func() error) (map[string]any, error) {
 		default:
 			_, _ = w.Write([]byte(`{"name":"api"}`))
 		}
-	}))
-	defer srv.Close()
-	t.Setenv("GAGARIN_API", srv.URL)
+	})
 	err := f()
 	return last, err
 }
@@ -147,7 +144,7 @@ func TestDepsAddPrintsNoValues(t *testing.T) {
 // variables away as surely as `add` grants them.
 func TestDepsSendsTheUnionNotJustTheAddition(t *testing.T) {
 	var last map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if b, err := io.ReadAll(r.Body); err == nil && len(b) > 0 {
 			_ = json.Unmarshal(b, &last)
 		}
@@ -158,9 +155,7 @@ func TestDepsSendsTheUnionNotJustTheAddition(t *testing.T) {
 			return
 		}
 		_, _ = w.Write([]byte(`{"needs":["cache","db"],"sentence":"api reaches cache and db, and nothing else."}`))
-	}))
-	defer srv.Close()
-	t.Setenv("GAGARIN_API", srv.URL)
+	})
 
 	if out := capture(t, func() {
 		if err := cmdDepsAdd("shop/api", []string{"db"}); err != nil {

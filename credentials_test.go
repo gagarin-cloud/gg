@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -19,15 +18,13 @@ import (
 func mintServer(t *testing.T, resp string) *map[string]any {
 	t.Helper()
 	var last map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		if b, err := io.ReadAll(r.Body); err == nil && len(b) > 0 {
 			_ = json.Unmarshal(b, &last)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(resp))
-	}))
-	t.Cleanup(srv.Close)
-	t.Setenv("GAGARIN_API", srv.URL)
+	})
 	return &last
 }
 
