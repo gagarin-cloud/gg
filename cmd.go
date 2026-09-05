@@ -374,9 +374,8 @@ func newLogsCmd() *cobra.Command {
 // fault but ours — there was no other way.
 func newCredentialsCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:     "creds",
-		Aliases: []string{"credentials", "credential"},
-		Short:   "what has access to this account, and how to give CI some",
+		Use:   "creds",
+		Short: "what has access to this account, and how to give CI some",
 		Long: `Every credential on this account: the machines a human approved, and
 the ones minted for automation.
 
