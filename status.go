@@ -289,13 +289,23 @@ func printStatusTable(st statusResp) {
 	// screen while it is taking its time — ImagePullBackOff reads the same
 	// whether or not Kubernetes has given up yet, and waiting three minutes to
 	// be told about a typo in an image name helps nobody.
+	// Allow-listed by state rather than excluded by it, which is the difference
+	// between a note that is missing and a note that is wrong. Written the other
+	// way round until 2026-09-06 — skip running, skip stopped, print the rest —
+	// and an `external` fell through: it has no Deployment because it is not
+	// supposed to have one, the cluster read said "no deployment in cluster",
+	// and four of them printed that directly beneath a legend saying the type
+	// runs nothing. The control plane no longer sends a message for those rows,
+	// so this is belt as well as braces; but a loop whose glyph lookup can
+	// return the empty string is a loop that will print an unlabelled line again
+	// the next time a state is added.
+	glyph := map[string]string{"starting": "◐", "failing": "○"}
 	for _, s := range st.Services {
-		st := state(s)
-		if st == "running" || st == "stopped" || s.Actual.Message == "" {
+		g, ok := glyph[state(s)]
+		if !ok || s.Actual.Message == "" {
 			continue
 		}
-		fmt.Printf("  %s %s: %s\n",
-			map[string]string{"starting": "◐", "failing": "○"}[st], s.Name, s.Actual.Message)
+		fmt.Printf("  %s %s: %s\n", g, s.Name, s.Actual.Message)
 	}
 	fmt.Printf("  %s today so far\n", formatUSD(st.UsageToday.MicroUSD))
 	fmt.Println()
