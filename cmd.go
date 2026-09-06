@@ -688,10 +688,12 @@ func newResourceAddCmd() *cobra.Command {
 		Long: `Provision something gagarin runs for you, rather than something you built.
 
   postgres   PostgreSQL 17, on a volume. Survives restarts.
-  ferretdb   A MongoDB-compatible document database, on a volume.
-             Survives restarts. Your mongodb:// URL, driver and ODM work
-             unchanged; what runs is FerretDB, the Apache-licensed
-             implementation, storing into Postgres.
+  qdrant     A vector database, on a volume. Survives restarts. What
+             an application does retrieval against: embeddings in,
+             nearest neighbours out. It answers on two ports — HTTP
+             on <NAME>_PORT and gRPC on <NAME>_GRPC_PORT — and
+             authenticates with <NAME>_API_KEY, which is a header
+             rather than part of the URL.
   valkey     An in-memory store speaking the redis protocol — every
              redis client and every redis:// URL work unchanged.
              --storage is refused, and a restart loses everything in
@@ -711,7 +713,7 @@ other decision is the platform's.
 One instance, one volume, no failover. Postgres is dumped nightly and
 kept fourteen days — ` + "`gg resource backups`" + ` lists them, and
 ` + "`gg resource restore`" + ` puts one back into a NEW resource. Valkey keeps
-nothing across a restart, by design; ferretdb has no backups yet. See
+nothing across a restart, by design; qdrant has no backups yet. See
 ` + "`gg deps add`" + ` for how to connect something to it — that one call opens
 the route and hands over the credentials — and the docs for what all this
 means before you put a client's data in one.
@@ -742,7 +744,7 @@ in a project can already reach the internet; what the declaration grants
 is the credentials and a line on the graph saying who uses them.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
-			"  the types that exist are: postgres, ferretdb, valkey, external"),
+			"  the types that exist are: postgres, qdrant, valkey, external"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := v.finish()
 			if err != nil {
@@ -824,7 +826,7 @@ resource is restarted with them.
   gg resource rotate shop/openai --env-file .env.openai.new  an external
 
 Who supplies the new value is the only difference between the types. For
-a postgres, ferretdb or valkey, gagarin mints one and --env is refused —
+a postgres, qdrant or valkey, gagarin mints one and --env is refused —
 a password you chose is one the running server has never heard of. For an
 external the values are yours, so --env or --env-file is required.
 
@@ -836,7 +838,9 @@ What happens per type, because the costs are not the same:
   postgres   The running server is told immediately. No restart, no
              downtime, no dropped connections beyond the ones that were
              mid-authentication.
-  ferretdb   The same, in the Postgres it stores into.
+  qdrant     The key is read when the server starts, so the pod is
+             replaced. It comes back with everything in it — the data
+             is on a volume — so the cost is the seconds it is away.
   valkey     The password is read when the server starts, so the pod is
              replaced — which empties the cache. That is what a restart
              of a valkey always does, but it is worth knowing before you
