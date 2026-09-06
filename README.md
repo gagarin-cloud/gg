@@ -50,7 +50,7 @@ gg status shop                 # what gagarin intends, and what the cluster is a
 gg logs shop/web
 
 gg resource add shop/db postgres    # a database; you choose the name and the size, nothing else
-gg resource add shop/cache valkey   # postgres, ferretdb and valkey — valkey is in-memory and loses data on restart
+gg resource add shop/cache valkey   # postgres, qdrant and valkey — valkey is in-memory and loses data on restart
 gg deps add shop/web db             # let web reach it, and hand it DB_URL and the rest
 gg resource secrets shop/db         # the values, when something outside the project needs them
 

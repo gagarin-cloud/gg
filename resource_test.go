@@ -83,7 +83,7 @@ func TestExternalOutputTranslatesADashedName(t *testing.T) {
 // never heard of — the control plane refuses it too, but saying so here costs
 // no round trip and names the command that does what they wanted.
 func TestEnvIsRefusedOnAMintedType(t *testing.T) {
-	for _, typ := range []string{"postgres", "valkey", "ferretdb"} {
+	for _, typ := range []string{"postgres", "valkey", "qdrant"} {
 		err := cmdResourceAdd("shop/db", typ, "", 0, map[string]string{"API_KEY": "x"})
 		if err == nil {
 			t.Fatalf("%s accepted --env", typ)
@@ -166,9 +166,14 @@ func TestRotatingAnExternalSendsItsEnv(t *testing.T) {
 
 // A valkey restart empties it. That is what a restart of the type always does,
 // but it is worth being told rather than discovering it from a cold cache.
+//
+// The words are the platform's and gg prints them verbatim, so what this asserts
+// is that the note is not dropped on the floor — which is what the assertion
+// below it exists to distinguish from.
 func TestRotatingAValkeySaysTheCacheWasEmptied(t *testing.T) {
 	rotateServer(t, `{"resource":"cache","type":"valkey","rotated":["CACHE_URL"],"dependents":["api"],
-	  "restarted":true,"sentence":"cache has new credentials, and api is restarting to pick them up."}`)
+	  "restarted":true,"restart_note":"cache was restarted to read its new credential, so anything it held in memory is gone.",
+	  "sentence":"cache has new credentials, and api is restarting to pick them up."}`)
 	out := capture(t, func() {
 		if err := cmdResourceRotate("shop/cache", nil); err != nil {
 			t.Error(err)
@@ -176,6 +181,27 @@ func TestRotatingAValkeySaysTheCacheWasEmptied(t *testing.T) {
 	})
 	if !strings.Contains(out, "held in memory is gone") {
 		t.Errorf("a cache was emptied without saying so:\n%s", out)
+	}
+}
+
+// The other restarting type, and the reason the sentence is no longer gg's to
+// compose. A qdrant is replaced on rotation too, but its data is on a volume —
+// printing the cache's warning here would be the CLI reporting data loss that
+// did not happen, which it did until 2026-09-06.
+func TestRotatingAQdrantDoesNotClaimDataLoss(t *testing.T) {
+	rotateServer(t, `{"resource":"vectors","type":"qdrant","rotated":["VECTORS_API_KEY"],"dependents":["api"],
+	  "restarted":true,"restart_note":"vectors was restarted to read its new credential. Its data is on a volume, so nothing was lost.",
+	  "sentence":"vectors has new credentials, and api is restarting to pick them up."}`)
+	out := capture(t, func() {
+		if err := cmdResourceRotate("shop/vectors", nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if strings.Contains(out, "held in memory is gone") {
+		t.Errorf("a qdrant rotation claimed data loss that did not happen:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing was lost") {
+		t.Errorf("the platform's restart note was not printed:\n%s", out)
 	}
 }
 

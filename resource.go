@@ -396,11 +396,22 @@ func cmdResourceRotate(ref string, env map[string]string) error {
 		// Dependents is what was restarted, which is the answer to the question
 		// a caller would otherwise have to work out for themselves.
 		Dependents []string `json:"dependents"`
-		// Restarted is whether the resource itself came down. True only for a
-		// valkey, whose password is read at startup — and a valkey restart
-		// empties it, so this has to be said rather than discovered.
-		Restarted bool   `json:"restarted"`
-		Sentence  string `json:"sentence"`
+		// Restarted is whether the resource itself came down: true for the types
+		// that read their credential when the process starts, so replacing the
+		// pod is what makes the rotation take effect at all.
+		Restarted bool `json:"restarted"`
+		// RestartNote is what that cost, in the platform's own words, and gg
+		// prints it verbatim rather than composing one.
+		//
+		// It used to compose one, and the sentence was wrong the moment a second
+		// type restarted: it said "anything it held in memory is gone", which is
+		// true of a valkey and false of a qdrant, whose data is on a volume.
+		// Telling somebody their data is gone when it is not is the worst
+		// sentence this CLI could print, and the fix is the rule this file
+		// already follows everywhere else — the platform knows the types, gg
+		// knows only `external`.
+		RestartNote string `json:"restart_note"`
+		Sentence    string `json:"sentence"`
 	}
 	path := fmt.Sprintf("/v1/projects/%s/resources/%s/rotate", project, name)
 	if err := callSlow("POST", path, body, &out); err != nil {
@@ -418,8 +429,8 @@ func cmdResourceRotate(ref string, env map[string]string) error {
 		fmt.Printf("\n%s publishes %s\n", name, strings.Join(out.Rotated, ", "))
 		fmt.Printf("  Values: gg resource secrets %s/%s\n", project, name)
 	}
-	if out.Restarted {
-		fmt.Printf("\n%s was restarted to pick up its own new password, so anything it\nheld in memory is gone. That is what a restart of this type always does.\n", name)
+	if out.RestartNote != "" {
+		fmt.Printf("\n%s\n", out.RestartNote)
 	}
 	if len(out.Dependents) == 0 {
 		fmt.Printf("\nNothing declares %s yet, so nothing needed restarting.\n", name)

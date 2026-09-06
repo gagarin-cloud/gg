@@ -1,6 +1,6 @@
 ---
 name: gagarin
-description: Deploy and operate applications on gagarin with the gg CLI — ship a service from a Dockerfile, provision postgres, ferretdb, valkey or external-credential resources, wire what may reach what, put a service on the internet, give CI its own credential, read status and logs, roll back, and tear things down. Use whenever the user asks to deploy, host, run or operate an application, or mentions gagarin or gg. Gagarin runs container images on managed infrastructure; the user never needs to know about Kubernetes, ingress, TLS, or the underlying cloud.
+description: Deploy and operate applications on gagarin with the gg CLI — ship a service from a Dockerfile, provision postgres, qdrant, valkey or external-credential resources, wire what may reach what, put a service on the internet, give CI its own credential, read status and logs, roll back, and tear things down. Use whenever the user asks to deploy, host, run or operate an application, or mentions gagarin or gg. Gagarin runs container images on managed infrastructure; the user never needs to know about Kubernetes, ingress, TLS, or the underlying cloud.
 ---
 
 # Deploying with gagarin
@@ -34,7 +34,7 @@ first; they are the parts that stop you getting it wrong.
 7. **A deploy replaces the environment and nothing else.** Dependencies, the
    domain, the volume and the size all survive a deploy that forgets to mention
    them. Env is the one thing you must restate every time.
-8. **If a resource type exists, use it** (`postgres`, `ferretdb`, `valkey`,
+8. **If a resource type exists, use it** (`postgres`, `qdrant`, `valkey`,
    `external`). If one does not, an ordinary service with a volume is the normal
    path, not a workaround.
 9. **You can deploy; you cannot destroy.** Deleting anything answers
@@ -56,7 +56,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg ship P/SVC:PORT` | build the current directory, push it, run it |
 | `gg build P/IMAGE[:TAG]` / `gg push P/IMAGE:TAG` / `gg deploy P/SVC:PORT IMAGE:TAG` | the same three steps apart, which is what CI wants |
 | `gg registry copy P/IMAGE SOURCE` | bring an image you did not build into the project |
-| `gg resource add P/NAME TYPE` | provision postgres, ferretdb, valkey or external |
+| `gg resource add P/NAME TYPE` | provision postgres, qdrant, valkey or external |
 | `gg resource secrets P/NAME` | its connection values, for something outside the project |
 | `gg resource rotate P/NAME` | new credentials, and everything holding them rolls |
 | `gg resource backup` / `backups` / `restore P/NEW --source OLD` | postgres recovery |
@@ -457,7 +457,7 @@ version to pass and no Dockerfile.
 
 ```
 gg resource add shop/db postgres --size m --storage 20
-gg resource add shop/docs ferretdb
+gg resource add shop/vectors qdrant
 gg resource add shop/cache valkey
 gg resource add shop/openai external --env-file .env.openai
 ```
@@ -465,24 +465,33 @@ gg resource add shop/openai external --env-file .env.openai
 | type | what it is | storage | backups |
 |---|---|---|---|
 | `postgres` | PostgreSQL 17 | on a volume; survives restarts | nightly, kept 14 days |
-| `ferretdb` | MongoDB-compatible document DB | on a volume; survives restarts | none yet |
+| `qdrant` | vector database, for retrieval | on a volume; survives restarts | none yet |
 | `valkey` | in-memory store, redis protocol | **none — a restart loses everything** | none, by design |
 | `external` | a third-party API, run by nobody here | **none — it runs nothing at all** | nothing to back up |
 
 The types are named for what actually runs, not for the products they stand in
 for — an honesty you can pass on when somebody asks.
 
-- **`ferretdb` is FerretDB**, the Apache-licensed MongoDB alternative, storing
-  into Postgres. `mongodb://` URLs, the official drivers, Mongoose and every ODM
-  work unchanged, and for ordinary CRUD, indexes and aggregation you cannot tell.
-  Gagarin does not run MongoDB because MongoDB's licence (SSPL) forbids offering
-  it as a service, so an app leaning on an exotic corner of the surface may
-  notice. If one does, run real MongoDB yourself as a service with a volume,
-  where the licence is neither gagarin's problem nor yours — serving your own app
-  is not "offering MongoDB as a service".
-  Its URL carries **no `authSource`, and does not want one**: there is no `admin`
-  database to authenticate against. Porting config that hard-codes
-  `authSource=admin`? Drop it.
+- **`qdrant` is Qdrant**, Apache-licensed, and it is what an application does
+  retrieval against: embeddings in, nearest neighbours out. Three things about
+  it are unlike every other type, and all three will bite an agent that assumes
+  otherwise.
+  - **The credential is not in the URL.** `<NAME>_URL` is a bare
+    `http://vectors:6333`; the key arrives separately as `<NAME>_API_KEY` and
+    travels as an `api-key` header. Every client takes it as its own argument —
+    `QdrantClient(url=os.environ["VECTORS_URL"], api_key=os.environ["VECTORS_API_KEY"])`.
+  - **It answers on two ports.** `<NAME>_PORT` is 6333 (HTTP/REST) and
+    `<NAME>_GRPC_PORT` is 6334. The Python, JS, Java and .NET clients want the
+    URL; the official **Go and Rust clients speak only gRPC** and want the host
+    and 6334. Both are published so neither has to be guessed.
+  - **There is no MongoDB here, and no document store either.** If a user wants
+    documents rather than vectors, gagarin has no type for it — run one as an
+    ordinary service with a volume.
+
+  Gagarin ran a `ferretdb` type from 2026-09-04 to 2026-09-06 and it is **gone**:
+  it promised MongoDB compatibility and did not keep the promise past the simple
+  cases. There is no alias and no migration path. If a user names it, say it was
+  removed and offer the service-with-a-volume route.
 - **`valkey` is a cache, not a database.** `--storage` is refused (`no_storage`)
   rather than quietly ignored, and everything in it is gone when the pod restarts
   — which happens on a node drain, not only when somebody asks. Do not put a
@@ -522,28 +531,32 @@ Or declare it on the deploy, so the service never starts without them:
 `gg deploy shop/api:8080 api:v3 --deps db`.
 
 **The variables are named after the resource, not the protocol** — the resource's
-own name, upper-cased with dashes as underscores, plus one of six suffixes:
+own name, upper-cased with dashes as underscores, plus a suffix:
 
-| suffix | postgres | valkey | ferretdb |
+| suffix | postgres | valkey | qdrant |
 |---|---|---|---|
-| `<NAME>_URL` | `postgres://…?sslmode=disable` | `redis://:pass@…` | `mongodb://…` |
+| `<NAME>_URL` | `postgres://…?sslmode=disable` | `redis://:pass@…` | `http://vectors:6333` |
 | `<NAME>_HOST` | ✅ | ✅ | ✅ |
-| `<NAME>_PORT` | 5432 | 6379 | 27017 |
-| `<NAME>_USER` | ✅ | — | ✅ |
-| `<NAME>_PASSWORD` | ✅ | ✅ | ✅ |
-| `<NAME>_DATABASE` | ✅ | — | ✅ |
+| `<NAME>_PORT` | 5432 | 6379 | 6333 |
+| `<NAME>_GRPC_PORT` | — | — | 6334 |
+| `<NAME>_USER` | ✅ | — | — |
+| `<NAME>_PASSWORD` | ✅ | ✅ | — |
+| `<NAME>_API_KEY` | — | — | ✅ |
+| `<NAME>_DATABASE` | ✅ | — | — |
 
 A postgres called `db` publishes `DB_URL`; one called `orders-db` publishes
 `ORDERS_DB_URL`; a valkey called `cache` publishes `CACHE_URL` and no
 `CACHE_USER`, because valkey has no users. A type omits the suffixes it has no
-answer for rather than publishing them empty. Two consequences, and both are the
-point: a service can reach two databases without a collision, and there are six
-suffixes to learn rather than a different set per type.
+answer for rather than publishing them empty — so an absent `VECTORS_PASSWORD`
+is not a bug, it is a qdrant having no password. Two consequences, and both are
+the point: a service can reach two databases without a collision, and there is
+one vocabulary of suffixes rather than a different set per type.
 
 **These are not the names your framework expects, and that is deliberate.** There
-is no `DATABASE_URL`, no `PGHOST`, no `REDIS_URL`, no `MONGODB_URI`. The first
-thing to try is to have the application read `DB_URL` — one line in the app, and
-nothing about it can go stale.
+is no `DATABASE_URL`, no `PGHOST`, no `REDIS_URL`, no `QDRANT_URL` unless the
+resource happens to be called `qdrant`. The first thing to try is to have the
+application read `DB_URL` — one line in the app, and nothing about it can go
+stale.
 
 If you genuinely cannot change the application, read the value out and pass it
 under the name it wants:
@@ -638,14 +651,14 @@ command names what it rolled. Nothing but variable *names* is printed;
 `gg resource secrets` reads the values.
 
 **Who supplies the new value is the only difference between the types.** For
-`postgres`, `ferretdb` and `valkey`, gagarin mints one and `--env` is refused — a
+`postgres`, `qdrant` and `valkey`, gagarin mints one and `--env` is refused — a
 password you chose is one the running server has never heard of. For an
 `external` the values are yours, so `--env` or `--env-file` is required.
 
 | type | what happens | cost |
 |---|---|---|
 | `postgres` | the running server is told immediately | none |
-| `ferretdb` | the same, in the Postgres it stores into | none |
+| `qdrant` | the pod is replaced; the key is read at startup | a few seconds away; **the data survives** |
 | `valkey` | the pod is replaced; the password is read at startup | **the cache is emptied** |
 | `external` | nothing of ours runs, so nothing of ours restarts | none |
 
@@ -701,9 +714,9 @@ Four types will never cover everything. Run it as an ordinary service with a
 volume:
 
 ```
-gg registry copy shop/qdrant qdrant/qdrant
-gg deploy shop/vectors:6333 qdrant --volume /qdrant/storage --volume-size 20
-gg deps add shop/api vectors
+gg registry copy shop/clickhouse clickhouse/clickhouse-server
+gg deploy shop/analytics:8123 clickhouse --volume /var/lib/clickhouse --volume-size 50
+gg deps add shop/api analytics
 ```
 
 Everything else behaves the same way: a private address by name, a volume that
@@ -713,8 +726,8 @@ image, the version and the port and carries them; here you pick them, and
 upgrades, tuning and consequences are yours.
 
 **If a type exists, use the resource. If it does not, this is the normal path,
-not a workaround.** Gagarin has no type for DuckDB, Cassandra, ClickHouse or a
-vector database, and that is not an error.
+not a workaround.** Gagarin has no type for ClickHouse, Cassandra, DuckDB or a
+document store, and that is not an error.
 
 Never write a one-line Dockerfile that only says `FROM` in order to get an image
 in. `gg registry copy` is the same thing, done properly, and it copies every
@@ -1025,7 +1038,7 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | code | what to do |
 |---|---|
 | `no_such_resource` | `gg status <project>` lists what it has |
-| `unknown_resource_type` | `postgres`, `ferretdb`, `valkey` or `external` |
+| `unknown_resource_type` | `postgres`, `qdrant`, `valkey` or `external` |
 | `wrong_resource_type` | another type already holds that name. Destroy it — which throws its data away — or pick another name |
 | `invalid_storage` | 1 to 100 GB |
 | `no_storage` | this type has no volume: drop `--storage` |
