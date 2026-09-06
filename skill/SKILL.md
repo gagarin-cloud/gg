@@ -59,6 +59,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg resource add P/NAME TYPE` | provision postgres, qdrant, valkey or external |
 | `gg resource secrets P/NAME` | its connection values, for something outside the project |
 | `gg resource rotate P/NAME` | new credentials, and everything holding them rolls |
+| `gg connect P/NAME` | that resource on this machine, for as long as the command runs |
 | `gg resource backup` / `backups` / `restore P/NEW --source OLD` | postgres recovery |
 | `gg deps add P/SVC NAME...` / `deps ls` / `deps rm` | what a service may reach, and whose credentials it holds |
 | `gg domain add P/SVC [DOMAIN]` / `domain ls P` / `domain rm` | addresses on the internet |
@@ -587,16 +588,55 @@ Four rules that follow, and each one fails quietly if you get it wrong:
   declaration that opens the route, so this is no longer a trap — but do not
   conclude from a working password that the route is open for some *other*
   service you did not declare.
-- **`gg resource secrets` is for callers outside the graph** — a `psql` on the
-  user's laptop, a client running outside gagarin, or checking what an
-  application is actually being handed. You do not need it to connect a service
-  in the same project. Treat its output as a live credential: do not echo it into
+- **`gg resource secrets` is for reading the values from outside the graph** —
+  checking what an application is being handed, or wiring up a client that runs
+  outside gagarin. The values name the in-project host, which this machine
+  cannot reach: to actually connect from here, `gg connect` opens a tunnel and
+  prints them rewritten for it. You do not need either to connect a service in
+  the same project. Treat the output as a live credential: do not echo it into
   a chat, a commit, or a summary.
 
 ```
 gg resource secrets shop/db                 # KEY=VALUE lines, for --env-file
 gg resource secrets shop/db --format json   # for jq
 ```
+
+### Meddling from this machine: `gg connect`
+
+```
+gg connect shop/db
+```
+
+A resource is not on the internet, and stays off it. When a human needs psql
+against the real database — a migration to babysit, a row to look at — this
+opens a tunnel from this machine and prints the same variables a service would
+hold, rewritten to point at 127.0.0.1:
+
+```
+db is a postgres. The tunnel is up:
+
+  DB_HOST=127.0.0.1
+  DB_URL=postgres://app:…@127.0.0.1:5432/app?sslmode=disable
+  ...
+```
+
+- **It lasts exactly as long as the command.** Ctrl-C closes the tunnel and
+  every connection through it. Nothing is exposed, and there is nothing to
+  undo afterwards.
+- **It is for the machine gg runs on, never for services.** A service reaches
+  a resource by declaring it — `gg deps add shop/api db` — which needs no
+  tunnel and survives any command exiting. Do not leave `gg connect` running
+  as plumbing under an application.
+- **Every port the resource answers on gets a local end** — a qdrant tunnels
+  6333 and 6334 at once. Each prefers its own number and quietly takes a free
+  one when that is busy; `--port` pins the primary, and is refused rather than
+  moved when the port is taken.
+- **An external is refused** (`not_tunnelable`): nothing runs, so there is
+  nothing to tunnel to. Its values are `gg resource secrets`.
+- **The resource must be running.** A stopped one refuses with
+  `tunnel_unavailable`, and `gg status` says what it is waiting on.
+- The printed values are live credentials on a local port, and the same rule
+  as secrets applies: do not echo them into a chat, a commit, or a summary.
 
 ### `external`: a third-party key as a node on the graph
 
@@ -942,6 +982,7 @@ Start from the symptom, not from the logs.
 | killed with no log output | out of memory | `gg status` names the size to move to |
 | one service hangs calling another | a missing `gg deps` edge — an undeclared call is dropped, not refused | `gg deps ls shop/api`, or the REACHES column |
 | a database driver times out | the same, or the app is not reading `<NAME>_URL` | `gg deps ls`, then `gg resource secrets` to see what it should hold |
+| you need to look inside the database itself | it is not on the internet, by design | `gg connect shop/db`, then psql or redis-cli against the printed URL |
 | an SMTP connection hangs | ports 25, 465 and 587 are blocked platform-wide | use a provider's HTTPS API; nothing to fix here |
 | a custom domain serves no HTTPS | DNS does not point here yet | `gg domain ls`; the record is the user's to create |
 | everything shows `◌` and `0/0` | the project is suspended | read the `!` line above the table |
@@ -1049,6 +1090,8 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `no_env` | this type mints its own credentials; `gg resource secrets` reads them |
 | `rotate_failed` | **nothing changed** — the old credential still works. Check `gg status` for a resource that is not running, then retry |
 | `cannot_rotate` | no credentials recorded to replace; worth reporting as a bug |
+| `not_tunnelable` | an external runs nothing, so there is nothing to tunnel to; its values are `gg resource secrets` |
+| `tunnel_unavailable` | no running pod on the far end. `gg status` says why, then run `gg connect` again |
 
 **Backups**
 
