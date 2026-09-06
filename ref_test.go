@@ -181,3 +181,33 @@ func TestParseProjectRefusesUnusableNames(t *testing.T) {
 		})
 	}
 }
+
+func TestParseJobTakesProjectAndName(t *testing.T) {
+	project, name, err := parseJob("shop/migrate")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if project != "shop" || name != "migrate" {
+		t.Errorf("got %q/%q", project, name)
+	}
+}
+
+// A port on a job is the one mistake worth a sentence: it says the caller
+// thinks the thing listens. Refused, with the shape a run has.
+func TestParseJobRefusesAPort(t *testing.T) {
+	_, _, err := parseJob("shop/migrate:8080")
+	if err == nil {
+		t.Fatal("expected a port on a job to be refused")
+	}
+	for _, want := range []string{"a job has none", "gg run shop/migrate IMAGE:TAG"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not say %q", err, want)
+		}
+	}
+}
+
+func TestParseJobRefusesABareName(t *testing.T) {
+	if _, _, err := parseJob("migrate"); err == nil {
+		t.Fatal("expected a bare job name to be refused")
+	}
+}

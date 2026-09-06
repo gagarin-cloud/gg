@@ -49,6 +49,11 @@ func state(s serviceStatus) string {
 	// small lie that makes a reader distrust the whole screen.
 	case isExternalKind(s.Kind):
 		return "external"
+	// A job has a run rather than replicas, and the run has an end. "Done" is
+	// a state the dots cannot say: a filled dot means "up", and a job that
+	// ran to completion is not up, it is finished — which is its success.
+	case isJobKind(s.Kind):
+		return jobState(s)
 	case !s.Actual.Exists, s.Actual.Stalled:
 		return "failing"
 	// Nothing is meant to be running, so nothing missing. Today this means the
@@ -61,6 +66,27 @@ func state(s serviceStatus) string {
 		return "starting"
 	default:
 		return "running"
+	}
+}
+
+// jobState is state for a job: the phase of its latest run, in the table's
+// vocabulary. Failed is "failing" because the fix is the same — read the
+// message under the table — and a finished run is "done".
+func jobState(s serviceStatus) string {
+	if !s.Actual.Exists || s.Actual.Run == nil {
+		return "failing"
+	}
+	switch s.Actual.Run.Phase {
+	case "done":
+		return "done"
+	case "failed":
+		return "failing"
+	case "running":
+		return "running"
+	case "suspended":
+		return "stopped"
+	default:
+		return "starting"
 	}
 }
 
@@ -119,8 +145,8 @@ func printStatusTable(st statusResp) {
 	// harder to find.
 	anyVolume := false
 	// Likewise a kind column: it only earns its place once a project has
-	// something in it that is not a service.
-	anyResource := false
+	// something in it that is not a service — a resource, or a job.
+	anyKind := false
 	// Which names in this project are externals, so an edge pointing at one can
 	// be marked where the edges are listed. Two edges in the same cell do not
 	// mean the same thing — reaching `pg` is enforced by a NetworkPolicy,
@@ -131,8 +157,8 @@ func printStatusTable(st statusResp) {
 		if s.VolumePath != "" {
 			anyVolume = true
 		}
-		if isResourceKind(s.Kind) {
-			anyResource = true
+		if isResourceKind(s.Kind) || isJobKind(s.Kind) {
+			anyKind = true
 		}
 		if isExternalKind(s.Kind) {
 			externals[s.Name] = true
@@ -140,7 +166,7 @@ func printStatusTable(st statusResp) {
 	}
 
 	head := []string{"", "SERVICE"}
-	if anyResource {
+	if anyKind {
 		head = append(head, "KIND")
 	}
 	// SIZE is always shown, unlike VOLUME and KIND. Every service has one, so it
@@ -166,7 +192,7 @@ func printStatusTable(st statusResp) {
 		// shade of it.
 		mark := map[string]string{
 			"running": "●", "starting": "◐", "failing": "○", "stopped": "◌",
-			"external": "◆",
+			"external": "◆", "done": "✓",
 		}[state(s)]
 		marked := make([]string, 0, len(s.Needs))
 		for _, n := range s.Needs {
@@ -180,15 +206,24 @@ func printStatusTable(st statusResp) {
 			reaches = "—"
 		}
 		row := []string{mark, s.Name}
-		if anyResource {
+		if anyKind {
 			row = append(row, kindLabel(s.Kind))
 		}
-		if isExternalKind(s.Kind) {
+		switch {
+		case isExternalKind(s.Kind):
 			// Size, readiness, port and image are all facts about a container.
 			// A dash says "not applicable" where a zero would say "zero" and
 			// send somebody looking for the pod that is not listening on it.
 			row = append(row, "—", "—", "—", reaches, "—")
-		} else {
+		case isJobKind(s.Kind):
+			// A job has a run where a service has replicas, so the READY cell
+			// says how the latest run stands — and the port is a dash for the
+			// same reason an external's is: there is no listener to name.
+			row = append(row,
+				sizeLabel(s.Size), runLabel(s), "—",
+				reaches, shortImage(s.Image, st.ProjectID),
+			)
+		default:
 			row = append(row,
 				sizeLabel(s.Size),
 				fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired),
@@ -271,6 +306,9 @@ func printStatusTable(st statusResp) {
 	if seen["stopped"] {
 		notes = append(notes, "◌ stopped")
 	}
+	if seen["done"] {
+		notes = append(notes, "✓ done (a job that ran to completion)")
+	}
 	// Says what it is rather than how it is, because there is no how: nothing
 	// runs, so there is no state to be in. The clause about egress is here and
 	// not only in the docs — this table is where somebody forms their idea of
@@ -325,6 +363,20 @@ func formatUSD(microUSD int64) string {
 
 func isResourceKind(kind string) bool { return strings.HasPrefix(kind, "resource:") }
 
+// isJobKind is the row that runs to completion. Compared as a string for the
+// reason isExternalKind is.
+func isJobKind(kind string) bool { return kind == "job" }
+
+// runLabel is what a job's READY cell says: the latest run's phase, and its
+// revision, so a reader can tell the run they started from the one before.
+func runLabel(s serviceStatus) string {
+	r := s.Actual.Run
+	if r == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%s (r%d)", r.Phase, r.Revision)
+}
+
 // isExternalKind is the one resource type gg renders differently, because it is
 // the one with no pod behind it. Compared as a string rather than asked of the
 // control plane: the status response carries the kind, and a table that needed a
@@ -338,6 +390,9 @@ func isExternalKind(kind string) bool { return kind == "resource:"+typeExternal 
 func kindLabel(kind string) string {
 	if isResourceKind(kind) {
 		return strings.TrimPrefix(kind, "resource:")
+	}
+	if isJobKind(kind) {
+		return "job"
 	}
 	return "service"
 }

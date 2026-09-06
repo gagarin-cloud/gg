@@ -455,3 +455,82 @@ func TestAnEdgeToAnExternalIsMarked(t *testing.T) {
 		t.Errorf("an edge to a database was marked as inventory:\n%s", out)
 	}
 }
+
+// --- jobs ---------------------------------------------------------------------
+
+func jobRow(name, phase string, rev int) serviceStatus {
+	s := serviceStatus{Kind: "job", Name: name, Image: "reg/p/" + name + ":1", Size: "s", InSync: true}
+	s.Actual.Exists = true
+	s.Actual.Run = &runState{Revision: rev, Phase: phase}
+	return s
+}
+
+// A finished job is not "running" and not "failing": it is done, and the
+// table has to have a word for that or every completed migration reads as a
+// fault. The KIND column appears for it, the port is a dash, and READY says
+// how the run stands.
+func TestAFinishedJobReadsAsDone(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{svc("web"), jobRow("migrate", "done", 3)}})
+	})
+	for _, want := range []string{
+		"KIND", "✓  migrate  job", "done (r3)", "✓ done",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "○") {
+		t.Errorf("a finished job was marked as failing:\n%s", out)
+	}
+}
+
+// A failed run is failing, and the cluster's own sentence about it is printed
+// under the table like any other failure — that sentence is the exit code.
+func TestAFailedJobSaysWhy(t *testing.T) {
+	failed := jobRow("migrate", "failed", 4)
+	failed.Actual.Message = "the container exited with code 2"
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{failed}})
+	})
+	for _, want := range []string{"○  migrate", "failed (r4)", "○ migrate: the container exited with code 2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestJobStates(t *testing.T) {
+	for phase, want := range map[string]string{
+		"pending": "starting", "running": "running", "done": "done",
+		"failed": "failing", "suspended": "stopped",
+	} {
+		if got := state(jobRow("j", phase, 1)); got != want {
+			t.Errorf("phase %s: state %q, want %q", phase, got, want)
+		}
+	}
+	none := jobRow("j", "", 0)
+	none.Actual.Exists, none.Actual.Run = false, nil
+	if got := state(none); got != "failing" {
+		t.Errorf("a job with no run in the cluster: state %q, want failing", got)
+	}
+	if got := runLabel(none); got != "—" {
+		t.Errorf("runLabel with no run: %q", got)
+	}
+	if got := kindLabel("job"); got != "job" {
+		t.Errorf("kindLabel(job) = %q", got)
+	}
+}
+
+// The done legend only appears when something on screen is done.
+func TestNoDoneLegendWithoutAJob(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{svc("web")}})
+	})
+	if strings.Contains(out, "✓ done") {
+		t.Errorf("legend mentions a state nothing is in:\n%s", out)
+	}
+}

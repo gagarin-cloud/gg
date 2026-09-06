@@ -45,6 +45,7 @@ gg creds revoke 7                            # take one away
 gg init shop                   # create a project
 
 gg ship shop/web:8080          # build the current directory, push it, run it
+gg run shop/migrate migrate:v3 # run an image to completion, wait, exit with its code
 gg domain add shop/web         # put it on the internet, at an address gagarin gives you
 gg status shop                 # what gagarin intends, and what the cluster is actually doing
 gg logs shop/web
