@@ -53,6 +53,7 @@ gg resource add shop/db postgres    # a database; you choose the name and the si
 gg resource add shop/cache valkey   # postgres, qdrant and valkey — valkey is in-memory and loses data on restart
 gg deps add shop/web db             # let web reach it, and hand it DB_URL and the rest
 gg resource secrets shop/db         # the values, when something outside the project needs them
+gg connect shop/db                  # that database on 127.0.0.1, for as long as the command runs
 
 gg resource add shop/openai external --env-file .env.openai   # a third-party key as a node on the graph
 gg deps add shop/bot openai         # bot now holds OPENAI_API_KEY

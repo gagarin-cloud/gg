@@ -95,6 +95,7 @@ Environment (overrides the file; meant for CI):
 		newRollbackCmd(),
 		newEjectCmd(),
 		newResourceCmd(),
+		newConnectCmd(),
 		newDomainCmd(),
 		newRegistryCmd(),
 		newSkillCmd(),
@@ -945,6 +946,51 @@ outlive it by fourteen days). --backup names an exact key from
 		"the new resource's size: s, m or l (default s)")
 	cmd.Flags().IntVar(&storage, "storage", 0,
 		"the new resource's storage ceiling in GB (default 10)")
+	return cmd
+}
+
+// --- the tunnel ------------------------------------------------------------
+
+// newConnectCmd shares a word with "connecting" a service to a resource, and
+// the collision is survivable because the shapes differ: wiring the graph is
+// `gg deps add SERVICE NAME`, two names, while this takes one. The help of
+// each points at the other.
+func newConnectCmd() *cobra.Command {
+	var port int
+	cmd := &cobra.Command{
+		Use:   "connect PROJECT/RESOURCE",
+		Short: "tunnel a resource to this machine, for as long as this runs",
+		Long: `Reach a resource from this machine, through a tunnel that lasts exactly
+as long as this command does.
+
+  gg connect shop/db
+
+prints the same connection variables a service in the project would hold —
+DB_URL and the parts — rewritten to point at 127.0.0.1, and then holds the
+path open. Point psql, redis-cli or an ORM's migration tool at them; when
+you stop the command, the tunnel and everything through it closes.
+
+Resources are deliberately not on the internet, and this does not put one
+there: nothing is exposed, nothing to undo afterwards, and nobody else can
+use the tunnel — it exists only on this machine, only while this runs.
+
+Each port the resource answers on gets a local port: its own number when
+that is free on this machine, otherwise one that is. --port pins the
+primary port's local end, for a tool whose config already names one.
+
+This is for you, not for services. A service reaches a resource by
+declaring it — "gg deps add shop/api db" — which needs no tunnel and
+survives this command exiting. An external has no tunnel to open: nothing
+runs, and its values are "gg resource secrets".`,
+		Args: usageArgs(1, 1, "usage: gg connect PROJECT/RESOURCE [--port N]\n"+
+			"  e.g. gg connect shop/db\n"+
+			"  to let a SERVICE reach it instead: gg deps add shop/api db"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdConnect(args[0], port)
+		},
+	}
+	cmd.Flags().IntVar(&port, "port", 0,
+		"local port for the resource's primary port (default: the\nresource's own number if free, otherwise one that is)")
 	return cmd
 }
 
