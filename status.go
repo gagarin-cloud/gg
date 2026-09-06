@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // state reduces a service to the three answers a colour can carry. Deliberately
@@ -220,7 +221,7 @@ func printStatusTable(st statusResp) {
 			// says how the latest run stands — and the port is a dash for the
 			// same reason an external's is: there is no listener to name.
 			row = append(row,
-				sizeLabel(s.Size), runLabel(s), "—",
+				sizeLabel(s.Size), runPhase(s), "—",
 				reaches, shortImage(s.Image, st.ProjectID),
 			)
 		default:
@@ -247,6 +248,14 @@ func printStatusTable(st statusResp) {
 		// guess it.
 		if isExternalKind(s.Kind) {
 			lines = append(lines, line{text: fmt.Sprintf("◆  └ publishes %s_*", envPrefix(s.Name))})
+		}
+
+		// A job's run, under it, where a service's addresses go: which run,
+		// how it stands, when, how long, and the exit code once there is one.
+		// The one line somebody came to this table for, and the cell above
+		// has room for one word of it.
+		if isJobKind(s.Kind) {
+			lines = append(lines, line{text: runLine(s)})
 		}
 
 		// Every address the service answers on, under it, in the order the
@@ -343,6 +352,10 @@ func printStatusTable(st statusResp) {
 		if !ok || s.Actual.Message == "" {
 			continue
 		}
+		// A job's message is already on the line under its row.
+		if isJobKind(s.Kind) {
+			continue
+		}
 		fmt.Printf("  %s %s: %s\n", g, s.Name, s.Actual.Message)
 	}
 	fmt.Printf("  %s today so far\n", formatUSD(st.UsageToday.MicroUSD))
@@ -367,14 +380,90 @@ func isResourceKind(kind string) bool { return strings.HasPrefix(kind, "resource
 // reason isExternalKind is.
 func isJobKind(kind string) bool { return kind == "job" }
 
-// runLabel is what a job's READY cell says: the latest run's phase, and its
-// revision, so a reader can tell the run they started from the one before.
-func runLabel(s serviceStatus) string {
-	r := s.Actual.Run
-	if r == nil {
+// runPhase is what a job's READY cell says: one word about the latest run.
+func runPhase(s serviceStatus) string {
+	if s.Actual.Run == nil {
 		return "—"
 	}
-	return fmt.Sprintf("%s (r%d)", r.Phase, r.Revision)
+	return s.Actual.Run.Phase
+}
+
+// runLine is the sentence under a job's row — the run's number, how it
+// stands, when, how long, the exit code, and for a run that is not going the
+// cluster's own reason. The mark repeats the row's, the way an address line
+// repeats its service's, so the line reads on its own.
+func runLine(s serviceStatus) string {
+	mark := map[string]string{
+		"running": "●", "starting": "◐", "failing": "○", "stopped": "◌", "done": "✓",
+	}[state(s)]
+	r := s.Actual.Run
+	if r == nil {
+		out := mark + "  └ no run in the cluster"
+		if s.Actual.Message != "" && s.Actual.Message != "no run in cluster" {
+			out += ": " + s.Actual.Message
+		}
+		return out
+	}
+	took := runDuration(r, time.Now())
+	var text string
+	switch r.Phase {
+	case "done":
+		text = fmt.Sprintf("run %d finished", r.Revision)
+		if r.FinishedAt != nil {
+			text += " " + ago(*r.FinishedAt)
+		}
+		if took != "" {
+			text += ", took " + took
+		}
+		text += ", exit 0"
+	case "failed":
+		text = fmt.Sprintf("run %d failed", r.Revision)
+		if r.FinishedAt != nil {
+			text += " " + ago(*r.FinishedAt)
+		}
+		if took != "" {
+			text += " after " + took
+		}
+		if r.ExitCode != nil {
+			text += fmt.Sprintf(", exit %d", *r.ExitCode)
+		}
+		if s.Actual.Message != "" {
+			text += ": " + s.Actual.Message
+		}
+	case "running":
+		text = fmt.Sprintf("run %d running", r.Revision)
+		if took != "" {
+			text += " for " + took
+		}
+	case "suspended":
+		text = fmt.Sprintf("run %d suspended with the project", r.Revision)
+	default:
+		text = fmt.Sprintf("run %d pending", r.Revision)
+		if s.Actual.Message != "" {
+			text += ": " + s.Actual.Message
+		}
+	}
+	return mark + "  └ " + text
+}
+
+// runDuration is how long a run took, or has been going. Seconds under two
+// minutes, then minutes; nothing is allowed past an hour.
+func runDuration(r *runState, now time.Time) string {
+	if r.StartedAt == nil {
+		return ""
+	}
+	end := now
+	if r.FinishedAt != nil {
+		end = *r.FinishedAt
+	}
+	secs := int(end.Sub(*r.StartedAt).Round(time.Second).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	if secs < 120 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	return fmt.Sprintf("%d min", (secs+30)/60)
 }
 
 // isExternalKind is the one resource type gg renders differently, because it is

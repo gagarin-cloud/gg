@@ -938,8 +938,11 @@ What to read, in the order it matters:
 4. **READY counts pods of the revision you asked for.** A redeploy that will not
    start reads `0/1` even while the previous version is still serving traffic.
    That is the honest number: the service is answering, but not with what you
-   shipped. For a job the cell is the latest run's phase and revision instead —
-   `done (r3)`, `failed (r4)`, `running (r5)` — and its PORT is a dash.
+   shipped. For a job the cell is the latest run's phase instead — `done`,
+   `failed`, `running`, `pending` — its PORT is a dash, and the line under the
+   row says which run, when, how long, the exit code, and for a failed run the
+   cluster's reason: `○  └ run 4 failed 2 minutes ago after 3s, exit 2: the
+   container exited with code 2`.
 5. **Addresses hang under their service**, marked `●` when there is nothing left
    to do and `○` with who is holding it up when there is. An address that is fine
    says nothing more than its own URL.

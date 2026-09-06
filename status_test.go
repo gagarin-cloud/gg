@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // capture runs f with stdout redirected, because printStatusTable writes rather
@@ -475,7 +476,7 @@ func TestAFinishedJobReadsAsDone(t *testing.T) {
 			Services: []serviceStatus{svc("web"), jobRow("migrate", "done", 3)}})
 	})
 	for _, want := range []string{
-		"KIND", "✓  migrate  job", "done (r3)", "✓ done",
+		"KIND", "✓  migrate  job", "done", "✓  └ run 3 finished", ", exit 0", "✓ done",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
@@ -495,10 +496,43 @@ func TestAFailedJobSaysWhy(t *testing.T) {
 		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
 			Services: []serviceStatus{failed}})
 	})
-	for _, want := range []string{"○  migrate", "failed (r4)", "○ migrate: the container exited with code 2"} {
+	for _, want := range []string{"○  migrate", "failed", "○  └ run 4 failed: the container exited with code 2"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "○ migrate:") {
+		t.Errorf("the run's reason was printed twice:\n%s", out)
+	}
+}
+
+// The line under a job's row carries the facts a person wants about a run:
+// when, how long, and how it ended.
+func TestTheRunLineSaysWhenAndHowLong(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-5 * time.Minute)
+	finished := now.Add(-4 * time.Minute)
+	code := 3
+	done := jobRow("migrate", "done", 3)
+	done.Actual.Run.StartedAt, done.Actual.Run.FinishedAt = &started, &finished
+	if got, want := runLine(done), "✓  └ run 3 finished 4m ago, took 60s, exit 0"; got != want {
+		t.Errorf("done: got %q, want %q", got, want)
+	}
+	failed := jobRow("migrate", "failed", 4)
+	failed.Actual.Run.StartedAt, failed.Actual.Run.FinishedAt, failed.Actual.Run.ExitCode = &started, &finished, &code
+	failed.Actual.Message = "the container exited with code 3"
+	if got, want := runLine(failed), "○  └ run 4 failed 4m ago after 60s, exit 3: the container exited with code 3"; got != want {
+		t.Errorf("failed: got %q, want %q", got, want)
+	}
+	running := jobRow("migrate", "running", 5)
+	running.Actual.Run.StartedAt = &started
+	if got := runLine(running); !strings.HasPrefix(got, "●  └ run 5 running for 5 min") {
+		t.Errorf("running: got %q", got)
+	}
+	pending := jobRow("migrate", "pending", 6)
+	pending.Actual.Message = "ImagePullBackOff"
+	if got, want := runLine(pending), "◐  └ run 6 pending: ImagePullBackOff"; got != want {
+		t.Errorf("pending: got %q, want %q", got, want)
 	}
 }
 
@@ -516,8 +550,11 @@ func TestJobStates(t *testing.T) {
 	if got := state(none); got != "failing" {
 		t.Errorf("a job with no run in the cluster: state %q, want failing", got)
 	}
-	if got := runLabel(none); got != "—" {
-		t.Errorf("runLabel with no run: %q", got)
+	if got := runPhase(none); got != "—" {
+		t.Errorf("runPhase with no run: %q", got)
+	}
+	if got, want := runLine(none), "○  └ no run in the cluster"; got != want {
+		t.Errorf("runLine with no run: got %q, want %q", got, want)
 	}
 	if got := kindLabel("job"); got != "job" {
 		t.Errorf("kindLabel(job) = %q", got)
