@@ -77,6 +77,13 @@ func jobState(s serviceStatus) string {
 	if !s.Actual.Exists || s.Actual.Run == nil {
 		return "failing"
 	}
+	// Drift means the run that was asked for is not the run in the cluster —
+	// re-running the same image is the ordinary case, so the previous run's
+	// "done" would otherwise paint a tick over a run that never started. The
+	// same answer a service gets for the same condition: still starting.
+	if !s.InSync {
+		return "starting"
+	}
 	switch s.Actual.Run.Phase {
 	case "done":
 		return "done"
@@ -403,6 +410,13 @@ func runLine(s serviceStatus) string {
 			out += ": " + s.Actual.Message
 		}
 		return out
+	}
+	// The run described below is the one in the cluster, which during drift is
+	// not the one that was asked for. Said before it, because otherwise the
+	// line reads as a report on the run somebody just started.
+	if !s.InSync {
+		return fmt.Sprintf("%s  └ waiting for the run that was asked for; run %d is what is in the cluster",
+			mark, r.Revision)
 	}
 	took := runDuration(r, time.Now())
 	var text string

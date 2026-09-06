@@ -67,11 +67,25 @@ func (v *runFlagVars) finish() (*runFlags, error) {
 	return v.f, nil
 }
 
-// runPoll is how often the run is asked about. Two seconds is under the time
-// a pod takes to schedule and pull, so a short script is reported the moment
-// it ends rather than up to a poll later; and it is a read of one project's
-// status, which the control plane already answers on every `gg status`.
-const runPoll = 2 * time.Second
+// runPoll is how often the run is asked about, and it widens with the run.
+//
+// Two seconds at the start, because that is under the time a pod takes to
+// schedule and pull and most runs are short: a migration that ends in forty
+// seconds is reported the moment it ends rather than up to a poll later. But
+// a status read is a cluster read per service in the project, and holding two
+// seconds for an hour is eighteen hundred of them to learn something that
+// happens once. After a minute the answer is no longer imminent, so the
+// question is asked less often.
+func runPoll(elapsed time.Duration) time.Duration {
+	switch {
+	case elapsed < time.Minute:
+		return 2 * time.Second
+	case elapsed < 5*time.Minute:
+		return 5 * time.Second
+	default:
+		return 15 * time.Second
+	}
+}
 
 // runWait is how long gg waits before giving up on a run and leaving it to
 // `gg status`. Over the platform's own ceiling on a run, so that the ceiling
@@ -135,7 +149,8 @@ func cmdRun(ref, image string, f *runFlags) error {
 // an older run still finishing must not be mistaken for this one, and a
 // re-run started by somebody else meanwhile must not be either.
 func waitForRun(project, name string, revision int) error {
-	giveUp := time.Now().Add(runWait)
+	started := time.Now()
+	giveUp := started.Add(runWait)
 	last := ""
 	var run *runState
 	var message string
@@ -173,7 +188,7 @@ func waitForRun(project, name string, revision int) error {
 			return fmt.Errorf("%s is still %s after %s; `gg status %s` reports how it ends",
 				name, phase, runWait, project)
 		}
-		time.Sleep(runPoll)
+		time.Sleep(runPoll(time.Since(started)))
 	}
 
 	// What it wrote, whatever happened. The failure case is the one where

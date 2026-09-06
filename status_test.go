@@ -561,6 +561,21 @@ func TestJobStates(t *testing.T) {
 	}
 }
 
+// A job whose asked-for run is not the run in the cluster must not read as
+// done. Re-running the same image is the ordinary case, so the previous run's
+// tick over a run that never started is the exact wrong answer.
+func TestAJobWithDriftDoesNotReadAsDone(t *testing.T) {
+	drifting := jobRow("migrate", "done", 3)
+	drifting.InSync = false
+	if got := state(drifting); got != "starting" {
+		t.Errorf("state %q, want starting", got)
+	}
+	if got, want := runLine(drifting),
+		"◐  └ waiting for the run that was asked for; run 3 is what is in the cluster"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // The done legend only appears when something on screen is done.
 func TestNoDoneLegendWithoutAJob(t *testing.T) {
 	out := capture(t, func() {

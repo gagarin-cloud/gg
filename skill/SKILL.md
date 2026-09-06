@@ -18,9 +18,12 @@ first; they are the parts that stop you getting it wrong.
    service or a resource inside it. Nothing is inferred from the directory you
    stand in. There is no default project to configure — a command that does not
    name one is refused with the shape it should have had.
-2. **Every write is asynchronous.** A command that exits zero recorded a demand;
-   it did not watch it come true. Only `gg status <project>` reads the cluster,
-   and it is the only thing that can answer "is it up".
+2. **Every write is asynchronous, except `gg run`.** A command that exits zero
+   recorded a demand; it did not watch it come true. `gg status <project>` reads
+   the cluster and is the only thing that can answer "is it up". The one
+   exception is `gg run`, and it is an exception because a run *ends*: it waits,
+   prints what the run wrote, and exits with the script's own code. Nothing else
+   here has an end to wait for.
 3. **Gagarin runs images from its own registry only.** `gg ship` is build, push
    and deploy fused; the three exist separately for CI. Somebody else's image
    comes in with `gg registry copy`.
