@@ -278,6 +278,15 @@ Environment is replaced wholesale, because it is part of what this
 revision ran with and is what a rollback puts back. Pass every variable
 the service needs, every time.
 
+Which means changing one of them means having all of them. If that is
+awkward — a setting several services share, or one you want changed
+without a deploy and without the .env file to hand — put it in an
+external resource instead, where a single key can be replaced on its own:
+
+  gg resource add shop/config external --env-file .env.shared
+  gg deps add shop/web config
+  gg resource rotate shop/config --set LOG_LEVEL=debug
+
 What the service holds is that environment plus the connection variables
 of any resource it reaches. Those are not passed here and are not stored
 against the revision — the platform derives them from the graph every
@@ -717,10 +726,27 @@ volume — those are declarations about the shape of the project rather than
 parts of the artifact, and putting yesterday's code back says nothing
 about them.
 
+It also does not restore the variables a service inherits from resources
+it needs. Those are resolved from the graph as it stands now, so a
+rollback never puts a service back onto a password that has since been
+rotated. To put those back, roll back the resource itself:
+
+  gg rollback shop/config --to 4
+
+which works for an external, whose values are yours. It is refused for a
+postgres, qdrant or valkey: gagarin mints those credentials, so there is
+no earlier value of yours to go back to.
+
+Rolling back an external changes what every service declaring it holds,
+and they are restarted for it — so the answer names them. That is the
+right blast radius for shared config, and the reason it is done here
+rather than as a side effect of rolling back one of its dependents.
+
 A rollback is itself a deploy: it is recorded as a new revision naming the
 one it restored, and nothing leaves the history.`,
 		Args: usageArgs(1, 1, "usage: gg rollback PROJECT/SERVICE [--to REVISION]\n"+
-			"  e.g. gg rollback shop/web"),
+			"  e.g. gg rollback shop/web\n"+
+			"  an external's values: gg rollback shop/config --to 4"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdRollback(args[0], to)
 		},
@@ -732,17 +758,38 @@ one it restored, and nothing leaves the history.`,
 
 func newEjectCmd() *cobra.Command {
 	var out string
+	var withSecrets bool
 	cmd := &cobra.Command{
 		Use:   "eject PROJECT",
 		Short: "the Kubernetes manifests for this project. Owner only",
-		Long: "the Kubernetes manifests for this project, so you can run it\n" +
-			"somewhere else. Owner only.",
-		Args: usageArgs(1, 1, "usage: gg eject PROJECT [-o FILE]"),
+		Long: `The Kubernetes manifests for this project, so you can run it somewhere
+else. Owner only.
+
+Not a description of the deployment — the objects themselves, the ones
+gagarin converges toward. The file says what it does not carry and what
+to do about each: images you built, the registry pull secret, and the
+data in your volumes.
+
+One more thing it holds back, and this one is a credential. Values that
+came from an external resource are third-party keys somebody else issued
+you: they stay live wherever this file ends up, they are not gagarin's to
+mint or to hand over, and unlike a database password minted for this
+project they are worth something to anyone who reads them. They come out
+as a placeholder naming the resource, and the header lists exactly which
+variables to fill in.
+
+--with-secrets exports them anyway, for a migration you are doing now
+into a file you will delete. Everything else — a resource's password, a
+service's own environment — is in the clear either way, because an export
+without it does not come up.`,
+		Args: usageArgs(1, 1, "usage: gg eject PROJECT [-o FILE] [--with-secrets]"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdEject(args[0], out)
+			return cmdEject(args[0], out, withSecrets)
 		},
 	}
 	cmd.Flags().StringVarP(&out, "output", "o", "", "write to a file instead of stdout")
+	cmd.Flags().BoolVar(&withSecrets, "with-secrets", false,
+		"include third-party keys from external resources.\nThey are placeholders otherwise, listed in the header")
 	return cmd
 }
 
@@ -857,9 +904,10 @@ is the credentials and a line on the graph saying who uses them.`,
 
 func newResourceSecretsCmd() *cobra.Command {
 	var format string
+	var names bool
 	cmd := &cobra.Command{
 		Use:   "secrets PROJECT/NAME",
-		Short: "print its credentials, for a human or a client outside gagarin",
+		Short: "print its credentials, or with --names just what it publishes",
 		Long: `Print what a caller needs to connect, and nothing else.
 
 You do not need this to connect a service in the same project. That is
@@ -874,14 +922,31 @@ injects — named after the resource, so a postgres called db gives DB_URL,
 DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_DATABASE.
 
 Treat the output as a credential. It is a live password, and --format env
-exists to be piped, not pasted into a terminal somebody is sharing.`,
-		Args: usageArgs(1, 1, "usage: gg resource secrets PROJECT/NAME\n  e.g. gg resource secrets shop/db"),
+exists to be piped, not pasted into a terminal somebody is sharing.
+
+--names prints the variable names and no values, which is what you want
+when the question is "what does this publish" rather than "what is the
+password" — before changing one key of an external, say, when you need
+to know whether it is called API_KEY or TOKEN. It asks a different
+endpoint: the values are not fetched, not just not printed. Reach for it
+by default, and especially when the output lands in a transcript.`,
+		Args: usageArgs(1, 1, "usage: gg resource secrets PROJECT/NAME\n"+
+			"  e.g. gg resource secrets shop/db\n"+
+			"  names only: gg resource secrets shop/openai --names"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if names {
+				return cmdResourceKeys(args[0], format)
+			}
 			return cmdResourceSecrets(args[0], format)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "env",
 		"env (KEY=VALUE lines, for --env-file) or json")
+	// A flag rather than a verb, because it is the same question asked with
+	// less of an answer — but it reaches a different endpoint, so the values
+	// never leave the control plane rather than being fetched and dropped here.
+	cmd.Flags().BoolVar(&names, "names", false,
+		"print the variable names and no values.\nAsks an endpoint that never returns them")
 	return cmd
 }
 
@@ -895,6 +960,7 @@ exists to be piped, not pasted into a terminal somebody is sharing.`,
 // live credential is an act with a moment, and the two want different verbs.
 func newResourceRotateCmd() *cobra.Command {
 	var v *envFlagVars
+	var set, unset []string
 	cmd := &cobra.Command{
 		Use:   "rotate PROJECT/NAME",
 		Short: "replace its credentials, and roll everything holding them",
@@ -902,12 +968,32 @@ func newResourceRotateCmd() *cobra.Command {
 resource is restarted with them.
 
   gg resource rotate shop/db                                 a database
-  gg resource rotate shop/openai --env-file .env.openai.new  an external
+  gg resource rotate shop/openai --set API_KEY=sk-new        one of its values
+  gg resource rotate shop/openai --env-file .env.openai.new  all of them
 
 Who supplies the new value is the only difference between the types. For
 a postgres, qdrant or valkey, gagarin mints one and --env is refused —
 a password you chose is one the running server has never heard of. For an
-external the values are yours, so --env or --env-file is required.
+external the values are yours, so one of --set, --unset, --env-file or
+--env is required.
+
+An external usually holds more than one value, and the two ways of
+changing them mean different things:
+
+  --set / --unset   change these, leave the rest exactly as they are.
+                    What you want when one key of several is being
+                    replaced, which is most rotations.
+  --env / --env-file  the bundle is now precisely this. Anything not in
+                    it stops being published — right for a provider
+                    migration where every value is new, and a way to
+                    lose the others by accident when it is not. The
+                    command names what it dropped, so you find out at
+                    the time rather than from a dependent that can no
+                    longer authenticate.
+
+They cannot be combined: the two say the same thing in incompatible
+words, and a rule for reconciling them would be one nobody predicted
+from the command they typed.
 
 Nothing is printed but the names of the variables. Read the values with
 "gg resource secrets" if you need them.
@@ -931,21 +1017,35 @@ If it fails, nothing changed: the old credential is still in use and the
 command is safe to run again.`,
 		Args: usageArgs(1, 1, "usage: gg resource rotate PROJECT/NAME\n"+
 			"  e.g. gg resource rotate shop/db\n"+
-			"  for an external: gg resource rotate shop/openai --env-file .env.new"),
+			"  one value of an external: gg resource rotate shop/openai --set API_KEY=sk-new\n"+
+			"  all of them: gg resource rotate shop/openai --env-file .env.new"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := v.finish()
 			if err != nil {
 				return err
 			}
-			return cmdResourceRotate(args[0], e)
+			return cmdResourceRotate(args[0], e, set, unset)
 		},
 	}
 	// Same pair as `gg resource add`, and --env-file for the same reason: a key
 	// on the command line is in the shell history and in every agent transcript
 	// that ran it.
 	v = bindEnvFlags(cmd.Flags(),
-		"a new value for an external, K=V (repeatable).\nPrefer --env-file: this goes into your shell history",
-		"read an external's new values from KEY=VALUE lines\n(repeatable; later files win, --env wins over all files)")
+		"replace everything an external publishes, K=V (repeatable).\nDrops any key not named — --set changes one and keeps\nthe rest. Prefer --env-file: this goes into your shell history",
+		"replace everything an external publishes, from KEY=VALUE\nlines (repeatable; later files win, --env wins over all files)")
+	// The pair that amends rather than replaces, and the reason this command
+	// needed a second shape at all.
+	//
+	// --set takes a K=V on argv where --env is discouraged from doing so, and
+	// that is deliberate rather than inconsistent: a whole bundle belongs in a
+	// file, and a single key being replaced right now is a thing somebody types.
+	// The shell-history cost is real either way and named in the usage; the
+	// alternative — a file per key — is a ceremony that would send people back
+	// to --env, which is the flag that loses the other values.
+	cmd.Flags().StringArrayVar(&set, "set", nil,
+		"change one value of an external and keep the rest,\nK=V (repeatable). Goes into your shell history")
+	cmd.Flags().StringArrayVar(&unset, "unset", nil,
+		"stop an external publishing this key (repeatable).\nName it without the resource's prefix, as you set it")
 	return cmd
 }
 

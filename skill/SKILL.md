@@ -63,7 +63,10 @@ first; they are the parts that stop you getting it wrong.
 | `gg registry copy P/IMAGE SOURCE` | bring an image you did not build into the project |
 | `gg resource add P/NAME TYPE` | provision postgres, qdrant, valkey or external |
 | `gg resource secrets P/NAME` | its connection values, for something outside the project |
+| `gg resource secrets P/NAME --names` | just the variable names it publishes, no values |
 | `gg resource rotate P/NAME` | new credentials, and everything holding them rolls |
+| `gg resource rotate P/NAME --set K=V` | change one value an external publishes, keeping the rest |
+| `gg rollback P/NAME` | put a previous revision back — a service's deploy, or an external's values |
 | `gg connect P/NAME` | that resource on this machine, for as long as the command runs |
 | `gg resource backup` / `backups` / `restore P/NEW --source OLD` | postgres recovery |
 | `gg deps add P/SVC NAME...` / `deps ls` / `deps rm` | what a service may reach, and whose credentials it holds |
@@ -74,7 +77,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg members P` / `gg share P EMAIL [--role viewer]` / `gg unshare P EMAIL` | who can reach it |
 | `gg transfer P EMAIL` | offer the project, and its bill, to a member (they accept by email) |
 | `gg destroy P` or `P/NAME` | delete a project, a service or a resource (needs a human) |
-| `gg eject P -o file.yaml` | the Kubernetes manifests, so you can leave |
+| `gg eject P -o file.yaml` | the Kubernetes manifests, so you can leave (external keys are placeholders; `--with-secrets` includes them) |
 | `gg skill install` | refresh this skill from the binary |
 | `gg version` | which gg this is |
 
@@ -559,10 +562,14 @@ for — an honesty you can pass on when somebody asks.
   brief outage. There is no point-in-time recovery. Say that plainly if a user
   asks whether their data is safe, rather than implying an SLA nobody is on the
   hook for.
-- **A resource cannot be deployed over and cannot be rolled back** — it has no
-  deploy history. `gg deploy shop/db` against one is refused with `not_a_service`,
-  which is telling you the name is already a database. Nor can a resource declare
-  dependencies: it is reached, it does not reach.
+- **A resource cannot be deployed over.** `gg deploy shop/db` against one is
+  refused with `not_a_service`, which is telling you the name is already a
+  database. Nor can a resource declare dependencies: it is reached, it does not
+  reach.
+- **A managed resource cannot be rolled back**, because gagarin mints its
+  credentials and there is no earlier value of the user's to go back to. An
+  **external can** — its values are theirs — and `gg rollback P/NAME` is how a
+  config change is undone. See the external section below.
 
 ### Connecting one: the single call
 
@@ -647,8 +654,14 @@ Four rules that follow, and each one fails quietly if you get it wrong:
   prints them rewritten for it. You do not need either to connect a service in
   the same project. Treat the output as a live credential: do not echo it into
   a chat, a commit, or a summary.
+- **`--names` when the question is "what does it publish"**, which it usually
+  is: what a bundle holds, or what a key is called before you change it. It
+  asks a different endpoint, so the values are not fetched rather than merely
+  not printed — nothing secret passes through you. `gg status` cannot answer
+  this: it prints `DB_*`, the prefix rule rather than the contents.
 
 ```
+gg resource secrets shop/db --names         # just the names — reach for this first
 gg resource secrets shop/db                 # KEY=VALUE lines, for --env-file
 gg resource secrets shop/db --format json   # for jq
 ```
@@ -717,7 +730,9 @@ with a revoked key. As a resource it is one row and rotating is one command.
 - **Restating an external is refused** once it exists (`already_exists`). That
   refusal is deliberate: restating from an old `.env` would roll the key
   *backwards*, and the failure would be an authentication error nobody would
-  connect to the command they ran. Changing values is `gg resource rotate`.
+  connect to the command they ran. Changing values is `gg resource rotate`, and
+  changing *one* of them is `gg resource rotate --set K=V`, which leaves the
+  rest alone.
 - **It runs nothing.** No container, no port, no size, no storage, no backups,
   nothing to become ready. `gg status` shows it as `◆` with a line under it
   saying what it publishes.
@@ -731,11 +746,100 @@ with a revoked key. As a resource it is one row and rotating is one command.
   destroying an external is refused while anything still declares it, so a key
   cannot be dropped out from under a running service.
 
+### An external is also where shared config belongs
+
+Not only third-party credentials. **Anything several services read, or that
+changes without a deploy, belongs in an external** — feature flags, a log level,
+a region, an API base URL, a tuning constant.
+
+```
+gg resource add shop/config external --env-file .env.shared
+gg deps add shop/web config
+gg deps add shop/worker config          # both hold CONFIG_LOG_LEVEL
+
+gg resource rotate shop/config --set LOG_LEVEL=debug   # both roll, with the new value
+gg rollback shop/config                                # both roll back
+```
+
+**Why this beats `--env` on each deploy:** the same argument as for a key. An
+env on a deploy is a copy, so two services sharing a setting is two copies that
+can disagree, and changing it is two deploys with one you can forget. Resolved
+from the graph it is one row, one command, and every holder restarts.
+
+**The editing model is the sharper difference, and it is the one that decides
+this for you.** A service's environment can be changed only by `gg deploy`, and
+a deploy **replaces it wholesale** — every variable not restated is gone. That
+is deliberate, not an oversight: the revision records exactly what the service
+ran with, which is what makes a rollback mean something. The cost is that
+changing one variable requires having all of them.
+
+|  | service env | external |
+|---|---|---|
+| changed by | `gg deploy`, and only a deploy | `gg resource rotate` |
+| granularity | wholesale — anything omitted is **lost** | one key at a time |
+| needs the other values in hand | **yes** | no |
+| undo | `gg rollback P/SVC`, with the deploy | `gg rollback P/config` |
+
+**For you this is a hard edge, not an inconvenience.** Working without the
+project's `.env` file — from the console's Agent tab, or any session handed a
+task rather than a repository — you cannot safely change one variable on a
+service. The only route is to read the whole environment back out of
+`gg history` and restate it, which drops anything you misread and pulls **every**
+value the service holds, secrets included, through your transcript.
+
+`gg resource rotate P/config --set KEY=value` has neither problem: it touches the
+one key, needs nothing else in hand, and reads no other value. **So when a user
+asks you to change a setting and you do not have their env file, the answer is
+an external — and if the setting is currently in a deploy env, say so and offer
+to move it.**
+
+And to find out what a bundle holds before you change one key of it:
+
+```
+gg resource secrets shop/config --names      # names only; no values fetched
+```
+
+Use `--names` by default. Without it the command prints live credentials, and
+in your case that means into a transcript. `gg status` will not answer this
+either — it reports only that the resource publishes `CONFIG_*`, which is the
+prefix rule rather than the contents.
+
+The full lifecycle is there, which is what makes it safe to recommend:
+
+| | |
+|---|---|
+| set it | `gg resource add P/config external --env-file .env` |
+| change one value | `gg resource rotate P/config --set LOG_LEVEL=debug` |
+| remove one | `gg resource rotate P/config --unset REGION` |
+| see what it was | `gg history P/config` |
+| put it back | `gg rollback P/config [--to N]` |
+| see what keys it has | `gg resource secrets P/config --names` — no values fetched |
+| read the values | `gg resource secrets P/config` — live credentials; prefer `--names` |
+| who uses it | `gg status P` — and destroying it is refused while anyone does |
+
+**Where the line is.** Config *owned by one service* stays in its `gg deploy
+--env`, because that is the half a service rollback restores. Injected values
+are re-derived from the resources as they stand now — deliberately, so nobody is
+ever rolled back onto a rotated password — so `gg rollback shop/web` will not
+undo a config change. Undo it at the resource.
+
+Three properties to state when asked, because they are constraints and not
+oversights:
+
+- **The prefix is not optional.** A resource named `config` publishes
+  `CONFIG_LOG_LEVEL`, never a bare `LOG_LEVEL`. Name the resource so the prefix
+  reads the way the application wants it.
+- **A dependent cannot override a value.** Injected beats the service's own env
+  of the same name. Two services needing different values is two resources.
+- **Every dependent gets every key** in the bundle. Split by audience, not by
+  topic: one resource per set of services that should hold the same things.
+
 ### Rotating credentials
 
 ```
 gg resource rotate shop/db                                a database
-gg resource rotate shop/openai --env-file .env.new        an external
+gg resource rotate shop/openai --set API_KEY=sk-new       one of an external's values
+gg resource rotate shop/openai --env-file .env.new        all of them
 ```
 
 Everything holding the old credential is restarted with the new one, and the
@@ -745,7 +849,33 @@ command names what it rolled. Nothing but variable *names* is printed;
 **Who supplies the new value is the only difference between the types.** For
 `postgres`, `qdrant` and `valkey`, gagarin mints one and `--env` is refused — a
 password you chose is one the running server has never heard of. For an
-`external` the values are yours, so `--env` or `--env-file` is required.
+`external` the values are yours, so one of `--set`, `--unset`, `--env-file` or
+`--env` is required.
+
+**An external usually holds more than one value, and the two ways of changing
+them mean different things. Reach for `--set`.**
+
+| | what it means |
+|---|---|
+| `--set K=V`, `--unset K` | change these, leave every other key exactly as it is |
+| `--env`, `--env-file` | the bundle is now precisely this; anything not in it **stops being published** |
+
+`--env API_KEY=sk-new` on an external that also holds `BASE_URL` takes `BASE_URL`
+away from every dependent. That is the correct meaning of that request — it is
+the one to use after a provider migration where every value is new — and the
+wrong one for the far commoner job of replacing a single key. Reading the bundle
+back and restating it is not the answer either: that is the stale-file path, and
+it is how a key gets rolled backwards.
+
+The command names what stopped being published, so a loss is visible at the
+moment it happens rather than from a dependent that can no longer authenticate.
+The two flags cannot be combined — they say the same thing in incompatible
+words.
+
+`--unset` names a key **without** the resource's prefix, the way it was set:
+`--unset BASE_URL` on `shop/openai`, not `OPENAI_BASE_URL`. A key the resource
+does not publish is refused rather than quietly doing nothing, because a no-op
+reported as a success is how somebody believes a secret is gone when it is not.
 
 | type | what happens | cost |
 |---|---|---|
@@ -982,6 +1112,7 @@ accounts are not part of this model, and mentioning them is a regression.
 gg history  shop/web          revision numbers, images, when, and who
 gg rollback shop/web          put the previous deploy back
 gg rollback shop/web --to 3   a particular revision
+gg rollback shop/config       put an external's previous values back
 ```
 
 - **A rollback is a deploy.** It goes through the same write gate and is recorded
@@ -1181,7 +1312,7 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `invalid_size` | sizes are `s`, `m`, `l`; the message names the account's cap |
 | `no_such_revision` | `gg history` lists the ones it had |
 | `nothing_to_roll_back_to` | deployed only once. Not a bad call, just nothing to do |
-| `not_a_service` | that name is a resource or a job — you tried to deploy a service over it, or give it an address |
+| `not_a_service` | that name is a resource or a job — you tried to deploy a service over it, give it an address, or roll back a managed resource whose credentials gagarin mints (an external can be rolled back) |
 | `not_a_resource` | that name is a service. `gg status` shows which is which |
 
 **The graph**
@@ -1204,8 +1335,10 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `no_size` | an external runs nothing: drop `--size` |
 | `invalid_env` | write `API_KEY`, not `OPENAI_API_KEY` — the prefix is the resource's name |
 | `already_exists` | restating an external. `gg resource rotate` is how values change |
-| `env_required` | an external's values are the user's; pass `--env-file` |
-| `no_env` | this type mints its own credentials; `gg resource secrets` reads them |
+| `env_required` | an external's values are the user's; pass `--set K=V` for one of them, `--env-file` for all |
+| `conflicting_env` | `--env`/`--env-file` replace the bundle and `--set`/`--unset` amend it: use one or the other |
+| `no_such_key` | that external does not publish the key named in `--unset`. `gg resource secrets` lists what it does — and the name goes in without the resource's prefix |
+| `no_env` | this type mints its own credentials, so there is nothing to pass or amend; `gg resource secrets` reads them |
 | `rotate_failed` | **nothing changed** — the old credential still works. Check `gg status` for a resource that is not running, then retry |
 | `cannot_rotate` | no credentials recorded to replace; worth reporting as a bug |
 | `not_tunnelable` | an external runs nothing, so there is nothing to tunnel to; its values are `gg resource secrets` |
@@ -1286,11 +1419,20 @@ reproduces the project.
 Owner only, because the file holds every service's environment in the clear. It
 is written mode 0600 and you should treat it as a credential.
 
-Two things it deliberately does not contain, both explained in its own header:
+Three things it deliberately does not contain, all explained in its own header:
 the **images**, which are still in gagarin's registry and have to be pulled and
-pushed somewhere the user controls, and the **registry pull secret**, which is a
-live credential. Volume claims come back empty — data has to be taken out of the
-running service.
+pushed somewhere the user controls; the **registry pull secret**, which is a
+live credential; and the values from any **external resource**, which are
+third-party keys somebody else issued — they come out as a placeholder naming
+the resource, and the header lists exactly which variables to fill in. Volume
+claims come back empty — data has to be taken out of the running service.
+
+A minted credential — a database password — *is* in the file, and the asymmetry
+is the point: that password is only a risk against a database in the same file,
+and an export without it does not come up. A third-party key stays live wherever
+the file ends up. `gg eject shop --with-secrets -o project.yaml` includes them,
+for a migration happening now into a file that gets deleted; say what that means
+before running it with the flag.
 
 Offer this without being defensive when somebody asks what happens if gagarin
 goes away. It is a real answer and it is meant to be used.
