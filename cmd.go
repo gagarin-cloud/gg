@@ -91,6 +91,7 @@ Environment (overrides the file; meant for CI):
 		newShareCmd(),
 		newUnshareCmd(),
 		newMembersCmd(),
+		newTransferCmd(),
 		newDestroyCmd(),
 		newHistoryCmd(),
 		newRollbackCmd(),
@@ -625,6 +626,43 @@ func newMembersCmd() *cobra.Command {
 			return cmdMembers(args[0])
 		},
 	}
+}
+
+// newTransferCmd offers a project to somebody who already has access to it.
+//
+// Separate from `gg share` on purpose, and worth the second command: share gives
+// access away, and this gives away the bill. It takes two people and two clicks —
+// the owner approves the offer in their inbox, and the recipient accepts it in
+// theirs — because nobody should be able to make somebody else start paying for
+// something by typing their address.
+func newTransferCmd() *cobra.Command {
+	var as string
+	var withdraw bool
+	cmd := &cobra.Command{
+		Use:   "transfer PROJECT [EMAIL]",
+		Short: "offer a project, and its bill, to somebody it is shared with",
+		Args: usageArgs(1, 2, "usage: gg transfer PROJECT EMAIL [--as NAME]\n"+
+			"       gg transfer PROJECT --withdraw\n"+
+			"  e.g. gg transfer shop them@example.com\n"+
+			"  they must already be a member: gg share shop them@example.com"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if withdraw {
+				if len(args) != 1 {
+					return fmt.Errorf("usage: gg transfer PROJECT --withdraw")
+				}
+				return cmdTransferWithdraw(args[0])
+			}
+			if len(args) != 2 {
+				return fmt.Errorf("usage: gg transfer PROJECT EMAIL [--as NAME]")
+			}
+			return cmdTransfer(args[0], args[1], as)
+		},
+	}
+	cmd.Flags().StringVar(&as, "as", "",
+		"the name it takes in their account, when they already have one by this name")
+	cmd.Flags().BoolVar(&withdraw, "withdraw", false,
+		"take back an offer that has not been accepted yet")
+	return cmd
 }
 
 // --- destroying ------------------------------------------------------------

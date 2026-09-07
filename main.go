@@ -683,8 +683,9 @@ func cmdLogs(ref string) error {
 // ---- sharing ------------------------------------------------------------
 //
 // A project has one owner — the account that pays for it — and any number of
-// editors and viewers. You cannot hand over ownership here, because ownership is
-// the bill; and for the same reason nobody but the owner can delete a project.
+// editors and viewers. Sharing is one-sided because access is a gift: you grant
+// it, and it is simply waiting for them. Ownership is the bill, so it does not
+// work that way — see `gg transfer` below, which offers rather than assigns.
 
 func cmdShare(ref, email, role string) error {
 	if role == "" {
@@ -719,18 +720,25 @@ func cmdUnshare(ref, email string) error {
 	return nil
 }
 
+type roster struct {
+	Owner   string `json:"owner"`
+	Members []struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	} `json:"members"`
+	Offer *struct {
+		To        string `json:"to"`
+		Name      string `json:"name"`
+		OfferedBy string `json:"offered_by"`
+	} `json:"offer"`
+}
+
 func cmdMembers(ref string) error {
 	project, err := parseProject(ref)
 	if err != nil {
 		return err
 	}
-	var out struct {
-		Owner   string `json:"owner"`
-		Members []struct {
-			Email string `json:"email"`
-			Role  string `json:"role"`
-		} `json:"members"`
-	}
+	var out roster
 	if err := call("GET", "/v1/projects/"+project+"/members", nil, &out); err != nil {
 		return err
 	}
@@ -738,6 +746,52 @@ func cmdMembers(ref string) error {
 	for _, m := range out.Members {
 		fmt.Printf("%-32s %s\n", m.Email, m.Role)
 	}
+	// A pending handover is printed with the roster rather than behind a second
+	// command: the list answers "who can reach this", and "who is about to start
+	// paying for it" is the same question a day later.
+	if out.Offer != nil {
+		fmt.Printf("\n%-32s offered ownership, not yet accepted\n", out.Offer.To)
+		if out.Offer.Name != "" {
+			fmt.Printf("%-32s it would be called %q in their account\n", "", out.Offer.Name)
+		}
+		fmt.Printf("%-32s withdraw with: gg transfer %s --withdraw\n", "", ref)
+	}
+	return nil
+}
+
+// ---- handing a project over ---------------------------------------------
+//
+// The one thing `gg share` cannot do. Access is a gift and ownership is a bill,
+// so this offers rather than assigns: nothing changes until the other account
+// presses a button in its own inbox and agrees to start paying.
+
+func cmdTransfer(ref, email, as string) error {
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Next string `json:"next"`
+	}
+	if err := call("POST", "/v1/projects/"+project+"/transfer",
+		map[string]string{"email": email, "name": as}, &out); err != nil {
+		return err
+	}
+	fmt.Printf("offered %s to %s\n", project, email)
+	fmt.Println(out.Next)
+	fmt.Println("nothing has changed yet; `gg members " + ref + "` shows the offer standing")
+	return nil
+}
+
+func cmdTransferWithdraw(ref string) error {
+	project, err := parseProject(ref)
+	if err != nil {
+		return err
+	}
+	if err := call("DELETE", "/v1/projects/"+project+"/transfer", nil, nil); err != nil {
+		return err
+	}
+	fmt.Printf("the offer on %s is withdrawn; that link no longer works\n", project)
 	return nil
 }
 
