@@ -277,6 +277,15 @@ Environment is replaced wholesale, because it is part of what this
 revision ran with and is what a rollback puts back. Pass every variable
 the service needs, every time.
 
+Which means changing one of them means having all of them. If that is
+awkward — a setting several services share, or one you want changed
+without a deploy and without the .env file to hand — put it in an
+external resource instead, where a single key can be replaced on its own:
+
+  gg resource add shop/config external --env-file .env.shared
+  gg deps add shop/web config
+  gg resource rotate shop/config --set LOG_LEVEL=debug
+
 What the service holds is that environment plus the connection variables
 of any resource it reaches. Those are not passed here and are not stored
 against the revision — the platform derives them from the graph every

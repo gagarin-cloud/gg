@@ -757,6 +757,33 @@ env on a deploy is a copy, so two services sharing a setting is two copies that
 can disagree, and changing it is two deploys with one you can forget. Resolved
 from the graph it is one row, one command, and every holder restarts.
 
+**The editing model is the sharper difference, and it is the one that decides
+this for you.** A service's environment can be changed only by `gg deploy`, and
+a deploy **replaces it wholesale** — every variable not restated is gone. That
+is deliberate, not an oversight: the revision records exactly what the service
+ran with, which is what makes a rollback mean something. The cost is that
+changing one variable requires having all of them.
+
+|  | service env | external |
+|---|---|---|
+| changed by | `gg deploy`, and only a deploy | `gg resource rotate` |
+| granularity | wholesale — anything omitted is **lost** | one key at a time |
+| needs the other values in hand | **yes** | no |
+| undo | `gg rollback P/SVC`, with the deploy | `gg rollback P/config` |
+
+**For you this is a hard edge, not an inconvenience.** Working without the
+project's `.env` file — from the console's Agent tab, or any session handed a
+task rather than a repository — you cannot safely change one variable on a
+service. The only route is to read the whole environment back out of
+`gg history` and restate it, which drops anything you misread and pulls **every**
+value the service holds, secrets included, through your transcript.
+
+`gg resource rotate P/config --set KEY=value` has neither problem: it touches the
+one key, needs nothing else in hand, and reads no other value. **So when a user
+asks you to change a setting and you do not have their env file, the answer is
+an external — and if the setting is currently in a deploy env, say so and offer
+to move it.**
+
 The full lifecycle is there, which is what makes it safe to recommend:
 
 | | |
