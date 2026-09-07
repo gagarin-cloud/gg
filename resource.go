@@ -197,6 +197,51 @@ func cmdResourceSecrets(ref, format string) error {
 	return nil
 }
 
+// cmdResourceKeys prints what a resource publishes, by name, and fetches no
+// values to do it.
+//
+// The point is the endpoint, not the formatting. Printing names from the
+// secrets response would still have pulled every credential over the wire and
+// through this process — fine on a laptop, wrong in the place this is most
+// useful, which is an agent whose output is a transcript somebody else stores.
+// So `--names` is a different call, and the values never leave the control
+// plane.
+func cmdResourceKeys(ref, format string) error {
+	project, name, _, err := parseService(ref)
+	if err != nil {
+		return err
+	}
+	var out struct {
+		Resource string   `json:"resource"`
+		Type     string   `json:"type"`
+		Keys     []string `json:"keys"`
+	}
+	path := fmt.Sprintf("/v1/projects/%s/resources/%s/keys", project, name)
+	if err := call("GET", path, nil, &out); err != nil {
+		return err
+	}
+	sort.Strings(out.Keys)
+
+	switch format {
+	case "env", "":
+		// One per line and nothing else, so it composes: piping this into a
+		// loop is the shape somebody wants when they are checking a bundle
+		// against what an application reads.
+		for _, k := range out.Keys {
+			fmt.Println(k)
+		}
+	case "json":
+		raw, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(raw))
+	default:
+		return fmt.Errorf("unknown format %q\n  hint: env or json", format)
+	}
+	return nil
+}
+
 // ---- backups ------------------------------------------------------------
 
 // backupObject mirrors the API's shape: the key's basename is a UTC timestamp,

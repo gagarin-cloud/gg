@@ -106,6 +106,53 @@ func TestExternalWithNoValuesIsRefused(t *testing.T) {
 	}
 }
 
+// --- names without values ---------------------------------------------------
+
+// The point of --names is which endpoint it asks, not what it prints. Rendering
+// names from the secrets response would still pull every credential over the
+// wire and through this process — which is exactly what an agent must not do.
+func TestNamesAsksTheKeysEndpointAndNeverTheSecretsOne(t *testing.T) {
+	var paths []string
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"resource":"openai","type":"external",
+		  "keys":["OPENAI_BASE_URL","OPENAI_API_KEY"]}`))
+	})
+	out := capture(t, func() {
+		if err := cmdResourceKeys("shop/openai", "env"); err != nil {
+			t.Error(err)
+		}
+	})
+	if len(paths) != 1 || !strings.HasSuffix(paths[0], "/resources/openai/keys") {
+		t.Fatalf("the names read did not go to the keys endpoint: %v", paths)
+	}
+	for _, p := range paths {
+		if strings.HasSuffix(p, "/secrets") {
+			t.Errorf("--names fetched the values: %v", paths)
+		}
+	}
+	// Sorted, so two runs produce the same bytes and a diff means something.
+	if out != "OPENAI_API_KEY\nOPENAI_BASE_URL\n" {
+		t.Errorf("unexpected output:\n%q", out)
+	}
+}
+
+func TestNamesInJSONCarriesNoValues(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"resource":"openai","type":"external","keys":["OPENAI_API_KEY"]}`))
+	})
+	out := capture(t, func() {
+		if err := cmdResourceKeys("shop/openai", "json"); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "OPENAI_API_KEY") || !strings.Contains(out, `"keys"`) {
+		t.Errorf("the json form does not carry the names:\n%s", out)
+	}
+}
+
 // --- rolling an external back ----------------------------------------------
 //
 // The undo config never had. A service rollback cannot do this — the injected

@@ -62,6 +62,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg registry copy P/IMAGE SOURCE` | bring an image you did not build into the project |
 | `gg resource add P/NAME TYPE` | provision postgres, qdrant, valkey or external |
 | `gg resource secrets P/NAME` | its connection values, for something outside the project |
+| `gg resource secrets P/NAME --names` | just the variable names it publishes, no values |
 | `gg resource rotate P/NAME` | new credentials, and everything holding them rolls |
 | `gg resource rotate P/NAME --set K=V` | change one value an external publishes, keeping the rest |
 | `gg rollback P/NAME` | put a previous revision back — a service's deploy, or an external's values |
@@ -651,8 +652,14 @@ Four rules that follow, and each one fails quietly if you get it wrong:
   prints them rewritten for it. You do not need either to connect a service in
   the same project. Treat the output as a live credential: do not echo it into
   a chat, a commit, or a summary.
+- **`--names` when the question is "what does it publish"**, which it usually
+  is: what a bundle holds, or what a key is called before you change it. It
+  asks a different endpoint, so the values are not fetched rather than merely
+  not printed — nothing secret passes through you. `gg status` cannot answer
+  this: it prints `DB_*`, the prefix rule rather than the contents.
 
 ```
+gg resource secrets shop/db --names         # just the names — reach for this first
 gg resource secrets shop/db                 # KEY=VALUE lines, for --env-file
 gg resource secrets shop/db --format json   # for jq
 ```
@@ -784,6 +791,17 @@ asks you to change a setting and you do not have their env file, the answer is
 an external — and if the setting is currently in a deploy env, say so and offer
 to move it.**
 
+And to find out what a bundle holds before you change one key of it:
+
+```
+gg resource secrets shop/config --names      # names only; no values fetched
+```
+
+Use `--names` by default. Without it the command prints live credentials, and
+in your case that means into a transcript. `gg status` will not answer this
+either — it reports only that the resource publishes `CONFIG_*`, which is the
+prefix rule rather than the contents.
+
 The full lifecycle is there, which is what makes it safe to recommend:
 
 | | |
@@ -793,7 +811,8 @@ The full lifecycle is there, which is what makes it safe to recommend:
 | remove one | `gg resource rotate P/config --unset REGION` |
 | see what it was | `gg history P/config` |
 | put it back | `gg rollback P/config [--to N]` |
-| read the values | `gg resource secrets P/config` |
+| see what keys it has | `gg resource secrets P/config --names` — no values fetched |
+| read the values | `gg resource secrets P/config` — live credentials; prefer `--names` |
 | who uses it | `gg status P` — and destroying it is refused while anyone does |
 
 **Where the line is.** Config *owned by one service* stays in its `gg deploy

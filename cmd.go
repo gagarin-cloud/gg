@@ -845,9 +845,10 @@ is the credentials and a line on the graph saying who uses them.`,
 
 func newResourceSecretsCmd() *cobra.Command {
 	var format string
+	var names bool
 	cmd := &cobra.Command{
 		Use:   "secrets PROJECT/NAME",
-		Short: "print its credentials, for a human or a client outside gagarin",
+		Short: "print its credentials, or with --names just what it publishes",
 		Long: `Print what a caller needs to connect, and nothing else.
 
 You do not need this to connect a service in the same project. That is
@@ -862,14 +863,31 @@ injects — named after the resource, so a postgres called db gives DB_URL,
 DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_DATABASE.
 
 Treat the output as a credential. It is a live password, and --format env
-exists to be piped, not pasted into a terminal somebody is sharing.`,
-		Args: usageArgs(1, 1, "usage: gg resource secrets PROJECT/NAME\n  e.g. gg resource secrets shop/db"),
+exists to be piped, not pasted into a terminal somebody is sharing.
+
+--names prints the variable names and no values, which is what you want
+when the question is "what does this publish" rather than "what is the
+password" — before changing one key of an external, say, when you need
+to know whether it is called API_KEY or TOKEN. It asks a different
+endpoint: the values are not fetched, not just not printed. Reach for it
+by default, and especially when the output lands in a transcript.`,
+		Args: usageArgs(1, 1, "usage: gg resource secrets PROJECT/NAME\n"+
+			"  e.g. gg resource secrets shop/db\n"+
+			"  names only: gg resource secrets shop/openai --names"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if names {
+				return cmdResourceKeys(args[0], format)
+			}
 			return cmdResourceSecrets(args[0], format)
 		},
 	}
 	cmd.Flags().StringVar(&format, "format", "env",
 		"env (KEY=VALUE lines, for --env-file) or json")
+	// A flag rather than a verb, because it is the same question asked with
+	// less of an answer — but it reaches a different endpoint, so the values
+	// never leave the control plane rather than being fetched and dropped here.
+	cmd.Flags().BoolVar(&names, "names", false,
+		"print the variable names and no values.\nAsks an endpoint that never returns them")
 	return cmd
 }
 
