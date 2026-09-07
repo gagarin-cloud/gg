@@ -40,9 +40,10 @@ first; they are the parts that stop you getting it wrong.
 8. **If a resource type exists, use it** (`postgres`, `qdrant`, `valkey`,
    `external`). If one does not, an ordinary service with a volume is the normal
    path, not a workaround.
-9. **You can deploy; you cannot destroy.** Deleting anything answers
-   `approval_required` and emails the account owner a button — every time the
-   approval window has lapsed. No flag grants this to an agent.
+9. **You can deploy; you cannot destroy.** Deleting anything — and handing a
+   project over, which is `gg transfer` — answers `approval_required` and emails
+   the account owner a button, every time the approval window has lapsed. No flag
+   grants this to an agent.
 10. **Errors are meant to be branched on.** gg prints `[code] message` and
     usually a `hint:` line. Act on the code, never on the prose.
 
@@ -71,6 +72,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg logs P/SVC` | recent logs |
 | `gg history P/SVC` / `gg rollback P/SVC [--to N]` | every deploy; put one back |
 | `gg members P` / `gg share P EMAIL [--role viewer]` / `gg unshare P EMAIL` | who can reach it |
+| `gg transfer P EMAIL` | offer the project, and its bill, to a member (they accept by email) |
 | `gg destroy P` or `P/NAME` | delete a project, a service or a resource (needs a human) |
 | `gg eject P -o file.yaml` | the Kubernetes manifests, so you can leave |
 | `gg skill install` | refresh this skill from the binary |
@@ -1015,8 +1017,8 @@ An **editor** operates the project — deploy, delete individual services, manag
 the roster — without paying for it. A **viewer** reads status, logs and the
 member list, and nothing else. **Destroying a project is the owner's alone**:
 that takes its data and its URL with it, and only the account paying can decide.
-Ownership is not in this list because it is the bill; it cannot be granted,
-taken or handed over here.
+Ownership is not on this list because it is the bill, not a role: it is not
+granted here, it is offered and accepted — see below.
 
 - `gg share` with no `--role` grants **editor**, which can deploy over whatever
   is running. If the user asked for "read access" or "let them look at the logs",
@@ -1026,6 +1028,49 @@ taken or handed over here.
   emailed to them**, so tell the user to let them know.
 - **Ask before sharing.** Access to a project is the user's to give, not yours to
   infer from a name in the conversation.
+
+## Handing a project over
+
+Sharing gives access away. `gg transfer` gives away the **bill** — who pays for
+the project from that moment on.
+
+```
+gg share shop them@example.com       first: they must already be a member
+gg transfer shop them@example.com    offer it; nothing changes yet
+gg transfer shop --withdraw          take the offer back
+gg members shop                      shows an offer that is standing
+```
+
+It is an offer, never an assignment, and both halves need a human:
+
+1. The **owner** runs `gg transfer` and gets `approval_required` — they click a
+   button in their own inbox, and you run the same command again. This is the
+   same human gate `gg destroy` uses, for the same reason: a handover cannot be
+   undone by the person who started it.
+2. The **recipient** gets an email and presses a button. Until they do, nothing
+   has changed and `gg members` still shows the old owner. **Tell the user this**
+   — a transfer that is "done" from the CLI is a transfer that has not happened.
+
+What happens when they accept: the project keeps its id, services, addresses,
+data and history — **nothing restarts**. Usage is billed to the new owner from
+that moment, and to the old owner up to it. The **previous owner becomes an
+editor**, so they keep operating it and stop paying for it; the new owner can
+`gg unshare` them like anyone else.
+
+- **Only the owner can offer**, and only to somebody already on the roster. Share
+  first.
+- If the recipient already has a project by that name, pass `--as NAME` — names
+  are unique within an account, and this is what the project is called in theirs.
+- The recipient's account has to be able to carry it: not suspended, has a card
+  or a balance, and under their project limit. The refusal comes back to the
+  owner with the fix in it — those are things the two of them sort out before
+  anybody clicks.
+- `gg unshare` on the person an offer was made to **withdraws the offer too** —
+  an offer only ever goes to a member, so taking the access away takes the offer
+  with it.
+- **Never offer a project the user has not explicitly asked you to hand over.**
+  This is the one command that ends with them not paying for something they no
+  longer own, and no amount of context makes it inferable.
 
 ## Diagnosing
 
@@ -1086,7 +1131,7 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `name_required` | `gg creds create` with no `--name`. Name it after where it will live |
 | `invalid_expiry` | `--expires` outside 1–365 days. There is no never; omit it for 90 |
 | `name_too_long` | over 120 characters, and it appears in a list. Shorten it |
-| `approval_required` | a human must approve a deletion. Tell the user, pass on the code, wait, retry the same command |
+| `approval_required` | a human must approve a deletion, or an ownership offer. Tell the user, pass on the code, wait, retry the same command |
 | `invalid_email` | ask the user for the address again; do not guess |
 | `claim_expired` / `no_such_claim` | run `gg signup <email>` again for a fresh code |
 | `claim_collected` | another machine collected that code. Run `gg signup <email>` again |
@@ -1106,6 +1151,19 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `invalid_role` | roles are `editor` and `viewer`; `owner` is the account that pays |
 | `owner_not_a_member` | that address already owns the project; nothing to do |
 | `member_not_found` | `gg members <project>` shows who has access |
+
+**Handing a project over**
+
+| code | what to do |
+|---|---|
+| `not_a_member` | share it first: `gg share P EMAIL`, then offer it |
+| `already_owner` | they already own it; nothing to do |
+| `name_taken_there` | they have a project by that name. Re-run with `--as NAME` |
+| `recipient_suspended` | their account is stopped; they add credit, then you offer again |
+| `recipient_cannot_pay` | no card and no balance there; the project would be suspended on arrival. They fix it at https://my.gagarin.cloud/billing |
+| `recipient_project_limit` | their account is full; they destroy one, or write to support@mail.gagarin.cloud |
+| `no_offer` | nothing is pending. If it was accepted, the project is theirs and only they can offer it back |
+| `project_suspended` on a transfer | a project suspended in its own right cannot change hands. Only support can lift that |
 
 **Services, images and deploys**
 

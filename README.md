@@ -63,6 +63,7 @@ gg resource rotate shop/db          # a database: gagarin mints it, no downtime
 
 gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
 gg share shop teammate@example.com        # editors deploy and manage; viewers read
+gg transfer shop teammate@example.com     # offer them the project, and its bill; they accept by email
 gg destroy shop                           # asks your human, every time
 ```
 
