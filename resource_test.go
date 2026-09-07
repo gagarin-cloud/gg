@@ -106,6 +106,56 @@ func TestExternalWithNoValuesIsRefused(t *testing.T) {
 	}
 }
 
+// --- eject ------------------------------------------------------------------
+
+// The flag has to reach the wire, since holding the keys back is the server's
+// job and the default is the safe one.
+func TestEjectAsksForSecretsOnlyWhenTold(t *testing.T) {
+	for _, tc := range []struct {
+		with  bool
+		query string
+	}{{false, ""}, {true, "secrets=1"}} {
+		var seen string
+		fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			seen = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/yaml")
+			_, _ = w.Write([]byte("# manifests\n"))
+		})
+		capture(t, func() {
+			if err := cmdEject("shop", "", tc.with); err != nil {
+				t.Error(err)
+			}
+		})
+		if seen != tc.query {
+			t.Errorf("--with-secrets=%v sent query %q, want %q", tc.with, seen, tc.query)
+		}
+	}
+}
+
+// Which variables were held back is in the file's header, where it can be a
+// checklist. That any were belongs where the command was run, because the file
+// and the terminal get separated.
+func TestEjectSaysWhetherKeysWereHeldBack(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		with bool
+		want string
+	}{{false, "placeholders"}, {true, "because you asked for them"}} {
+		fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/yaml")
+			_, _ = w.Write([]byte("# manifests\n"))
+		})
+		out := capture(t, func() {
+			if err := cmdEject("shop", dir+"/p.yaml", tc.with); err != nil {
+				t.Error(err)
+			}
+		})
+		if !strings.Contains(out, tc.want) {
+			t.Errorf("--with-secrets=%v did not say so:\n%s", tc.with, out)
+		}
+	}
+}
+
 // --- names without values ---------------------------------------------------
 
 // The point of --names is which endpoint it asks, not what it prints. Rendering

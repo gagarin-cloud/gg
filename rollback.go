@@ -141,7 +141,7 @@ func cmdRollback(ref string, to int) error {
 
 // ---- eject ----------------------------------------------------------------
 
-func cmdEject(ref, outPath string) error {
+func cmdEject(ref, outPath string, withSecrets bool) error {
 	project, err := parseProject(ref)
 	if err != nil {
 		return err
@@ -149,7 +149,11 @@ func cmdEject(ref, outPath string) error {
 
 	// Raw rather than through call(): what comes back is a YAML file, not the
 	// JSON envelope everything else here speaks.
-	manifests, err := callYAML("GET", "/v1/projects/"+project+"/eject")
+	path := "/v1/projects/" + project + "/eject"
+	if withSecrets {
+		path += "?secrets=1"
+	}
+	manifests, err := callYAML("GET", path)
 	if err != nil {
 		return err
 	}
@@ -166,6 +170,17 @@ func cmdEject(ref, outPath string) error {
 	fmt.Printf("Wrote %s (mode 0600 — it contains your environments in the clear).\n", outPath)
 	fmt.Println("Apply it anywhere with: kubectl apply -f " + outPath)
 	fmt.Println("Read the header first: the images are still in gagarin's registry.")
+	// Said here as well as in the file, because the two get separated: somebody
+	// pipes this to a colleague, or applies it a month later. Which variables
+	// were held back is in the header, where it can be a checklist; that there
+	// were any at all belongs where the command was run.
+	if withSecrets {
+		fmt.Println("It also holds your third-party keys, because you asked for them.")
+		fmt.Println("  Delete it when the migration is done.")
+	} else {
+		fmt.Println("Third-party keys from external resources are placeholders; the header lists them.")
+		fmt.Println("  gg eject " + project + " --with-secrets includes them instead.")
+	}
 	return nil
 }
 

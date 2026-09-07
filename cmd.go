@@ -720,17 +720,38 @@ one it restored, and nothing leaves the history.`,
 
 func newEjectCmd() *cobra.Command {
 	var out string
+	var withSecrets bool
 	cmd := &cobra.Command{
 		Use:   "eject PROJECT",
 		Short: "the Kubernetes manifests for this project. Owner only",
-		Long: "the Kubernetes manifests for this project, so you can run it\n" +
-			"somewhere else. Owner only.",
-		Args: usageArgs(1, 1, "usage: gg eject PROJECT [-o FILE]"),
+		Long: `The Kubernetes manifests for this project, so you can run it somewhere
+else. Owner only.
+
+Not a description of the deployment — the objects themselves, the ones
+gagarin converges toward. The file says what it does not carry and what
+to do about each: images you built, the registry pull secret, and the
+data in your volumes.
+
+One more thing it holds back, and this one is a credential. Values that
+came from an external resource are third-party keys somebody else issued
+you: they stay live wherever this file ends up, they are not gagarin's to
+mint or to hand over, and unlike a database password minted for this
+project they are worth something to anyone who reads them. They come out
+as a placeholder naming the resource, and the header lists exactly which
+variables to fill in.
+
+--with-secrets exports them anyway, for a migration you are doing now
+into a file you will delete. Everything else — a resource's password, a
+service's own environment — is in the clear either way, because an export
+without it does not come up.`,
+		Args: usageArgs(1, 1, "usage: gg eject PROJECT [-o FILE] [--with-secrets]"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdEject(args[0], out)
+			return cmdEject(args[0], out, withSecrets)
 		},
 	}
 	cmd.Flags().StringVarP(&out, "output", "o", "", "write to a file instead of stdout")
+	cmd.Flags().BoolVar(&withSecrets, "with-secrets", false,
+		"include third-party keys from external resources.\nThey are placeholders otherwise, listed in the header")
 	return cmd
 }
 

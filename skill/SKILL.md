@@ -75,7 +75,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg history P/SVC` / `gg rollback P/SVC [--to N]` | every deploy; put one back |
 | `gg members P` / `gg share P EMAIL [--role viewer]` / `gg unshare P EMAIL` | who can reach it |
 | `gg destroy P` or `P/NAME` | delete a project, a service or a resource (needs a human) |
-| `gg eject P -o file.yaml` | the Kubernetes manifests, so you can leave |
+| `gg eject P -o file.yaml` | the Kubernetes manifests, so you can leave (external keys are placeholders; `--with-secrets` includes them) |
 | `gg skill install` | refresh this skill from the binary |
 | `gg version` | which gg this is |
 
@@ -1361,11 +1361,20 @@ reproduces the project.
 Owner only, because the file holds every service's environment in the clear. It
 is written mode 0600 and you should treat it as a credential.
 
-Two things it deliberately does not contain, both explained in its own header:
+Three things it deliberately does not contain, all explained in its own header:
 the **images**, which are still in gagarin's registry and have to be pulled and
-pushed somewhere the user controls, and the **registry pull secret**, which is a
-live credential. Volume claims come back empty — data has to be taken out of the
-running service.
+pushed somewhere the user controls; the **registry pull secret**, which is a
+live credential; and the values from any **external resource**, which are
+third-party keys somebody else issued — they come out as a placeholder naming
+the resource, and the header lists exactly which variables to fill in. Volume
+claims come back empty — data has to be taken out of the running service.
+
+A minted credential — a database password — *is* in the file, and the asymmetry
+is the point: that password is only a risk against a database in the same file,
+and an export without it does not come up. A third-party key stays live wherever
+the file ends up. `gg eject shop --with-secrets -o project.yaml` includes them,
+for a migration happening now into a file that gets deleted; say what that means
+before running it with the flag.
 
 Offer this without being defensive when somebody asks what happens if gagarin
 goes away. It is a real answer and it is meant to be used.
