@@ -682,18 +682,19 @@ func newDestroyCmd() *cobra.Command {
 		Short: "delete a project, or one thing inside it",
 		Long: `Delete something. Which thing depends only on what you name:
 
-  gg destroy shop        the project, and everything in it
-  gg destroy shop/web    one service
-  gg destroy shop/db     one resource, and its data
+  gg destroy shop          the project, and everything in it
+  gg destroy shop/web      one service
+  gg destroy shop/migrate  one job
+  gg destroy shop/db       one resource, and its data
 
-You do not have to say which of the last two a name is — gg asks the
+You do not have to say which of the last three a name is — gg asks the
 platform, because it already knows.
 
 Destroying anything needs a human's approval, every time the approval
 window has lapsed, and only a project's owner can destroy the project.`,
 		Args: usageArgs(1, 1, "usage: gg destroy PROJECT | PROJECT/NAME\n"+
 			"  gg destroy shop        the whole project\n"+
-			"  gg destroy shop/web    one service or resource in it"),
+			"  gg destroy shop/web    one service, job or resource in it"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdDestroy(args[0])
 		},

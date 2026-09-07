@@ -837,19 +837,24 @@ func cmdDestroy(ref string) error {
 		fmt.Printf("resource %s destroyed, and everything in it\n", name)
 		return nil
 	}
+	// A job is deleted down the service path — same row, same endpoint — and
+	// reported as the job it is.
 	path := fmt.Sprintf("/v1/projects/%s/services/%s", project, name)
 	if err := call("DELETE", path, nil, nil); err != nil {
 		return err
 	}
-	fmt.Printf("service %s destroyed\n", name)
+	fmt.Printf("%s %s destroyed\n", kind, name)
 	return nil
 }
 
-// The two things a name in a project can be. A resource is provisioned — a
-// database, a cache — and a service is an image somebody built.
+// The three things a name in a project can be. A resource is provisioned — a
+// database, a cache — and a service is an image somebody built. A job is an
+// image too, and it is deleted down the service path, but it is not a service
+// in anything a human is told: "job probe destroyed" is what happened.
 const (
 	kindService  = "service"
 	kindResource = "resource"
+	kindJob      = "job"
 )
 
 // kindOf asks the platform what a name is. An older control plane does not
@@ -864,8 +869,17 @@ func kindOf(project, name string) (string, error) {
 		if s.Name != name {
 			continue
 		}
-		if s.Kind != "" && s.Kind != "container" {
+		// A resource is the prefixed kind and nothing else. This used to read
+		// "anything that is not a container", which was true for exactly as
+		// long as a resource was the only other thing a row could be — and
+		// then jobs arrived, and `gg destroy shop/probe` on a job called the
+		// resource endpoint and was refused for being a job. The prefix is the
+		// property; the list of everything else is not.
+		switch {
+		case isResourceKind(s.Kind):
 			return kindResource, nil
+		case isJobKind(s.Kind):
+			return kindJob, nil
 		}
 		return kindService, nil
 	}
