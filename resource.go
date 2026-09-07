@@ -379,7 +379,18 @@ func sizeHuman(b int64) string {
 // platform mints one. gg refuses the wrong combination locally rather than
 // spending a round trip on it — and names the flag or its absence, because
 // "invalid request" would leave the caller guessing which half was wrong.
-func cmdResourceRotate(ref string, env map[string]string) error {
+//
+// Two ways to supply them, and the difference is the whole reason the second
+// exists. --env and --env-file say the bundle is now precisely this, which is
+// the right request after a provider migration and the wrong one when a single
+// key of four is being replaced — the other three would stop being published,
+// and nothing would say so until a dependent failed to authenticate. --set and
+// --unset say change this and leave the rest.
+//
+// They are refused together rather than ordered. There is an ordering that
+// would give the combination a meaning, and it is not one anybody would predict
+// from the command they typed.
+func cmdResourceRotate(ref string, env map[string]string, set, unset []string) error {
 	project, name, _, err := parseService(ref)
 	if err != nil {
 		return err
@@ -388,11 +399,51 @@ func cmdResourceRotate(ref string, env map[string]string) error {
 	if len(env) > 0 {
 		body["env"] = env
 	}
+	if len(set) > 0 || len(unset) > 0 {
+		if len(env) > 0 {
+			return fmt.Errorf("--env and --env-file replace everything the resource publishes; --set and --unset change part of it\n" +
+				"  hint: use one or the other, not both")
+		}
+		if len(set) > 0 {
+			// Parsed here rather than in envFlagVars: the precedence rule that
+			// type exists to hold is about files versus flags, and --set has no
+			// file half to have precedence over.
+			vals := map[string]string{}
+			for _, kv := range set {
+				k, v, ok := strings.Cut(kv, "=")
+				if !ok {
+					return fmt.Errorf("--set expects K=V, got %q", kv)
+				}
+				vals[k] = v
+			}
+			body["set"] = vals
+		}
+		for _, k := range unset {
+			// A K=V here is somebody who just typed --set and repeated the
+			// shape. Caught locally, because the round trip would come back
+			// refusing a key named "API_KEY=sk-two", which reads as a platform
+			// that mangled the name rather than a flag used wrongly.
+			if strings.Contains(k, "=") {
+				return fmt.Errorf("--unset takes a key, not K=V: %q\n"+
+					"  hint: --unset %s removes it; --set %s changes its value",
+					k, strings.SplitN(k, "=", 2)[0], k)
+			}
+		}
+		if len(unset) > 0 {
+			body["unset"] = unset
+		}
+	}
 
 	var out struct {
 		Resource string   `json:"resource"`
 		Type     string   `json:"type"`
 		Rotated  []string `json:"rotated"`
+		// Changed and Removed are what moved, as opposed to what the resource
+		// publishes. On a partial rotation those are different lists, and on a
+		// whole-bundle one Removed is the half nobody sees coming: replacing an
+		// environment drops every name not in it.
+		Changed []string `json:"changed"`
+		Removed []string `json:"removed"`
 		// Dependents is what was restarted, which is the answer to the question
 		// a caller would otherwise have to work out for themselves.
 		Dependents []string `json:"dependents"`
@@ -427,7 +478,23 @@ func cmdResourceRotate(ref string, env map[string]string) error {
 	if len(out.Rotated) > 0 {
 		sort.Strings(out.Rotated)
 		fmt.Printf("\n%s publishes %s\n", name, strings.Join(out.Rotated, ", "))
+		// Which of those actually moved, when it is not all of them. Printed
+		// only for a partial change, because on a whole-bundle rotation the two
+		// lines would say the same thing twice.
+		if len(out.Changed) > 0 && len(out.Changed) < len(out.Rotated) {
+			sort.Strings(out.Changed)
+			fmt.Printf("  Changed: %s\n", strings.Join(out.Changed, ", "))
+		}
 		fmt.Printf("  Values: gg resource secrets %s/%s\n", project, name)
+	}
+	// The loss, said out loud at the moment it happens. A --env that named
+	// fewer keys than the resource held has just taken the others away from
+	// every dependent, and the alternative to this line is finding out from an
+	// application that can no longer authenticate.
+	if len(out.Removed) > 0 {
+		sort.Strings(out.Removed)
+		fmt.Printf("\nNo longer published: %s\n", strings.Join(out.Removed, ", "))
+		fmt.Printf("  Anything that was reading these no longer has them.\n")
 	}
 	if out.RestartNote != "" {
 		fmt.Printf("\n%s\n", out.RestartNote)

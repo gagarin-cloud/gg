@@ -63,6 +63,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg resource add P/NAME TYPE` | provision postgres, qdrant, valkey or external |
 | `gg resource secrets P/NAME` | its connection values, for something outside the project |
 | `gg resource rotate P/NAME` | new credentials, and everything holding them rolls |
+| `gg resource rotate P/NAME --set K=V` | change one value an external publishes, keeping the rest |
 | `gg connect P/NAME` | that resource on this machine, for as long as the command runs |
 | `gg resource backup` / `backups` / `restore P/NEW --source OLD` | postgres recovery |
 | `gg deps add P/SVC NAME...` / `deps ls` / `deps rm` | what a service may reach, and whose credentials it holds |
@@ -715,7 +716,9 @@ with a revoked key. As a resource it is one row and rotating is one command.
 - **Restating an external is refused** once it exists (`already_exists`). That
   refusal is deliberate: restating from an old `.env` would roll the key
   *backwards*, and the failure would be an authentication error nobody would
-  connect to the command they ran. Changing values is `gg resource rotate`.
+  connect to the command they ran. Changing values is `gg resource rotate`, and
+  changing *one* of them is `gg resource rotate --set K=V`, which leaves the
+  rest alone.
 - **It runs nothing.** No container, no port, no size, no storage, no backups,
   nothing to become ready. `gg status` shows it as `◆` with a line under it
   saying what it publishes.
@@ -733,7 +736,8 @@ with a revoked key. As a resource it is one row and rotating is one command.
 
 ```
 gg resource rotate shop/db                                a database
-gg resource rotate shop/openai --env-file .env.new        an external
+gg resource rotate shop/openai --set API_KEY=sk-new       one of an external's values
+gg resource rotate shop/openai --env-file .env.new        all of them
 ```
 
 Everything holding the old credential is restarted with the new one, and the
@@ -743,7 +747,33 @@ command names what it rolled. Nothing but variable *names* is printed;
 **Who supplies the new value is the only difference between the types.** For
 `postgres`, `qdrant` and `valkey`, gagarin mints one and `--env` is refused — a
 password you chose is one the running server has never heard of. For an
-`external` the values are yours, so `--env` or `--env-file` is required.
+`external` the values are yours, so one of `--set`, `--unset`, `--env-file` or
+`--env` is required.
+
+**An external usually holds more than one value, and the two ways of changing
+them mean different things. Reach for `--set`.**
+
+| | what it means |
+|---|---|
+| `--set K=V`, `--unset K` | change these, leave every other key exactly as it is |
+| `--env`, `--env-file` | the bundle is now precisely this; anything not in it **stops being published** |
+
+`--env API_KEY=sk-new` on an external that also holds `BASE_URL` takes `BASE_URL`
+away from every dependent. That is the correct meaning of that request — it is
+the one to use after a provider migration where every value is new — and the
+wrong one for the far commoner job of replacing a single key. Reading the bundle
+back and restating it is not the answer either: that is the stale-file path, and
+it is how a key gets rolled backwards.
+
+The command names what stopped being published, so a loss is visible at the
+moment it happens rather than from a dependent that can no longer authenticate.
+The two flags cannot be combined — they say the same thing in incompatible
+words.
+
+`--unset` names a key **without** the resource's prefix, the way it was set:
+`--unset BASE_URL` on `shop/openai`, not `OPENAI_BASE_URL`. A key the resource
+does not publish is refused rather than quietly doing nothing, because a no-op
+reported as a success is how somebody believes a secret is gone when it is not.
 
 | type | what happens | cost |
 |---|---|---|
@@ -1146,8 +1176,10 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `no_size` | an external runs nothing: drop `--size` |
 | `invalid_env` | write `API_KEY`, not `OPENAI_API_KEY` — the prefix is the resource's name |
 | `already_exists` | restating an external. `gg resource rotate` is how values change |
-| `env_required` | an external's values are the user's; pass `--env-file` |
-| `no_env` | this type mints its own credentials; `gg resource secrets` reads them |
+| `env_required` | an external's values are the user's; pass `--set K=V` for one of them, `--env-file` for all |
+| `conflicting_env` | `--env`/`--env-file` replace the bundle and `--set`/`--unset` amend it: use one or the other |
+| `no_such_key` | that external does not publish the key named in `--unset`. `gg resource secrets` lists what it does — and the name goes in without the resource's prefix |
+| `no_env` | this type mints its own credentials, so there is nothing to pass or amend; `gg resource secrets` reads them |
 | `rotate_failed` | **nothing changed** — the old credential still works. Check `gg status` for a resource that is not running, then retry |
 | `cannot_rotate` | no credentials recorded to replace; worth reporting as a bug |
 | `not_tunnelable` | an external runs nothing, so there is nothing to tunnel to; its values are `gg resource secrets` |

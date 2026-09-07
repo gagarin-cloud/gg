@@ -129,7 +129,7 @@ func TestRotatingADatabaseSendsNoEnv(t *testing.T) {
 	body := rotateServer(t, `{"resource":"db","type":"postgres","rotated":["DB_URL"],"dependents":["api"],
 	  "sentence":"db has new credentials, and api is restarting to pick them up."}`)
 	out := capture(t, func() {
-		if err := cmdResourceRotate("shop/db", nil); err != nil {
+		if err := cmdResourceRotate("shop/db", nil, nil, nil); err != nil {
 			t.Error(err)
 		}
 	})
@@ -149,7 +149,7 @@ func TestRotatingAnExternalSendsItsEnv(t *testing.T) {
 	body := rotateServer(t, `{"resource":"openai","type":"external","rotated":["OPENAI_API_KEY"],
 	  "dependents":["bot"],"sentence":"openai is publishing the new values, and bot is restarting to pick them up."}`)
 	out := capture(t, func() {
-		if err := cmdResourceRotate("shop/openai", map[string]string{"API_KEY": "sk-two"}); err != nil {
+		if err := cmdResourceRotate("shop/openai", map[string]string{"API_KEY": "sk-two"}, nil, nil); err != nil {
 			t.Error(err)
 		}
 	})
@@ -164,6 +164,133 @@ func TestRotatingAnExternalSendsItsEnv(t *testing.T) {
 	}
 }
 
+// Changing one key of several is a different request from replacing the bundle,
+// and it has to reach the wire as one: `env` here would take the other keys
+// away from every dependent.
+func TestAmendingAnExternalSendsSetNotEnv(t *testing.T) {
+	body := rotateServer(t, `{"resource":"openai","type":"external",
+	  "rotated":["OPENAI_API_KEY","OPENAI_BASE_URL"],"changed":["OPENAI_API_KEY"],"removed":[],
+	  "dependents":["bot"],"sentence":"openai is publishing the new values, and bot is restarting to pick them up."}`)
+	out := capture(t, func() {
+		if err := cmdResourceRotate("shop/openai", nil, []string{"API_KEY=sk-two"}, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, present := (*body)["env"]; present {
+		t.Errorf("an amendment sent env, which would drop the other keys: %#v", *body)
+	}
+	set, ok := (*body)["set"].(map[string]any)
+	if !ok || set["API_KEY"] != "sk-two" {
+		t.Fatalf("the new value did not reach the request: %#v", *body)
+	}
+	// Which of the published names actually moved, because the caller changed
+	// one of two and should not have to work out which from the first line.
+	if !strings.Contains(out, "Changed: OPENAI_API_KEY") {
+		t.Errorf("the output does not say which key changed:\n%s", out)
+	}
+	if strings.Contains(out, "sk-two") {
+		t.Errorf("the new credential was echoed into the terminal:\n%s", out)
+	}
+}
+
+// A value containing an = is a value, not a second separator. Cut on the first
+// one, as an .env file does — a base64 secret ends in padding and would
+// otherwise arrive truncated, which is a failure that looks like a bad key.
+func TestSetSplitsOnTheFirstEqualsOnly(t *testing.T) {
+	body := rotateServer(t, `{"resource":"openai","type":"external","rotated":["OPENAI_API_KEY"],"dependents":[]}`)
+	capture(t, func() {
+		if err := cmdResourceRotate("shop/openai", nil, []string{"API_KEY=a=b=="}, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	set, _ := (*body)["set"].(map[string]any)
+	if set["API_KEY"] != "a=b==" {
+		t.Errorf("the value was cut short: %#v", *body)
+	}
+}
+
+func TestUnsetReachesTheWire(t *testing.T) {
+	body := rotateServer(t, `{"resource":"openai","type":"external","rotated":["OPENAI_API_KEY"],
+	  "changed":[],"removed":["OPENAI_BASE_URL"],"dependents":["bot"],
+	  "sentence":"openai no longer publishes OPENAI_BASE_URL, and bot is restarting to pick them up."}`)
+	out := capture(t, func() {
+		if err := cmdResourceRotate("shop/openai", nil, nil, []string{"BASE_URL"}); err != nil {
+			t.Error(err)
+		}
+	})
+	unset, ok := (*body)["unset"].([]any)
+	if !ok || len(unset) != 1 || unset[0] != "BASE_URL" {
+		t.Fatalf("the removal did not reach the request: %#v", *body)
+	}
+	if !strings.Contains(out, "No longer published: OPENAI_BASE_URL") {
+		t.Errorf("the output does not name what was taken away:\n%s", out)
+	}
+}
+
+// The silent half of --env, made visible. Naming fewer keys than the resource
+// held has just taken the others away from every dependent, and the alternative
+// to this line is an application that can no longer authenticate.
+func TestAReplacementSaysWhatItDropped(t *testing.T) {
+	rotateServer(t, `{"resource":"openai","type":"external","rotated":["OPENAI_API_KEY"],
+	  "changed":["OPENAI_API_KEY"],"removed":["OPENAI_BASE_URL"],"dependents":["bot"],
+	  "sentence":"openai is publishing the new values, and bot is restarting to pick them up."}`)
+	out := capture(t, func() {
+		if err := cmdResourceRotate("shop/openai", map[string]string{"API_KEY": "sk-two"}, nil, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "No longer published: OPENAI_BASE_URL") {
+		t.Errorf("a replacement dropped a key without saying so:\n%s", out)
+	}
+	if !strings.Contains(out, "no longer has them") {
+		t.Errorf("the output does not say what that costs:\n%s", out)
+	}
+}
+
+// Refused locally rather than at the far end. There is an ordering that would
+// give the combination a meaning, and it is not one anybody would predict from
+// the command they typed.
+func TestReplacingAndAmendingTogetherIsRefusedBeforeTheRequest(t *testing.T) {
+	body := rotateServer(t, `{}`)
+	err := cmdResourceRotate("shop/openai", map[string]string{"API_KEY": "sk-two"}, []string{"BASE_URL=x"}, nil)
+	if err == nil {
+		t.Fatal("combining a replacement with an amendment was accepted")
+	}
+	if !strings.Contains(err.Error(), "--set") {
+		t.Errorf("the refusal does not name the flags in play: %v", err)
+	}
+	if *body != nil {
+		t.Errorf("a round trip was spent on a request gg could refuse itself: %#v", *body)
+	}
+}
+
+// K=V or nothing, and the message says which flag: a --set with no = is most
+// likely somebody who meant --unset.
+func TestSetWithoutAValueIsRefused(t *testing.T) {
+	rotateServer(t, `{}`)
+	err := cmdResourceRotate("shop/openai", nil, []string{"API_KEY"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "--set expects K=V") {
+		t.Errorf("a --set with no value was not refused clearly: %v", err)
+	}
+}
+
+// --unset takes a key. A K=V there is somebody who just typed --set and repeated
+// the shape, and the round trip would come back refusing a key called
+// "API_KEY=sk-two" — which reads as a platform that mangled the name.
+func TestUnsetWithAValueIsRefusedLocally(t *testing.T) {
+	body := rotateServer(t, `{}`)
+	err := cmdResourceRotate("shop/openai", nil, nil, []string{"API_KEY=sk-two"})
+	if err == nil || !strings.Contains(err.Error(), "--unset takes a key") {
+		t.Fatalf("a --unset with a value was not refused clearly: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--set API_KEY=sk-two") {
+		t.Errorf("the hint does not offer the flag they probably meant: %v", err)
+	}
+	if *body != nil {
+		t.Errorf("a round trip was spent on a request gg could refuse itself: %#v", *body)
+	}
+}
+
 // A valkey restart empties it. That is what a restart of the type always does,
 // but it is worth being told rather than discovering it from a cold cache.
 //
@@ -175,7 +302,7 @@ func TestRotatingAValkeySaysTheCacheWasEmptied(t *testing.T) {
 	  "restarted":true,"restart_note":"cache was restarted to read its new credential, so anything it held in memory is gone.",
 	  "sentence":"cache has new credentials, and api is restarting to pick them up."}`)
 	out := capture(t, func() {
-		if err := cmdResourceRotate("shop/cache", nil); err != nil {
+		if err := cmdResourceRotate("shop/cache", nil, nil, nil); err != nil {
 			t.Error(err)
 		}
 	})
@@ -193,7 +320,7 @@ func TestRotatingAQdrantDoesNotClaimDataLoss(t *testing.T) {
 	  "restarted":true,"restart_note":"vectors was restarted to read its new credential. Its data is on a volume, so nothing was lost.",
 	  "sentence":"vectors has new credentials, and api is restarting to pick them up."}`)
 	out := capture(t, func() {
-		if err := cmdResourceRotate("shop/vectors", nil); err != nil {
+		if err := cmdResourceRotate("shop/vectors", nil, nil, nil); err != nil {
 			t.Error(err)
 		}
 	})
@@ -211,7 +338,7 @@ func TestRotatingAPostgresDoesNotClaimARestart(t *testing.T) {
 	rotateServer(t, `{"resource":"db","type":"postgres","rotated":["DB_URL"],"dependents":["api"],
 	  "restarted":false,"sentence":"db has new credentials, and api is restarting to pick them up."}`)
 	out := capture(t, func() {
-		if err := cmdResourceRotate("shop/db", nil); err != nil {
+		if err := cmdResourceRotate("shop/db", nil, nil, nil); err != nil {
 			t.Error(err)
 		}
 	})
@@ -226,7 +353,7 @@ func TestRotatingWithNoDependentsSaysSo(t *testing.T) {
 	rotateServer(t, `{"resource":"stripe","type":"external","rotated":["STRIPE_SECRET_KEY"],
 	  "dependents":[],"sentence":"stripe is publishing the new values, and nothing declares it yet."}`)
 	out := capture(t, func() {
-		if err := cmdResourceRotate("shop/stripe", map[string]string{"SECRET_KEY": "x"}); err != nil {
+		if err := cmdResourceRotate("shop/stripe", map[string]string{"SECRET_KEY": "x"}, nil, nil); err != nil {
 			t.Error(err)
 		}
 	})

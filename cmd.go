@@ -857,6 +857,7 @@ exists to be piped, not pasted into a terminal somebody is sharing.`,
 // live credential is an act with a moment, and the two want different verbs.
 func newResourceRotateCmd() *cobra.Command {
 	var v *envFlagVars
+	var set, unset []string
 	cmd := &cobra.Command{
 		Use:   "rotate PROJECT/NAME",
 		Short: "replace its credentials, and roll everything holding them",
@@ -864,12 +865,32 @@ func newResourceRotateCmd() *cobra.Command {
 resource is restarted with them.
 
   gg resource rotate shop/db                                 a database
-  gg resource rotate shop/openai --env-file .env.openai.new  an external
+  gg resource rotate shop/openai --set API_KEY=sk-new        one of its values
+  gg resource rotate shop/openai --env-file .env.openai.new  all of them
 
 Who supplies the new value is the only difference between the types. For
 a postgres, qdrant or valkey, gagarin mints one and --env is refused —
 a password you chose is one the running server has never heard of. For an
-external the values are yours, so --env or --env-file is required.
+external the values are yours, so one of --set, --unset, --env-file or
+--env is required.
+
+An external usually holds more than one value, and the two ways of
+changing them mean different things:
+
+  --set / --unset   change these, leave the rest exactly as they are.
+                    What you want when one key of several is being
+                    replaced, which is most rotations.
+  --env / --env-file  the bundle is now precisely this. Anything not in
+                    it stops being published — right for a provider
+                    migration where every value is new, and a way to
+                    lose the others by accident when it is not. The
+                    command names what it dropped, so you find out at
+                    the time rather than from a dependent that can no
+                    longer authenticate.
+
+They cannot be combined: the two say the same thing in incompatible
+words, and a rule for reconciling them would be one nobody predicted
+from the command they typed.
 
 Nothing is printed but the names of the variables. Read the values with
 "gg resource secrets" if you need them.
@@ -893,21 +914,35 @@ If it fails, nothing changed: the old credential is still in use and the
 command is safe to run again.`,
 		Args: usageArgs(1, 1, "usage: gg resource rotate PROJECT/NAME\n"+
 			"  e.g. gg resource rotate shop/db\n"+
-			"  for an external: gg resource rotate shop/openai --env-file .env.new"),
+			"  one value of an external: gg resource rotate shop/openai --set API_KEY=sk-new\n"+
+			"  all of them: gg resource rotate shop/openai --env-file .env.new"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := v.finish()
 			if err != nil {
 				return err
 			}
-			return cmdResourceRotate(args[0], e)
+			return cmdResourceRotate(args[0], e, set, unset)
 		},
 	}
 	// Same pair as `gg resource add`, and --env-file for the same reason: a key
 	// on the command line is in the shell history and in every agent transcript
 	// that ran it.
 	v = bindEnvFlags(cmd.Flags(),
-		"a new value for an external, K=V (repeatable).\nPrefer --env-file: this goes into your shell history",
-		"read an external's new values from KEY=VALUE lines\n(repeatable; later files win, --env wins over all files)")
+		"replace everything an external publishes, K=V (repeatable).\nDrops any key not named — --set changes one and keeps\nthe rest. Prefer --env-file: this goes into your shell history",
+		"replace everything an external publishes, from KEY=VALUE\nlines (repeatable; later files win, --env wins over all files)")
+	// The pair that amends rather than replaces, and the reason this command
+	// needed a second shape at all.
+	//
+	// --set takes a K=V on argv where --env is discouraged from doing so, and
+	// that is deliberate rather than inconsistent: a whole bundle belongs in a
+	// file, and a single key being replaced right now is a thing somebody types.
+	// The shell-history cost is real either way and named in the usage; the
+	// alternative — a file per key — is a ceremony that would send people back
+	// to --env, which is the flag that loses the other values.
+	cmd.Flags().StringArrayVar(&set, "set", nil,
+		"change one value of an external and keep the rest,\nK=V (repeatable). Goes into your shell history")
+	cmd.Flags().StringArrayVar(&unset, "unset", nil,
+		"stop an external publishing this key (repeatable).\nName it without the resource's prefix, as you set it")
 	return cmd
 }
 
