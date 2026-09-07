@@ -173,13 +173,19 @@ func waitForRun(project, name string, revision int) error {
 		if run != nil && run.Revision == revision {
 			phase = run.Phase
 		}
-		if phase != last {
-			line := "  " + phase
-			if message != "" && (phase == "pending" || phase == "failed") {
-				line += ": " + message
-			}
+		line := "  " + phase
+		if message != "" && (phase == "pending" || phase == "failed") {
+			line += ": " + message
+		}
+		// The whole line, not the phase, is what must have changed to be worth
+		// reprinting. A run that goes from "pending: ContainerCreating" to
+		// "pending: CreateContainerError" has not changed phase and has told
+		// you the only thing you needed to know — that waiting will not fix
+		// it. Watching a job sit at ContainerCreating for ten minutes while
+		// the cluster had already said why is how this was found.
+		if line != last {
 			fmt.Println(line)
-			last = phase
+			last = line
 		}
 		if run != nil && run.Revision == revision && (phase == "done" || phase == "failed") {
 			break
