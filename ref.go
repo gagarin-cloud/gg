@@ -89,6 +89,27 @@ func parseService(s string) (project, name string, port int, err error) {
 	return project, name, port, nil
 }
 
+// parseJob reads `project/job`: a job is addressed like a service, and it has
+// no port. A `:suffix` is refused rather than ignored, because the one thing it
+// could mean here is that the caller thinks a job listens on something — and
+// that is worth a sentence before a build and a push.
+func parseJob(s string) (project, name string, err error) {
+	project, rest, err := splitRef(s, "job", "shop/migrate")
+	if err != nil {
+		return "", "", err
+	}
+	name, suffix, hadColon := cutSuffix(rest)
+	if !nameRe.MatchString(name) {
+		return "", "", fmt.Errorf("%q is not a usable job name: %s", name, nameShape)
+	}
+	if hadColon {
+		return "", "", fmt.Errorf(
+			"%q names a port, and a job has none: it runs to completion and listens on nothing\n  hint: gg run %s/%s IMAGE:TAG",
+			suffix, project, name)
+	}
+	return project, name, nil
+}
+
 // parseImage reads `project/repo[:tag]` — an image in a project's own space in
 // the gagarin registry. Gagarin runs nothing from anywhere else, so there is
 // deliberately no way to spell a reference to Docker Hub here; `gg registry

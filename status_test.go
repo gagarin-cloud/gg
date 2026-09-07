@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // capture runs f with stdout redirected, because printStatusTable writes rather
@@ -453,5 +454,135 @@ func TestAnEdgeToAnExternalIsMarked(t *testing.T) {
 	}
 	if strings.Contains(out, "pg◆") {
 		t.Errorf("an edge to a database was marked as inventory:\n%s", out)
+	}
+}
+
+// --- jobs ---------------------------------------------------------------------
+
+func jobRow(name, phase string, rev int) serviceStatus {
+	s := serviceStatus{Kind: "job", Name: name, Image: "reg/p/" + name + ":1", Size: "s", InSync: true}
+	s.Actual.Exists = true
+	s.Actual.Run = &runState{Revision: rev, Phase: phase}
+	return s
+}
+
+// A finished job is not "running" and not "failing": it is done, and the
+// table has to have a word for that or every completed migration reads as a
+// fault. The KIND column appears for it, the port is a dash, and READY says
+// how the run stands.
+func TestAFinishedJobReadsAsDone(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{svc("web"), jobRow("migrate", "done", 3)}})
+	})
+	for _, want := range []string{
+		"KIND", "✓  migrate  job", "done", "✓  └ run 3 finished", ", exit 0", "✓ done",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "○") {
+		t.Errorf("a finished job was marked as failing:\n%s", out)
+	}
+}
+
+// A failed run is failing, and the cluster's own sentence about it is printed
+// under the table like any other failure — that sentence is the exit code.
+func TestAFailedJobSaysWhy(t *testing.T) {
+	failed := jobRow("migrate", "failed", 4)
+	failed.Actual.Message = "the container exited with code 2"
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{failed}})
+	})
+	for _, want := range []string{"○  migrate", "failed", "○  └ run 4 failed: the container exited with code 2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "○ migrate:") {
+		t.Errorf("the run's reason was printed twice:\n%s", out)
+	}
+}
+
+// The line under a job's row carries the facts a person wants about a run:
+// when, how long, and how it ended.
+func TestTheRunLineSaysWhenAndHowLong(t *testing.T) {
+	now := time.Now()
+	started := now.Add(-5 * time.Minute)
+	finished := now.Add(-4 * time.Minute)
+	code := 3
+	done := jobRow("migrate", "done", 3)
+	done.Actual.Run.StartedAt, done.Actual.Run.FinishedAt = &started, &finished
+	if got, want := runLine(done), "✓  └ run 3 finished 4m ago, took 60s, exit 0"; got != want {
+		t.Errorf("done: got %q, want %q", got, want)
+	}
+	failed := jobRow("migrate", "failed", 4)
+	failed.Actual.Run.StartedAt, failed.Actual.Run.FinishedAt, failed.Actual.Run.ExitCode = &started, &finished, &code
+	failed.Actual.Message = "the container exited with code 3"
+	if got, want := runLine(failed), "○  └ run 4 failed 4m ago after 60s, exit 3: the container exited with code 3"; got != want {
+		t.Errorf("failed: got %q, want %q", got, want)
+	}
+	running := jobRow("migrate", "running", 5)
+	running.Actual.Run.StartedAt = &started
+	if got := runLine(running); !strings.HasPrefix(got, "●  └ run 5 running for 5 min") {
+		t.Errorf("running: got %q", got)
+	}
+	pending := jobRow("migrate", "pending", 6)
+	pending.Actual.Message = "ImagePullBackOff"
+	if got, want := runLine(pending), "◐  └ run 6 pending: ImagePullBackOff"; got != want {
+		t.Errorf("pending: got %q, want %q", got, want)
+	}
+}
+
+func TestJobStates(t *testing.T) {
+	for phase, want := range map[string]string{
+		"pending": "starting", "running": "running", "done": "done",
+		"failed": "failing", "suspended": "stopped",
+	} {
+		if got := state(jobRow("j", phase, 1)); got != want {
+			t.Errorf("phase %s: state %q, want %q", phase, got, want)
+		}
+	}
+	none := jobRow("j", "", 0)
+	none.Actual.Exists, none.Actual.Run = false, nil
+	if got := state(none); got != "failing" {
+		t.Errorf("a job with no run in the cluster: state %q, want failing", got)
+	}
+	if got := runPhase(none); got != "—" {
+		t.Errorf("runPhase with no run: %q", got)
+	}
+	if got, want := runLine(none), "○  └ no run in the cluster"; got != want {
+		t.Errorf("runLine with no run: got %q, want %q", got, want)
+	}
+	if got := kindLabel("job"); got != "job" {
+		t.Errorf("kindLabel(job) = %q", got)
+	}
+}
+
+// A job whose asked-for run is not the run in the cluster must not read as
+// done. Re-running the same image is the ordinary case, so the previous run's
+// tick over a run that never started is the exact wrong answer.
+func TestAJobWithDriftDoesNotReadAsDone(t *testing.T) {
+	drifting := jobRow("migrate", "done", 3)
+	drifting.InSync = false
+	if got := state(drifting); got != "starting" {
+		t.Errorf("state %q, want starting", got)
+	}
+	if got, want := runLine(drifting),
+		"◐  └ waiting for the run that was asked for; run 3 is what is in the cluster"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// The done legend only appears when something on screen is done.
+func TestNoDoneLegendWithoutAJob(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{svc("web")}})
+	})
+	if strings.Contains(out, "✓ done") {
+		t.Errorf("legend mentions a state nothing is in:\n%s", out)
 	}
 }

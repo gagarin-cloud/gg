@@ -18,9 +18,12 @@ first; they are the parts that stop you getting it wrong.
    service or a resource inside it. Nothing is inferred from the directory you
    stand in. There is no default project to configure — a command that does not
    name one is refused with the shape it should have had.
-2. **Every write is asynchronous.** A command that exits zero recorded a demand;
-   it did not watch it come true. Only `gg status <project>` reads the cluster,
-   and it is the only thing that can answer "is it up".
+2. **Every write is asynchronous, except `gg run`.** A command that exits zero
+   recorded a demand; it did not watch it come true. `gg status <project>` reads
+   the cluster and is the only thing that can answer "is it up". The one
+   exception is `gg run`, and it is an exception because a run *ends*: it waits,
+   prints what the run wrote, and exits with the script's own code. Nothing else
+   here has an end to wait for.
 3. **Gagarin runs images from its own registry only.** `gg ship` is build, push
    and deploy fused; the three exist separately for CI. Somebody else's image
    comes in with `gg registry copy`.
@@ -55,6 +58,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg init PROJECT` | create a project |
 | `gg ship P/SVC:PORT` | build the current directory, push it, run it |
 | `gg build P/IMAGE[:TAG]` / `gg push P/IMAGE:TAG` / `gg deploy P/SVC:PORT IMAGE:TAG` | the same three steps apart, which is what CI wants |
+| `gg run P/JOB IMAGE:TAG` | run an image to completion as a job, wait, print what it wrote, exit with its code |
 | `gg registry copy P/IMAGE SOURCE` | bring an image you did not build into the project |
 | `gg resource add P/NAME TYPE` | provision postgres, qdrant, valkey or external |
 | `gg resource secrets P/NAME` | its connection values, for something outside the project |
@@ -315,7 +319,10 @@ one copied in with `gg registry copy`, or a tag somebody else pushed.
 
 A service is a container image that runs, with a port, a size, an environment,
 optionally a volume, whatever it is allowed to reach, and whatever addresses it
-answers on. Only the first two of those are set by a deploy.
+answers on. Only the first two of those are set by a deploy. An image that runs
+to completion instead of serving — a migration, a backfill — is a **job**, not a
+service: see "Jobs" below, and do not deploy one as a service, because a
+service that exits is restarted forever and reads as failing.
 
 ### The environment
 
@@ -387,6 +394,49 @@ volume is refused for the same reason.
 
 Use this for anything stateful that has no resource type — see "Anything we do
 not have a type for".
+
+## Jobs: what runs to completion
+
+```
+gg build shop/migrate:v3 --context ./migrations
+gg run   shop/migrate migrate:v3 --deps db --env-file .env
+gg run   shop/migrate migrate:v3 --detach        submit and return
+```
+
+A job is a service that ends. It has an image, an environment, a size and a
+place on the graph, and **no port, no address and no volume**: it listens on
+nothing, nothing can declare that it needs one, and it keeps nothing between
+runs. Durable data belongs in a resource the job reaches with `--deps`.
+
+- **`gg run` is the one command that waits.** It submits the run, follows it,
+  prints what the run wrote, and **exits with the script's own exit code**. Read
+  the code: zero means the script finished; anything else is the script's
+  failure, and the last line names it. `--detach` returns at once instead, and
+  `gg status` then reports how the run ended.
+- **Every `gg run` is one run**, recorded as a revision exactly like a deploy.
+  Running twice runs twice. `gg history` lists the runs; `gg rollback` runs an
+  earlier revision again.
+- **A run that fails is not retried**, and its exit code is reported once. Fix
+  the script and run again; the platform will not re-run a half-applied
+  migration on its own.
+- **A run is stopped after sixty minutes.** `gg status` says so when that is
+  why it ended. Something that needs longer is a service.
+- **Its image is any image in the project's space** — build one with
+  `gg build`, or run the service's own image with a different entrypoint baked
+  into a second Dockerfile. `gg run` does not build.
+- **A job is billed for the time it runs**, at its size, not for existing.
+- **Kinds do not change.** A name that is a job stays a job (`not_a_service`),
+  and a name that is a service cannot be run as a job (`not_a_job`). Give the
+  job its own name.
+
+Use a job for anything the user describes as "run this once" or "run this
+before deploying": migrations, seeds, imports, one-off reports. The shape for a
+deploy that needs a migration first is two commands, in this order:
+
+```
+gg run    shop/migrate migrate:v3 --deps db     # exits non-zero if it failed: stop here
+gg deploy shop/api:8080 api:v3
+```
 
 ## Dependencies: what may reach what
 
@@ -884,12 +934,18 @@ What to read, in the order it matters:
      stopped calling this a rollout in progress. Waiting will not fix it.
    - `◌` **stopped** — the project is suspended. See the `!` line.
    - `◆` **external** — runs nothing, so it has no state to be in.
+   - `✓` **done** — a job whose latest run finished with exit code 0. A job
+     whose run failed is `○`, and the line under the table gives its exit code.
 3. **`◐` and `○` print the cluster's own explanation below the table.** Read it
    before changing anything.
 4. **READY counts pods of the revision you asked for.** A redeploy that will not
    start reads `0/1` even while the previous version is still serving traffic.
    That is the honest number: the service is answering, but not with what you
-   shipped.
+   shipped. For a job the cell is the latest run's phase instead — `done`,
+   `failed`, `running`, `pending` — its PORT is a dash, and the line under the
+   row says which run, when, how long, the exit code, and for a failed run the
+   cluster's reason: `○  └ run 4 failed 2 minutes ago after 3s, exit 2: the
+   container exited with code 2`.
 5. **Addresses hang under their service**, marked `●` when there is nothing left
    to do and `○` with who is holding it up when there is. An address that is fine
    says nothing more than its own URL.
@@ -901,7 +957,8 @@ Other readers:
 
 ```
 gg projects                 every project you can reach, its id, and your role
-gg logs shop/web            recent logs; needs a running pod (logs_unavailable if not)
+gg logs shop/web            recent logs; needs a running pod (logs_unavailable if not).
+                            For a job: what its latest run wrote
 gg history shop/web         every deploy, newest first, the live one marked →
 gg deps ls shop/web         what it may reach
 gg domain ls shop           every address and its state
@@ -1058,19 +1115,22 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `image_not_yours` | the image is not in this project's registry space. Build or push into this project, or `gg registry copy` it in |
 | `invalid_digest` | pass what `docker push` reported, or leave it out |
 | `invalid_port` | set the port the container actually listens on |
+| `invalid_kind` | `kind` is absent for a service or `job` for a job; nothing else exists |
+| `job_has_no_port` / `job_has_no_volume` | drop the field: a job listens on nothing and keeps nothing. Durable data goes in a resource it reaches |
+| `not_a_job` | that name is a service; a job needs a name of its own |
 | `invalid_volume` | an absolute path inside the container, e.g. `/var/lib/postgresql/data` |
 | `volume_immutable` | a volume is set once and never moves or resizes. Keep it, or destroy the service and deploy again — which throws the data away |
 | `invalid_size` | sizes are `s`, `m`, `l`; the message names the account's cap |
 | `no_such_revision` | `gg history` lists the ones it had |
 | `nothing_to_roll_back_to` | deployed only once. Not a bad call, just nothing to do |
-| `not_a_service` | that name is a resource — you tried to deploy over it, roll it back, or give it an address |
+| `not_a_service` | that name is a resource or a job — you tried to deploy a service over it, or give it an address |
 | `not_a_resource` | that name is a service. `gg status` shows which is which |
 
 **The graph**
 
 | code | what to do |
 |---|---|
-| `invalid_needs` / `invalid_deps` | a blank name, or a service naming itself. Correct them; `gg deps ls` shows what is declared |
+| `invalid_needs` / `invalid_deps` | a blank name, a service naming itself, or a job named as something to reach — a job listens on nothing. Correct them; `gg deps ls` shows what is declared |
 | `no_such_service` | a name in `gg deps add` or `--deps` is neither a service nor a resource here. `gg status` lists them; create it first |
 | `service_in_use` | something still declares it needs this. The refusal names what; `gg deps rm` that edge first |
 

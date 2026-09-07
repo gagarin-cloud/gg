@@ -17,6 +17,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // state reduces a service to the three answers a colour can carry. Deliberately
@@ -49,6 +50,11 @@ func state(s serviceStatus) string {
 	// small lie that makes a reader distrust the whole screen.
 	case isExternalKind(s.Kind):
 		return "external"
+	// A job has a run rather than replicas, and the run has an end. "Done" is
+	// a state the dots cannot say: a filled dot means "up", and a job that
+	// ran to completion is not up, it is finished — which is its success.
+	case isJobKind(s.Kind):
+		return jobState(s)
 	case !s.Actual.Exists, s.Actual.Stalled:
 		return "failing"
 	// Nothing is meant to be running, so nothing missing. Today this means the
@@ -61,6 +67,34 @@ func state(s serviceStatus) string {
 		return "starting"
 	default:
 		return "running"
+	}
+}
+
+// jobState is state for a job: the phase of its latest run, in the table's
+// vocabulary. Failed is "failing" because the fix is the same — read the
+// message under the table — and a finished run is "done".
+func jobState(s serviceStatus) string {
+	if !s.Actual.Exists || s.Actual.Run == nil {
+		return "failing"
+	}
+	// Drift means the run that was asked for is not the run in the cluster —
+	// re-running the same image is the ordinary case, so the previous run's
+	// "done" would otherwise paint a tick over a run that never started. The
+	// same answer a service gets for the same condition: still starting.
+	if !s.InSync {
+		return "starting"
+	}
+	switch s.Actual.Run.Phase {
+	case "done":
+		return "done"
+	case "failed":
+		return "failing"
+	case "running":
+		return "running"
+	case "suspended":
+		return "stopped"
+	default:
+		return "starting"
 	}
 }
 
@@ -119,8 +153,8 @@ func printStatusTable(st statusResp) {
 	// harder to find.
 	anyVolume := false
 	// Likewise a kind column: it only earns its place once a project has
-	// something in it that is not a service.
-	anyResource := false
+	// something in it that is not a service — a resource, or a job.
+	anyKind := false
 	// Which names in this project are externals, so an edge pointing at one can
 	// be marked where the edges are listed. Two edges in the same cell do not
 	// mean the same thing — reaching `pg` is enforced by a NetworkPolicy,
@@ -131,8 +165,8 @@ func printStatusTable(st statusResp) {
 		if s.VolumePath != "" {
 			anyVolume = true
 		}
-		if isResourceKind(s.Kind) {
-			anyResource = true
+		if isResourceKind(s.Kind) || isJobKind(s.Kind) {
+			anyKind = true
 		}
 		if isExternalKind(s.Kind) {
 			externals[s.Name] = true
@@ -140,7 +174,7 @@ func printStatusTable(st statusResp) {
 	}
 
 	head := []string{"", "SERVICE"}
-	if anyResource {
+	if anyKind {
 		head = append(head, "KIND")
 	}
 	// SIZE is always shown, unlike VOLUME and KIND. Every service has one, so it
@@ -166,7 +200,7 @@ func printStatusTable(st statusResp) {
 		// shade of it.
 		mark := map[string]string{
 			"running": "●", "starting": "◐", "failing": "○", "stopped": "◌",
-			"external": "◆",
+			"external": "◆", "done": "✓",
 		}[state(s)]
 		marked := make([]string, 0, len(s.Needs))
 		for _, n := range s.Needs {
@@ -180,15 +214,24 @@ func printStatusTable(st statusResp) {
 			reaches = "—"
 		}
 		row := []string{mark, s.Name}
-		if anyResource {
+		if anyKind {
 			row = append(row, kindLabel(s.Kind))
 		}
-		if isExternalKind(s.Kind) {
+		switch {
+		case isExternalKind(s.Kind):
 			// Size, readiness, port and image are all facts about a container.
 			// A dash says "not applicable" where a zero would say "zero" and
 			// send somebody looking for the pod that is not listening on it.
 			row = append(row, "—", "—", "—", reaches, "—")
-		} else {
+		case isJobKind(s.Kind):
+			// A job has a run where a service has replicas, so the READY cell
+			// says how the latest run stands — and the port is a dash for the
+			// same reason an external's is: there is no listener to name.
+			row = append(row,
+				sizeLabel(s.Size), runPhase(s), "—",
+				reaches, shortImage(s.Image, st.ProjectID),
+			)
+		default:
 			row = append(row,
 				sizeLabel(s.Size),
 				fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired),
@@ -212,6 +255,14 @@ func printStatusTable(st statusResp) {
 		// guess it.
 		if isExternalKind(s.Kind) {
 			lines = append(lines, line{text: fmt.Sprintf("◆  └ publishes %s_*", envPrefix(s.Name))})
+		}
+
+		// A job's run, under it, where a service's addresses go: which run,
+		// how it stands, when, how long, and the exit code once there is one.
+		// The one line somebody came to this table for, and the cell above
+		// has room for one word of it.
+		if isJobKind(s.Kind) {
+			lines = append(lines, line{text: runLine(s)})
 		}
 
 		// Every address the service answers on, under it, in the order the
@@ -271,6 +322,9 @@ func printStatusTable(st statusResp) {
 	if seen["stopped"] {
 		notes = append(notes, "◌ stopped")
 	}
+	if seen["done"] {
+		notes = append(notes, "✓ done (a job that ran to completion)")
+	}
 	// Says what it is rather than how it is, because there is no how: nothing
 	// runs, so there is no state to be in. The clause about egress is here and
 	// not only in the docs — this table is where somebody forms their idea of
@@ -305,6 +359,10 @@ func printStatusTable(st statusResp) {
 		if !ok || s.Actual.Message == "" {
 			continue
 		}
+		// A job's message is already on the line under its row.
+		if isJobKind(s.Kind) {
+			continue
+		}
 		fmt.Printf("  %s %s: %s\n", g, s.Name, s.Actual.Message)
 	}
 	fmt.Printf("  %s today so far\n", formatUSD(st.UsageToday.MicroUSD))
@@ -325,6 +383,103 @@ func formatUSD(microUSD int64) string {
 
 func isResourceKind(kind string) bool { return strings.HasPrefix(kind, "resource:") }
 
+// isJobKind is the row that runs to completion. Compared as a string for the
+// reason isExternalKind is.
+func isJobKind(kind string) bool { return kind == "job" }
+
+// runPhase is what a job's READY cell says: one word about the latest run.
+func runPhase(s serviceStatus) string {
+	if s.Actual.Run == nil {
+		return "—"
+	}
+	return s.Actual.Run.Phase
+}
+
+// runLine is the sentence under a job's row — the run's number, how it
+// stands, when, how long, the exit code, and for a run that is not going the
+// cluster's own reason. The mark repeats the row's, the way an address line
+// repeats its service's, so the line reads on its own.
+func runLine(s serviceStatus) string {
+	mark := map[string]string{
+		"running": "●", "starting": "◐", "failing": "○", "stopped": "◌", "done": "✓",
+	}[state(s)]
+	r := s.Actual.Run
+	if r == nil {
+		out := mark + "  └ no run in the cluster"
+		if s.Actual.Message != "" && s.Actual.Message != "no run in cluster" {
+			out += ": " + s.Actual.Message
+		}
+		return out
+	}
+	// The run described below is the one in the cluster, which during drift is
+	// not the one that was asked for. Said before it, because otherwise the
+	// line reads as a report on the run somebody just started.
+	if !s.InSync {
+		return fmt.Sprintf("%s  └ waiting for the run that was asked for; run %d is what is in the cluster",
+			mark, r.Revision)
+	}
+	took := runDuration(r, time.Now())
+	var text string
+	switch r.Phase {
+	case "done":
+		text = fmt.Sprintf("run %d finished", r.Revision)
+		if r.FinishedAt != nil {
+			text += " " + ago(*r.FinishedAt)
+		}
+		if took != "" {
+			text += ", took " + took
+		}
+		text += ", exit 0"
+	case "failed":
+		text = fmt.Sprintf("run %d failed", r.Revision)
+		if r.FinishedAt != nil {
+			text += " " + ago(*r.FinishedAt)
+		}
+		if took != "" {
+			text += " after " + took
+		}
+		if r.ExitCode != nil {
+			text += fmt.Sprintf(", exit %d", *r.ExitCode)
+		}
+		if s.Actual.Message != "" {
+			text += ": " + s.Actual.Message
+		}
+	case "running":
+		text = fmt.Sprintf("run %d running", r.Revision)
+		if took != "" {
+			text += " for " + took
+		}
+	case "suspended":
+		text = fmt.Sprintf("run %d suspended with the project", r.Revision)
+	default:
+		text = fmt.Sprintf("run %d pending", r.Revision)
+		if s.Actual.Message != "" {
+			text += ": " + s.Actual.Message
+		}
+	}
+	return mark + "  └ " + text
+}
+
+// runDuration is how long a run took, or has been going. Seconds under two
+// minutes, then minutes; nothing is allowed past an hour.
+func runDuration(r *runState, now time.Time) string {
+	if r.StartedAt == nil {
+		return ""
+	}
+	end := now
+	if r.FinishedAt != nil {
+		end = *r.FinishedAt
+	}
+	secs := int(end.Sub(*r.StartedAt).Round(time.Second).Seconds())
+	if secs < 0 {
+		secs = 0
+	}
+	if secs < 120 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	return fmt.Sprintf("%d min", (secs+30)/60)
+}
+
 // isExternalKind is the one resource type gg renders differently, because it is
 // the one with no pod behind it. Compared as a string rather than asked of the
 // control plane: the status response carries the kind, and a table that needed a
@@ -338,6 +493,9 @@ func isExternalKind(kind string) bool { return kind == "resource:"+typeExternal 
 func kindLabel(kind string) string {
 	if isResourceKind(kind) {
 		return strings.TrimPrefix(kind, "resource:")
+	}
+	if isJobKind(kind) {
+		return "job"
 	}
 	return "service"
 }

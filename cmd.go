@@ -83,6 +83,7 @@ Environment (overrides the file; meant for CI):
 		newPushCmd(),
 		newDeployCmd(),
 		newShipCmd(),
+		newRunCmd(),
 		newCredentialsCmd(),
 		newStatusCmd(),
 		newLogsCmd(),
@@ -334,6 +335,45 @@ one that already has an address keeps it.`,
 			return err
 		}
 		return cmdShip(args[0], b, d)
+	}
+	return cmd
+}
+
+func newRunCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run PROJECT/JOB IMAGE[:TAG]",
+		Short: "run an image to completion, wait, and print what it wrote",
+		Long: `Run an image once, as a named job, and wait for it to finish.
+
+  gg run shop/migrate migrate:v3
+  gg run shop/migrate migrate:v3 --deps db --env-file .env
+
+A job is a service that runs to completion instead of serving: a database
+migration, a backfill, an import, a report. It has no port and no address,
+nothing can declare that it needs one, and it keeps nothing between runs —
+put durable data in a resource the job reaches with --deps.
+
+Every call is one run, recorded as a revision like a deploy. gg waits for
+the run to end, prints its output, and exits with the script's own exit
+code — so a pipeline can branch on it as if it had run the script itself.
+--detach submits and returns instead; "gg status" then reports how the run
+ended and "gg logs" prints what it wrote.
+
+A run that fails is not retried. A run is stopped after sixty minutes.
+Environment is replaced wholesale, as it is for a deploy; the connection
+variables of any resource the job reaches are added by the platform each
+run and never stored against the revision.`,
+		Args: usageArgs(2, 2, "usage: gg run PROJECT/JOB IMAGE[:TAG]\n"+
+			"  e.g. gg run shop/migrate migrate:v3\n"+
+			"  build the image first with gg build"),
+	}
+	v := bindRunFlags(cmd.Flags())
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		f, err := v.finish()
+		if err != nil {
+			return err
+		}
+		return cmdRun(args[0], args[1], f)
 	}
 	return cmd
 }

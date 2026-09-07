@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,9 +24,27 @@ import (
 func main() {
 	if err := rootCmd().Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "gg: %v\n", err)
+		// A job's exit code is gg's, so a pipeline that ran `gg run` can
+		// branch on it the way it would on the script itself. Everything else
+		// that fails is a 1.
+		var ee *exitError
+		if errors.As(err, &ee) && ee.code != 0 {
+			os.Exit(ee.code)
+		}
 		os.Exit(1)
 	}
 }
+
+// exitError is an error that carries the process exit code gg should end
+// with. Only `gg run` makes one: it is the one command whose failure is
+// somebody else's program failing, and that program's code is the fact worth
+// passing on.
+type exitError struct {
+	code int
+	msg  string
+}
+
+func (e *exitError) Error() string { return e.msg }
 
 // ---- API plumbing -------------------------------------------------------
 
@@ -613,7 +632,25 @@ type serviceStatus struct {
 		// every deploy reads as broken for its first few seconds.
 		Stalled bool   `json:"stalled"`
 		Message string `json:"message"`
+		// Run is what a job's latest run did, and nil for anything that is
+		// not a job. Ready and Desired are zero for one: nothing is meant to
+		// stay up.
+		Run *runState `json:"run"`
 	} `json:"actual"`
+}
+
+// runState is one run of a job, as the control plane reports it.
+type runState struct {
+	// Revision is the deploy this run belongs to — the number `gg run`
+	// printed, and what it waits on.
+	Revision int `json:"revision"`
+	// Phase is pending, running, done, failed or suspended.
+	Phase string `json:"phase"`
+	// ExitCode is what the process returned, once it has; nil for a run the
+	// platform stopped rather than one that stopped itself.
+	ExitCode   *int       `json:"exit_code"`
+	StartedAt  *time.Time `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
 }
 
 func cmdStatus(ref string) error {
