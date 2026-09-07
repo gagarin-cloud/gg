@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -89,11 +90,48 @@ func cmdRollback(ref string, to int) error {
 		Revision     int    `json:"revision"`
 		RestoredFrom int    `json:"restored_from"`
 		Sentence     string `json:"sentence"`
+		// Service is echoed back for its kind. An external's rollback is a
+		// different event from a service's — nothing of it runs — and the two
+		// want different words underneath the sentence.
+		Service struct {
+			Kind string `json:"kind"`
+		} `json:"service"`
+		// Only an external answers with these: which published names moved, and
+		// which services were restarted for it. Names, never values — the
+		// bundle may hold a credential, and `gg resource secrets` is the
+		// deliberate read.
+		Changed    []string `json:"changed"`
+		Removed    []string `json:"removed"`
+		Dependents []string `json:"dependents"`
 	}
 	if err := call("POST", "/v1/projects/"+project+"/services/"+service+"/rollback", body, &out); err != nil {
 		return err
 	}
 	fmt.Println(out.Sentence)
+
+	if isExternalKind(out.Service.Kind) {
+		if len(out.Changed) > 0 {
+			sort.Strings(out.Changed)
+			fmt.Printf("\n  Changed: %s\n", strings.Join(out.Changed, ", "))
+		}
+		if len(out.Removed) > 0 {
+			sort.Strings(out.Removed)
+			fmt.Printf("  No longer published: %s\n", strings.Join(out.Removed, ", "))
+		}
+		if len(out.Changed) > 0 || len(out.Removed) > 0 {
+			fmt.Printf("  Values: gg resource secrets %s/%s\n", project, service)
+		}
+		if len(out.Dependents) == 0 {
+			fmt.Printf("\nNothing declares %s yet, so nothing needed restarting.\n", service)
+		}
+		// "what is running now" is wrong for a row that runs nothing, and the
+		// revision is still worth saying: it is what a second rollback would
+		// leave from, and it is how somebody checks they landed where they meant.
+		fmt.Printf("\nRevision %d is what it publishes now; %d is still in the history.\n",
+			out.Revision, out.RestoredFrom)
+		return nil
+	}
+
 	// History is append-only, and saying so here is what stops somebody
 	// expecting the revision they just left to have disappeared.
 	fmt.Printf("Revision %d is what is running now; %d is still in the history.\n",

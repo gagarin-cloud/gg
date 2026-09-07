@@ -106,6 +106,61 @@ func TestExternalWithNoValuesIsRefused(t *testing.T) {
 	}
 }
 
+// --- rolling an external back ----------------------------------------------
+//
+// The undo config never had. A service rollback cannot do this — the injected
+// half is re-derived from the resources as they are now, deliberately, so that
+// nobody is ever put back onto a rotated password — which leaves the resource
+// itself as the only place a config change can be undone.
+
+// The output is worded for a row that runs nothing. "Revision 3 is what is
+// running now" would be false of an external, and false in the direction that
+// sends somebody looking for a pod.
+func TestRollingBackAnExternalPrintsWhatMoved(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"revision":3,"restored_from":1,
+		  "service":{"kind":"resource:external"},
+		  "changed":["CFG_LOG_LEVEL"],"removed":["CFG_REGION"],"dependents":["web","worker"],
+		  "sentence":"cfg is publishing the values from revision 1 again, recorded as revision 3, and web and worker are restarting to pick them up."}`))
+	})
+	out := capture(t, func() {
+		if err := cmdRollback("shop/cfg", 1); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "Changed: CFG_LOG_LEVEL") {
+		t.Errorf("the output does not name what moved:\n%s", out)
+	}
+	if !strings.Contains(out, "No longer published: CFG_REGION") {
+		t.Errorf("the output does not name what a rollback took away:\n%s", out)
+	}
+	if !strings.Contains(out, "publishes now") {
+		t.Errorf("the output should not talk about what is running for a row that runs nothing:\n%s", out)
+	}
+	if strings.Contains(out, "is what is running now") {
+		t.Errorf("an external does not run, and this line says it does:\n%s", out)
+	}
+}
+
+// A service keeps the wording it had. The external branch must not swallow the
+// ordinary case, which is the whole of what this command was for until now.
+func TestRollingBackAServiceKeepsItsWording(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"revision":9,"restored_from":7,"service":{"kind":"container"},
+		  "sentence":"web is back to revision 7, recorded as revision 9."}`))
+	})
+	out := capture(t, func() {
+		if err := cmdRollback("shop/web", 7); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "Revision 9 is what is running now") {
+		t.Errorf("a service rollback lost its wording:\n%s", out)
+	}
+}
+
 // --- rotation --------------------------------------------------------------
 
 // rotateServer answers a rotate the way the engine does, and records the body

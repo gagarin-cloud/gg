@@ -679,10 +679,27 @@ volume — those are declarations about the shape of the project rather than
 parts of the artifact, and putting yesterday's code back says nothing
 about them.
 
+It also does not restore the variables a service inherits from resources
+it needs. Those are resolved from the graph as it stands now, so a
+rollback never puts a service back onto a password that has since been
+rotated. To put those back, roll back the resource itself:
+
+  gg rollback shop/config --to 4
+
+which works for an external, whose values are yours. It is refused for a
+postgres, qdrant or valkey: gagarin mints those credentials, so there is
+no earlier value of yours to go back to.
+
+Rolling back an external changes what every service declaring it holds,
+and they are restarted for it — so the answer names them. That is the
+right blast radius for shared config, and the reason it is done here
+rather than as a side effect of rolling back one of its dependents.
+
 A rollback is itself a deploy: it is recorded as a new revision naming the
 one it restored, and nothing leaves the history.`,
 		Args: usageArgs(1, 1, "usage: gg rollback PROJECT/SERVICE [--to REVISION]\n"+
-			"  e.g. gg rollback shop/web"),
+			"  e.g. gg rollback shop/web\n"+
+			"  an external's values: gg rollback shop/config --to 4"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdRollback(args[0], to)
 		},

@@ -64,6 +64,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg resource secrets P/NAME` | its connection values, for something outside the project |
 | `gg resource rotate P/NAME` | new credentials, and everything holding them rolls |
 | `gg resource rotate P/NAME --set K=V` | change one value an external publishes, keeping the rest |
+| `gg rollback P/NAME` | put a previous revision back — a service's deploy, or an external's values |
 | `gg connect P/NAME` | that resource on this machine, for as long as the command runs |
 | `gg resource backup` / `backups` / `restore P/NEW --source OLD` | postgres recovery |
 | `gg deps add P/SVC NAME...` / `deps ls` / `deps rm` | what a service may reach, and whose credentials it holds |
@@ -558,10 +559,14 @@ for — an honesty you can pass on when somebody asks.
   brief outage. There is no point-in-time recovery. Say that plainly if a user
   asks whether their data is safe, rather than implying an SLA nobody is on the
   hook for.
-- **A resource cannot be deployed over and cannot be rolled back** — it has no
-  deploy history. `gg deploy shop/db` against one is refused with `not_a_service`,
-  which is telling you the name is already a database. Nor can a resource declare
-  dependencies: it is reached, it does not reach.
+- **A resource cannot be deployed over.** `gg deploy shop/db` against one is
+  refused with `not_a_service`, which is telling you the name is already a
+  database. Nor can a resource declare dependencies: it is reached, it does not
+  reach.
+- **A managed resource cannot be rolled back**, because gagarin mints its
+  credentials and there is no earlier value of the user's to go back to. An
+  **external can** — its values are theirs — and `gg rollback P/NAME` is how a
+  config change is undone. See the external section below.
 
 ### Connecting one: the single call
 
@@ -731,6 +736,55 @@ with a revoked key. As a resource it is one row and rotating is one command.
 - **What it is genuinely worth:** the project's dependencies become legible, and
   destroying an external is refused while anything still declares it, so a key
   cannot be dropped out from under a running service.
+
+### An external is also where shared config belongs
+
+Not only third-party credentials. **Anything several services read, or that
+changes without a deploy, belongs in an external** — feature flags, a log level,
+a region, an API base URL, a tuning constant.
+
+```
+gg resource add shop/config external --env-file .env.shared
+gg deps add shop/web config
+gg deps add shop/worker config          # both hold CONFIG_LOG_LEVEL
+
+gg resource rotate shop/config --set LOG_LEVEL=debug   # both roll, with the new value
+gg rollback shop/config                                # both roll back
+```
+
+**Why this beats `--env` on each deploy:** the same argument as for a key. An
+env on a deploy is a copy, so two services sharing a setting is two copies that
+can disagree, and changing it is two deploys with one you can forget. Resolved
+from the graph it is one row, one command, and every holder restarts.
+
+The full lifecycle is there, which is what makes it safe to recommend:
+
+| | |
+|---|---|
+| set it | `gg resource add P/config external --env-file .env` |
+| change one value | `gg resource rotate P/config --set LOG_LEVEL=debug` |
+| remove one | `gg resource rotate P/config --unset REGION` |
+| see what it was | `gg history P/config` |
+| put it back | `gg rollback P/config [--to N]` |
+| read the values | `gg resource secrets P/config` |
+| who uses it | `gg status P` — and destroying it is refused while anyone does |
+
+**Where the line is.** Config *owned by one service* stays in its `gg deploy
+--env`, because that is the half a service rollback restores. Injected values
+are re-derived from the resources as they stand now — deliberately, so nobody is
+ever rolled back onto a rotated password — so `gg rollback shop/web` will not
+undo a config change. Undo it at the resource.
+
+Three properties to state when asked, because they are constraints and not
+oversights:
+
+- **The prefix is not optional.** A resource named `config` publishes
+  `CONFIG_LOG_LEVEL`, never a bare `LOG_LEVEL`. Name the resource so the prefix
+  reads the way the application wants it.
+- **A dependent cannot override a value.** Injected beats the service's own env
+  of the same name. Two services needing different values is two resources.
+- **Every dependent gets every key** in the bundle. Split by audience, not by
+  topic: one resource per set of services that should hold the same things.
 
 ### Rotating credentials
 
@@ -1010,6 +1064,7 @@ accounts are not part of this model, and mentioning them is a regression.
 gg history  shop/web          revision numbers, images, when, and who
 gg rollback shop/web          put the previous deploy back
 gg rollback shop/web --to 3   a particular revision
+gg rollback shop/config       put an external's previous values back
 ```
 
 - **A rollback is a deploy.** It goes through the same write gate and is recorded
@@ -1153,7 +1208,7 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `invalid_size` | sizes are `s`, `m`, `l`; the message names the account's cap |
 | `no_such_revision` | `gg history` lists the ones it had |
 | `nothing_to_roll_back_to` | deployed only once. Not a bad call, just nothing to do |
-| `not_a_service` | that name is a resource or a job — you tried to deploy a service over it, or give it an address |
+| `not_a_service` | that name is a resource or a job — you tried to deploy a service over it, give it an address, or roll back a managed resource whose credentials gagarin mints (an external can be rolled back) |
 | `not_a_resource` | that name is a service. `gg status` shows which is which |
 
 **The graph**
