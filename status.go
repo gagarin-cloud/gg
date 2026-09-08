@@ -248,15 +248,6 @@ func printStatusTable(st statusResp) {
 		}
 		lines = append(lines, line{cells: row})
 
-		// What an external publishes, under it, on the same pattern an address
-		// hangs under a service. It is the only fact about one worth a row, and
-		// the reader has to have it to write the application: the prefix is
-		// derived from the name, so a reader who does not know the rule cannot
-		// guess it.
-		if isExternalKind(s.Kind) {
-			lines = append(lines, line{text: fmt.Sprintf("◆  └ publishes %s_*", envPrefix(s.Name))})
-		}
-
 		// A job's run, under it, where a service's addresses go: which run,
 		// how it stands, when, how long, and the exit code once there is one.
 		// The one line somebody came to this table for, and the cell above

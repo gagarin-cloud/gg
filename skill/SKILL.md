@@ -734,8 +734,9 @@ with a revoked key. As a resource it is one row and rotating is one command.
   changing *one* of them is `gg resource rotate --set K=V`, which leaves the
   rest alone.
 - **It runs nothing.** No container, no port, no size, no storage, no backups,
-  nothing to become ready. `gg status` shows it as `◆` with a line under it
-  saying what it publishes.
+  nothing to become ready. `gg status` shows it as `◆` and leaves every
+  container column a dash; what it publishes is `gg resource secrets P/NAME
+  --names`.
 - **Declaring an external does NOT restrict egress.** This is the one thing not to
   get wrong when you explain it. Everything in a project can already reach the
   whole internet — the mail ports are the only exception. What the declaration
@@ -801,8 +802,7 @@ gg resource secrets shop/config --names      # names only; no values fetched
 
 Use `--names` by default. Without it the command prints live credentials, and
 in your case that means into a transcript. `gg status` will not answer this
-either — it reports only that the resource publishes `CONFIG_*`, which is the
-prefix rule rather than the contents.
+either — it lists the resource and nothing about its contents.
 
 The full lifecycle is there, which is what makes it safe to recommend:
 
@@ -1036,7 +1036,6 @@ project shop  (id 7f3a9c2e)
   ●  api      service   m     1/1    4000  db, openai◆  api:1757030112
   ●  db       postgres  m     1/1    5432  —            postgres:17
   ◆  openai   external  —     —      —     —            —
-  ◆  └ publishes OPENAI_*
 
   ● running   ◆ external (runs nothing; declaring it grants its variables, not egress)
   $0.412 today so far

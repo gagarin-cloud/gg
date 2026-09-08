@@ -376,10 +376,11 @@ func TestAnExternalDoesNotReadAsFailing(t *testing.T) {
 	if strings.Contains(out, "0/0") {
 		t.Errorf("an external was given a readiness count:\n%s", out)
 	}
-	// The prefix is derived from the name, so a reader who does not know the
-	// rule cannot guess it.
-	if !strings.Contains(out, "publishes OPENAI_*") {
-		t.Errorf("the table does not say what the external publishes:\n%s", out)
+	// And it gets no second row restating the prefix: `OPENAI_*` under a row
+	// named `openai` is the name again in capitals, once per external, and the
+	// names it actually publishes are a `gg resource secrets --names` away.
+	if strings.Contains(out, "publishes") {
+		t.Errorf("the table still carries the derived-prefix line:\n%s", out)
 	}
 }
 
