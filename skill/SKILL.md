@@ -146,9 +146,9 @@ or the fifth on an old one; there is no separate signup.
    `~/.config/gagarin/credentials.json` and logs `docker` in to the registry.
 
 Signing in, signing up and authorising another machine are the same request, and
-the answer is the same whether or not the address already has an account. The moment an
-account is created it gets its balance and the address joins gagarin's customer
-list; https://gagarin.cloud/privacy says what that list is for.
+the answer is the same whether or not the address already has an account. The
+moment an account is created it gets its balance and the address joins gagarin's
+customer list; https://gagarin.cloud/privacy says what that list is for.
 
 You never handle the credential yourself. Do not read that file, do not echo it,
 and never ask the user for a token — if you find yourself wanting a secret to
