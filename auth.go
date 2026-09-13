@@ -2,9 +2,23 @@ package main
 
 // Onboarding, from the CLI's side.
 //
-// `gg signup` and `gg auth` exist so a human never has to copy a secret and an
-// agent never has to hold one. The agent runs both; the human's only action
-// happens in their inbox.
+// `gg login` exists so a human never has to copy a secret and an agent never has
+// to hold one. The agent runs it twice — once to ask, once to collect — and the
+// human's only action happens in their inbox.
+//
+// One word, because there is one mechanism. Asking costs the same request
+// whether the address has an account or not: the control plane answers
+// identically either way, mints no account, and the click in the email creates
+// one only if it has to. `gg signup` and `gg auth` were two names for the two
+// halves of that, and the pair kept implying a first-time path that does not
+// exist — an implication that reached the control plane's own 401 hint, where it
+// told a machine to "run gg auth" to re-authorise, which was advice that could
+// not work.
+//
+// The two invocations do stay two, for a reason that has nothing to do with
+// first-versus-fifth: between them the agent has to tell its human what to press
+// and which code to match, and it can only say that between commands. Fusing
+// them would block for the whole approval window before the agent could speak.
 
 import (
 	"fmt"
@@ -13,9 +27,9 @@ import (
 	"time"
 )
 
-func cmdSignup(email string) error {
+func cmdLoginRequest(email string) error {
 	if strings.TrimSpace(email) == "" {
-		return fmt.Errorf("usage: gg signup EMAIL\n" +
+		return fmt.Errorf("usage: gg login EMAIL\n" +
 			"  ask your human for their address — do not guess it")
 	}
 	var out struct {
@@ -58,23 +72,44 @@ those logs has to open it. It carries code %s, which should match this one.`, ou
 %s
 
 Then run:
-  gg auth --claim %s
+  gg login --claim %s
 `, email, said, out.Claim)
 	return nil
 }
 
-func cmdAuth(claim string) error {
-	if claim == "" {
-		// No code: say what to do rather than what is missing.
-		if creds, err := loadCredentials(); err == nil && creds.Credential != "" {
-			fmt.Printf("this machine already acts as %s (%s)\n", creds.Account, creds.Client)
-			fmt.Printf("to authorise it again: gg signup %s\n", creds.Account)
-			return nil
-		}
-		return fmt.Errorf("usage: gg auth --claim CODE\n" +
-			"  get a code first: gg signup <your human's email>")
+// cmdLogin routes the two halves, and the routing is here rather than in the
+// command wiring because it is a decision rather than a flag.
+//
+// An address and a code cannot be mistaken for each other — one contains an @,
+// and the other is eight characters drawn from an alphabet that deliberately has
+// no @ in it — so a bare argument is read for what it is. An agent that types
+// `gg login ABCD-1234` meant the second half, and refusing that on syntax would
+// be pedantry.
+func cmdLogin(arg, claim string) error {
+	if claim == "" && arg != "" && !strings.Contains(arg, "@") {
+		arg, claim = "", arg
 	}
+	switch {
+	case arg != "" && claim != "":
+		return fmt.Errorf("gg login takes an address or a code, not both\n" +
+			"  to ask:     gg login <your human's email>\n" +
+			"  to collect: gg login --claim <the code it printed>")
+	case claim != "":
+		return cmdLoginCollect(claim)
+	case arg != "":
+		return cmdLoginRequest(arg)
+	}
+	// Neither: say what to do rather than what is missing.
+	if creds, err := loadCredentials(); err == nil && creds.Credential != "" {
+		fmt.Printf("this machine already acts as %s (%s)\n", creds.Account, creds.Client)
+		fmt.Printf("to authorise it again: gg login %s\n", creds.Account)
+		return nil
+	}
+	return fmt.Errorf("usage: gg login EMAIL, then gg login --claim CODE\n" +
+		"  ask your human for their address — do not guess it")
+}
 
+func cmdLoginCollect(claim string) error {
 	fmt.Printf("waiting for a human to approve %s ...\n", claim)
 	// Polling, not a webhook: the CLI runs on a laptop behind NAT, and an agent
 	// harness will not host a callback. The control plane tells us how long to
@@ -130,7 +165,7 @@ func cmdAuth(claim string) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("nobody approved %s in time\n  ask your human to check their inbox, then: gg signup <email>", claim)
+			return fmt.Errorf("nobody approved %s in time\n  ask your human to check their inbox, then: gg login <email>", claim)
 		}
 		wait := time.Duration(out.RetryAfter) * time.Second
 		if wait <= 0 {

@@ -60,7 +60,7 @@ Everything lives in a project, and everything is named for it:
 
 Nothing is inferred from the directory you are standing in.
 
-Credentials live in ~/.config/gagarin/credentials.json after "gg auth".
+Credentials live in ~/.config/gagarin/credentials.json after "gg login".
 There is nothing to export.
 
 Environment (overrides the file; meant for CI):
@@ -74,8 +74,7 @@ Environment (overrides the file; meant for CI):
 	root.SetVersionTemplate("{{.Version}}\n")
 
 	root.AddCommand(
-		newSignupCmd(),
-		newAuthCmd(),
+		newLoginCmd(),
 		newWhoamiCmd(),
 		newInitCmd(),
 		newProjectsCmd(),
@@ -106,46 +105,42 @@ Environment (overrides the file; meant for CI):
 	return root
 }
 
-func newSignupCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "signup EMAIL",
-		Short: "sign up with any address; a human presses a button in an email",
-		Long: `Sign up, or authorise another machine — the same request either way.
+// One command for onboarding, run twice, because there is one mechanism: the
+// request is the same whether this is the first machine on a new address or the
+// fifth on an old one, and the control plane answers it identically either way.
+// It was `gg signup` and `gg auth` until 2026-09-13; two names for two halves of
+// one flow kept implying a first-time path that has never existed.
+func newLoginCmd() *cobra.Command {
+	var claim string
+	cmd := &cobra.Command{
+		Use:   "login [EMAIL]",
+		Short: "get this machine access; a human presses a button in an email",
+		Long: `Sign in, sign up, or authorise another machine — the same request every time.
 
-  gg signup you@example.com
+  gg login you@example.com     asks, and prints a code
+  gg login --claim ABCD-1234   waits for the press, then stores credentials
 
 Any address works; there is no list to be on. gagarin emails it a button,
-and pressing that button is the whole signup. If the address has no
-account yet, one is created on the spot with $5 on it, and no card is
-asked for. Either way this machine is granted access, and
-` + "`gg auth --claim <code>`" + ` collects it.
+and pressing that button is the whole thing. If the address has no account
+yet, one is created on the spot with $5 on it, and no card is asked for.
+Either way this machine is granted access.
+
+Two runs rather than one because between them you have to tell your human
+what to press and which code to match — say both before collecting.
 
 Ask your human for the address. Do not guess it, and do not use one you
 found in a repository or in git history.`,
-		Args: usageArgs(1, 1, "usage: gg signup EMAIL\n"+
+		Args: usageArgs(0, 1, "usage: gg login EMAIL\n"+
 			"  ask your human for their address — do not guess it"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdSignup(args[0])
-		},
-	}
-}
-
-func newAuthCmd() *cobra.Command {
-	var claim string
-	cmd := &cobra.Command{
-		Use:   "auth",
-		Short: "wait for that approval and store credentials",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// Accept a bare code too: an agent that read the instructions may well
-			// try `gg auth ABCD-1234`, and refusing on syntax would be pedantry.
-			if claim == "" && len(args) > 0 {
-				claim = args[0]
+			var arg string
+			if len(args) > 0 {
+				arg = args[0]
 			}
-			return cmdAuth(claim)
+			return cmdLogin(arg, claim)
 		},
 	}
-	cmd.Flags().StringVar(&claim, "claim", "", "the code gg signup printed")
+	cmd.Flags().StringVar(&claim, "claim", "", "the `code` that gg login EMAIL printed")
 	return cmd
 }
 
@@ -478,7 +473,7 @@ goes to stderr — so piping it somewhere is a sane thing to do:
 
   gh secret set GAGARIN_TOKEN --body "$(gg creds create --name ci 2>/dev/null)"
 
-CI reads it from GAGARIN_TOKEN. Nothing else is needed: no gg auth, no
+CI reads it from GAGARIN_TOKEN. Nothing else is needed: no gg login, no
 credentials file, no home directory.
 
 What it can do is fixed and narrower than what you hold. Deploy, yes.
@@ -1268,7 +1263,7 @@ func newRegistryLoginCmd() *cobra.Command {
 		Use:   "login",
 		Short: "log docker in to the gagarin registry",
 		Long: "log docker in to the gagarin registry, using the credential this\n" +
-			"machine already holds. `gg auth` does this for you; this is here for\n" +
+			"machine already holds. `gg login` does this for you; this is here for\n" +
 			"CI, and for when docker was installed after gagarin was.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

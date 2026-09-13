@@ -52,7 +52,7 @@ first; they are the parts that stop you getting it wrong.
 | | |
 |---|---|
 | `gg whoami` | which account this machine acts as — **run this first, always** |
-| `gg signup EMAIL` / `gg auth --claim CODE` | get this machine access |
+| `gg login EMAIL` / `gg login --claim CODE` | get this machine access |
 | `gg creds` / `creds create --name N` / `creds revoke ID` | what has access; mint one for CI; take one away |
 | `gg registry login` | log docker in (CI, or docker installed after gg) |
 | `gg projects` | every project you can reach, and your role on it |
@@ -131,21 +131,22 @@ checklist, cover the rest.
 
 ## Getting access
 
-Signing up is open to any address — there is no list to be on, one email and one
+`gg login` is open to any address — there is no list to be on, one email and one
 button is the whole thing, and a new account starts with $5 on it and no card
-asked for.
+asked for. It is one command whether this is the first machine on a new address
+or the fifth on an old one; there is no separate signup.
 
 1. **Ask the user for their email address.** Do not guess it, and do not use one
    you found in the repository or in git history — a deploy that lands in a
    stranger's account is worse than no deploy.
-2. `gg signup <email>` — it prints a code.
+2. `gg login <email>` — it prints a code.
 3. **Tell the user to press the button in the email**, and say the code, so they
    can check the email is the one you triggered.
-4. `gg auth --claim <code>` — waits for the press, then stores credentials in
+4. `gg login --claim <code>` — waits for the press, then stores credentials in
    `~/.config/gagarin/credentials.json` and logs `docker` in to the registry.
 
-Signing up and authorising another machine are the same request, and the answer
-is the same whether or not the address already has an account. The moment an
+Signing in, signing up and authorising another machine are the same request, and
+the answer is the same whether or not the address already has an account. The moment an
 account is created it gets its balance and the address joins gagarin's customer
 list; https://gagarin.cloud/privacy says what that list is for.
 
@@ -159,7 +160,7 @@ its own.
 
 ## Setting up CI
 
-**Never run `gg signup` in CI, and never copy this machine's credential into
+**Never run `gg login` in CI, and never copy this machine's credential into
 it.** A pipeline gets one of its own, minted from the one you already hold.
 
 ### 1. Mint the credential
@@ -191,7 +192,7 @@ What you just minted is **deliberately weaker than what you hold**:
 ### 2. Give it to the pipeline
 
 CI reads `GAGARIN_TOKEN` from the environment and needs nothing else: no
-`gg auth`, no credentials file, no home directory, no interactive anything.
+`gg login`, no credentials file, no home directory, no interactive anything.
 
 ### 3. The workflow
 
@@ -263,8 +264,8 @@ Revoking needs no human because taking access away is always safe — a machine
 you no longer trust should not wait on an inbox. Rotate a CI credential by
 minting the new one, updating the secret, then revoking the old id.
 
-If you are tempted to set `XDG_CONFIG_HOME` to a scratch directory and run the
-signup flow again for a second credential: that used to be the only way and it
+If you are tempted to set `XDG_CONFIG_HOME` to a scratch directory and run
+`gg login` again for a second credential: that used to be the only way and it
 is not any more.
 
 ## Recipe: an application from nothing
@@ -1154,8 +1155,8 @@ granted here, it is offered and accepted — see below.
   is running. If the user asked for "read access" or "let them look at the logs",
   pass `--role viewer`.
 - Sharing with somebody who has never used gagarin is allowed — the access waits
-  for them and they get it when they sign up with that address. **Nothing is
-  emailed to them**, so tell the user to let them know.
+  for them and they get it the first time they run `gg login` with that address.
+  **Nothing is emailed to them**, so tell the user to let them know.
 - **Ask before sharing.** Access to a project is the user's to give, not yours to
   infer from a name in the conversation.
 
@@ -1263,8 +1264,8 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `name_too_long` | over 120 characters, and it appears in a list. Shorten it |
 | `approval_required` | a human must approve a deletion, or an ownership offer. Tell the user, pass on the code, wait, retry the same command |
 | `invalid_email` | ask the user for the address again; do not guess |
-| `claim_expired` / `no_such_claim` | run `gg signup <email>` again for a fresh code |
-| `claim_collected` | another machine collected that code. Run `gg signup <email>` again |
+| `claim_expired` / `no_such_claim` | run `gg login <email>` again for a fresh code |
+| `claim_collected` | another machine collected that code. Run `gg login <email>` again |
 | `email_failed` | retry once, then tell the user |
 
 **Projects and roles**

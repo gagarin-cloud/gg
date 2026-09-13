@@ -927,7 +927,7 @@ func cmdRegistryLogin() error {
 	cmd.Stdin = strings.NewReader(secret)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker login to %s failed: %w\n  hint: if it says the credential is not valid, run `gg auth`", host, err)
+		return fmt.Errorf("docker login to %s failed: %w\n  hint: if it says the credential is not valid, run `gg login <your human's email>`", host, err)
 	}
 	fmt.Printf("docker logged in to %s\n", host)
 	return nil

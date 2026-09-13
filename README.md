@@ -36,8 +36,8 @@ binary, so it never disagrees with the CLI you have.
 ## Use
 
 ```
-gg signup you@example.com      # any address; a human presses a button in an email, and that is the whole signup
-gg auth --claim ABCD-1234      # waits for that press, stores credentials, logs docker in
+gg login you@example.com       # any address; a human presses a button in an email, and that is the whole thing
+gg login --claim ABCD-1234     # waits for that press, stores credentials, logs docker in
 
 gg creds                                     # what has access to this account
 gg creds create --name "github actions"      # mint one for CI: deploy-only, expiring, printed once
@@ -77,8 +77,9 @@ gg push   shop/web:v3                    # publish it, release nothing
 gg deploy shop/web:8080 web:v3           # release one that already exists
 ```
 
-Signing up is open to any address. The first press of that button creates the
-account with $5 on it; no card is asked for. Never sign up from CI: a pipeline
+`gg login` is open to any address, and is the same command every time — first
+machine or fifth, new address or old. The first press of that button creates the
+account with $5 on it; no card is asked for. Never run it from CI: a pipeline
 gets its own credential from `gg creds create`, run by a human on a machine
 that already has one.
 
