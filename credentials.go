@@ -145,5 +145,6 @@ func (errNotAuthenticated) Error() string {
 	return "this machine has no gagarin credentials\n" +
 		"  to get some: gg login <your human's email>\n" +
 		"  then run: gg login --claim <code it prints>\n" +
-		"  a single click in that email creates the account and authorises this machine"
+		"  the first run prints what to tell your human; a click in their email\n" +
+		"  authorises this machine, and creates the account if they have none"
 }

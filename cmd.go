@@ -105,9 +105,10 @@ Environment (overrides the file; meant for CI):
 	return root
 }
 
-// One command for onboarding, run twice, because there is one mechanism: the
-// request is the same whether this is the first machine on a new address or the
-// fifth on an old one, and the control plane answers it identically either way.
+// One command for onboarding, run twice, because there is one request: the call
+// is the same whether this is the first machine on a new address or the fifth on
+// an old one, and the control plane answers it identically either way — on
+// purpose, so nobody can use it to find out which addresses have accounts.
 // It was `gg signup` and `gg auth` until 2026-09-13; two names for two halves of
 // one flow kept implying a first-time path that has never existed.
 func newLoginCmd() *cobra.Command {
@@ -120,13 +121,18 @@ func newLoginCmd() *cobra.Command {
   gg login you@example.com     asks, and prints a code
   gg login --claim ABCD-1234   waits for the press, then stores credentials
 
-Any address works; there is no list to be on. gagarin emails it a button,
-and pressing that button is the whole thing. If the address has no account
-yet, one is created on the spot with $5 on it, and no card is asked for.
-Either way this machine is granted access.
+Any address works; there is no list to be on, and pressing the button in the
+email is the whole thing. A new account is created when it is pressed, with $5
+on it and no card asked for.
+
+Where that email comes from depends on whether the address already has an
+account, and gagarin will not tell you which — so pass on both halves of what
+the first run prints. An address with an account is emailed a link. An address
+without one is emailed nothing until the person writes to the signup address
+themselves, because gagarin does not mail anybody who has not asked it to.
 
 Two runs rather than one because between them you have to tell your human
-what to press and which code to match — say both before collecting.
+what to do and which code to match — say both before collecting.
 
 Ask your human for the address. Do not guess it, and do not use one you
 found in a repository or in git history.`,
