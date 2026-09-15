@@ -52,7 +52,7 @@ first; they are the parts that stop you getting it wrong.
 | | |
 |---|---|
 | `gg whoami` | which account this machine acts as — **run this first, always** |
-| `gg login EMAIL` / `gg login --claim CODE` | get this machine access |
+| `gg login EMAIL` / `gg login --claim CODE` | get this machine access — relay what the first prints, as printed |
 | `gg creds` / `creds create --name N` / `creds revoke ID` | what has access; mint one for CI; take one away |
 | `gg registry login` | log docker in (CI, or docker installed after gg) |
 | `gg projects` | every project you can reach, and your role on it |
@@ -131,22 +131,46 @@ checklist, cover the rest.
 
 ## Getting access
 
-`gg login` is open to any address — there is no list to be on, one email and one
-button is the whole thing, and a new account starts with $5 on it and no card
-asked for. It is one command whether this is the first machine on a new address
-or the fifth on an old one; there is no separate signup.
+`gg login` is one command whether this is the first machine on a new address or
+the fifth on an old one; there is no separate signup, a human pressing a button
+is the whole thing, and a new account starts with $5 on it and no card asked
+for.
+
+Where that button comes from depends on whether the address already has an
+account, and **gagarin will not tell you which**. An unauthenticated endpoint
+that answered that question would be a way to test any address for a gagarin
+account, so the answer is the same either way. An address with an account is
+emailed a link. An address with none is emailed nothing: gagarin does not write
+to an address until that address writes to it, because mailing whatever address
+it was given was being used to mail strangers. `gg login <email>` therefore
+prints one instruction covering both cases, and the person reading it knows
+which half is theirs.
 
 1. **Ask the user for their email address.** Do not guess it, and do not use one
    you found in the repository or in git history — a deploy that lands in a
    stranger's account is worse than no deploy.
-2. `gg login <email>` — it prints a code.
-3. **Tell the user to press the button in the email**, and say the code, so they
-   can check the email is the one you triggered.
+2. `gg login <email>` — it prints a code and an instruction.
+3. **Give the user that instruction as printed**, code included, and do not
+   shorten it. It covers both halves: if they have an account the link is in
+   their inbox already and the email shows the same code, so they can tell it
+   apart from one they did not trigger; if they do not, they send a mail to the
+   signup address it names, from the address they want the account on, with the
+   code in the subject, and the reply carries the link. The instruction includes
+   a ready-made `mailto:` with the code filled in — pass that on too, because it
+   is the difference between a mail sent now and one meant to be sent later. The
+   address is `signup@mail.gagarin.cloud` on gagarin.cloud itself; another
+   deployment prints its own, so relay what you were given rather than this.
+   **Do not work out which of the two cases it is, and do not tell the user they
+   do or do not have an account.** You have not been told, and a guess either
+   way sends somebody to watch an inbox nothing is coming to.
 4. `gg login --claim <code>` — waits for the press, then stores credentials in
    `~/.config/gagarin/credentials.json` and logs `docker` in to the registry.
+   It gives up after about twelve minutes, which is not long for somebody who
+   has to write an email first: if it times out, run it again with the same
+   code, and only go back to `gg login <email>` if the code is reported expired
+   or unknown.
 
-Signing in, signing up and authorising another machine are the same request, and
-the answer is the same whether or not the address already has an account. The
+Signing in, signing up and authorising another machine are the same request. The
 moment an account is created it gets its balance and the address joins gagarin's
 customer list; https://gagarin.cloud/privacy says what that list is for.
 
@@ -1155,8 +1179,9 @@ granted here, it is offered and accepted — see below.
   is running. If the user asked for "read access" or "let them look at the logs",
   pass `--role viewer`.
 - Sharing with somebody who has never used gagarin is allowed — the access waits
-  for them and they get it the first time they run `gg login` with that address.
-  **Nothing is emailed to them**, so tell the user to let them know.
+  for them and lands the moment that address has an account. **Nothing is
+  emailed to them**, so tell the user to let them know; they get in by running
+  `gg login <their address>` and doing what it prints, as in "Getting access".
 - **Ask before sharing.** Access to a project is the user's to give, not yours to
   infer from a name in the conversation.
 
@@ -1266,7 +1291,7 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `invalid_email` | ask the user for the address again; do not guess |
 | `claim_expired` / `no_such_claim` | run `gg login <email>` again for a fresh code |
 | `claim_collected` | another machine collected that code. Run `gg login <email>` again |
-| `email_failed` | retry once, then tell the user |
+| `email_failed` | the mail did not leave gagarin. Retry once, then tell the user — nothing is waiting in an inbox to be found |
 
 **Projects and roles**
 

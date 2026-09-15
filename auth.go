@@ -6,14 +6,21 @@ package main
 // to hold one. The agent runs it twice — once to ask, once to collect — and the
 // human's only action happens in their inbox.
 //
-// One word, because there is one mechanism. Asking costs the same request
-// whether the address has an account or not: the control plane answers
-// identically either way, mints no account, and the click in the email creates
-// one only if it has to. `gg signup` and `gg auth` were two names for the two
+// One word, because there is one request. Asking costs the same call whether the
+// address has an account or not, and the control plane still answers identically
+// either way — deliberately, so that this endpoint cannot be used to test whether
+// an address is registered. `gg signup` and `gg auth` were two names for the two
 // halves of that, and the pair kept implying a first-time path that does not
 // exist — an implication that reached the control plane's own 401 hint, where it
 // told a machine to "run gg auth" to re-authorise, which was advice that could
 // not work.
+//
+// What changed on 2026-09-16 is what happens behind that identical answer. An
+// address with an account is emailed a link, as always. An address without one is
+// emailed nothing at all: the human writes to signup@ from it and is answered
+// there. gagarin does not write to an address until that address writes to it,
+// because the old behaviour was being used to mail strangers. The wording that
+// covers both without saying which is in auth_request.go.
 //
 // The two invocations do stay two, for a reason that has nothing to do with
 // first-versus-fifth: between them the agent has to tell its human what to press
@@ -26,56 +33,6 @@ import (
 	"strings"
 	"time"
 )
-
-func cmdLoginRequest(email string) error {
-	if strings.TrimSpace(email) == "" {
-		return fmt.Errorf("usage: gg login EMAIL\n" +
-			"  ask your human for their address — do not guess it")
-	}
-	var out struct {
-		Claim     string `json:"claim"`
-		ExpiresIn int    `json:"expires_in"`
-		// What happened to the email: "sent", "already_sent", or "logged".
-		// gg used to print "the email we just sent" whatever the answer was,
-		// which on 2026-09-01 was said twice about an email that was never
-		// sent — the control plane knew and the JSON did not carry it.
-		Delivery string `json:"delivery"`
-	}
-	body := map[string]string{"email": email, "client": clientName()}
-	if err := callAnon("POST", "/v1/signup", body, &out); err != nil {
-		return err
-	}
-
-	// One paragraph per outcome, because the instruction differs and not only
-	// the wording: "check your inbox" is useless advice when nothing was sent
-	// there, and "we just sent one" is wrong when the one that matters is ten
-	// minutes old.
-	said := fmt.Sprintf(`Tell your human to press the button in the email we just sent. It shows code
-%s, which should match this one. If they have no account yet, that press
-creates one, with $5 on it and no card asked for. Either way it grants this
-machine access.`, out.Claim)
-
-	switch out.Delivery {
-	case "already_sent":
-		said = fmt.Sprintf(`An approval email for this code is already in their inbox and we did not send
-another. It shows code %s, which should match this one. If they have no
-account yet, pressing its button creates one, with $5 on it and no card asked
-for. Either way it grants this machine access.`, out.Claim)
-	case "logged":
-		said = fmt.Sprintf(`No email was sent: this gagarin has no mail provider configured, so the
-approval link went to the control plane's log instead. Somebody with access to
-those logs has to open it. It carries code %s, which should match this one.`, out.Claim)
-	}
-
-	fmt.Printf(`asked %s to approve this machine.
-
-%s
-
-Then run:
-  gg login --claim %s
-`, email, said, out.Claim)
-	return nil
-}
 
 // cmdLogin routes the two halves, and the routing is here rather than in the
 // command wiring because it is a decision rather than a flag.
