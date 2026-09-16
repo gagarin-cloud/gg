@@ -538,7 +538,7 @@ not fail fast, it hangs until the client gives up.
 
   gg deps add shop/api db cache     api may now reach db and cache
   gg deps ls  shop/api              what it reaches today
-  gg deps rm  shop/api cache        and no longer cache
+  gg deps rm  shop/api cache        and no longer cache (needs approval)
 
 The direction matters. The declaration goes on the caller: if api queries
 db, it is api that needs db, never the other way round.
@@ -554,7 +554,11 @@ So connecting is this one call. It used to be two — read the credentials,
 pass them to a deploy — and that is no longer necessary.
 
 A deploy cannot withdraw any of this, and "gg deploy --deps" can only add
-to it. Withdrawing is "gg deps rm", here, and nowhere else.`,
+to it. Withdrawing is "gg deps rm", here, and nowhere else — and it asks
+a human first. Adding a path breaks nothing; closing one breaks something
+and says nothing, because the calls are dropped rather than refused. So
+"rm" is gated the way deleting a service is: we email the account owner,
+and the command goes through the next time you run it.`,
 	}
 	cmd.AddCommand(newDepsListCmd(), newDepsAddCmd(), newDepsRemoveCmd())
 	return cmd
@@ -589,7 +593,16 @@ func newDepsRemoveCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "rm PROJECT/SERVICE NAME...",
 		Aliases: []string{"remove"},
-		Short:   "stop it reaching these, and take their credentials away",
+		Short:   "stop it reaching these (needs a human's approval)",
+		Long: `Withdraws a path, and the credentials that rode on it.
+
+This one needs a human's approval, and "gg deps add" does not. An
+undeclared call is dropped rather than refused, so the service on the
+far end does not break — it hangs, and nothing anywhere reports it. We
+email the account owner a sentence naming the edge; run the same command
+again once they have clicked.
+
+  gg deps rm shop/api cache`,
 		Args: atLeastArgs(2, "usage: gg deps rm PROJECT/SERVICE NAME...\n"+
 			"  e.g. gg deps rm shop/api cache"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -1101,8 +1114,11 @@ The rest of the recovery, once the data is verified:
   1. gg deps add each dependent to the new resource, which also hands it
      the new resource's variables
   2. gg deps rm each dependent off the old one
-  3. remove the old resource — the one step that destroys data, and the
-     one that asks for human approval.
+  3. remove the old resource — the one step that destroys data
+
+Steps 2 and 3 ask for human approval; step 1 does not. One approval
+covers the fifteen minutes after it, so a click partway through this is
+usually the only one needed.
 
 The variables are named after the resource, so they change with the
 name: what read DB_URL now reads DB2_URL. A dependent that hard-codes

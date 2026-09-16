@@ -17,6 +17,13 @@ package main
 // So a dependency is a standing declaration now, like a domain and like a
 // resource. A deploy neither grants one nor takes one away.
 //
+// Declaring is free and withdrawing is not. `gg deps add` goes through on the
+// credential a laptop already holds; `gg deps rm` asks the account owner to
+// click a button in their inbox, exactly as deleting a service does. That is not
+// caution for its own sake — it is the same silent-failure argument one step
+// further on. A service taken off the internet at least returns an error to
+// whoever calls it. An edge taken off the graph returns nothing at all.
+//
 // What it grants is the network path *and*, when the thing reached is a
 // resource, that resource's connection variables. `gg deps add api db` opens the
 // route to the database and hands `api` DB_URL, DB_HOST, DB_PORT, DB_USER,
@@ -141,6 +148,18 @@ func cmdDepsAdd(ref string, add []string) error {
 // cmdDepsRemove withdraws. It says plainly when a name was not there rather than
 // reporting success: "removed" about something that was never declared reads as
 // a fix, and the caller stops looking for the real one.
+//
+// It also needs a human's approval, which `add` does not, and the asymmetry is
+// the same one `gg domain rm` has: opening a path breaks nothing, and closing
+// one breaks something without saying so — an undeclared call is dropped, so the
+// caller does not get "connection refused", it hangs until its own timeout. The
+// platform mails the account owner a sentence naming the edges and answers
+// `approval_required` until somebody clicks; running the same command again
+// after that goes through.
+//
+// The warning below is printed before the call, because the email lands in
+// somebody else's inbox and the person typing this is the last one who can
+// still stop.
 func cmdDepsRemove(ref string, drop []string) error {
 	project, service, _, err := parseService(ref)
 	if err != nil {
@@ -167,6 +186,14 @@ func cmdDepsRemove(ref string, drop []string) error {
 		return fmt.Errorf("%s does not reach %s\n  hint: gg deps ls %s/%s says what it does reach",
 			service, strings.Join(missing, " or "), project, service)
 	}
+	// Said after the "was never declared" check above, so that a typo is
+	// answered rather than dressed up as a warning about something that was
+	// never going to happen.
+	fmt.Printf("Stopping %s from reaching %s.\n", service, strings.Join(drop, " and "))
+	fmt.Printf("\n  Its calls are dropped, not refused — they hang until whatever made them\n")
+	fmt.Printf("  gives up. Any connection variables they carried come away too.\n")
+	fmt.Printf("\n  This needs a human: we email the account owner, and you run the same\n")
+	fmt.Printf("  command again once they have clicked.\n\n")
 	return setNeeds(project, service, mergeNames(current, nil, drop))
 }
 
