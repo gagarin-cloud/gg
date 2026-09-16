@@ -170,3 +170,67 @@ func TestDepsSendsTheUnionNotJustTheAddition(t *testing.T) {
 		t.Fatalf("needs = %#v, want [cache db]: adding one dependency must not withdraw another", last["needs"])
 	}
 }
+
+// The warning `gg deps rm` prints before it asks.
+//
+// The approval email lands in the account owner's inbox, which may not be the
+// person at this keyboard, and by then the request is made. So the one moment
+// where somebody can still reconsider is before the call — and what they need to
+// know is the part that is not obvious: the far end will not error, it will
+// hang.
+func TestDepsRemoveWarnsBeforeItAsks(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/status") {
+			_, _ = w.Write([]byte(`{"project":"shop","services":[{"name":"api","needs":["cache","db"]}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"needs":["db"],"sentence":"api reaches db, and nothing else."}`))
+	})
+
+	out := capture(t, func() {
+		if err := cmdDepsRemove("shop/api", []string{"cache"}); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, want := range []string{"cache", "hang", "needs a human"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the warning does not mention %q:\n%s", want, out)
+		}
+	}
+}
+
+// And not before a name that was never declared. That case is a typo, the
+// command refuses it without calling anything, and a warning about an outage
+// that is not going to happen would teach the reader to skip the next one.
+func TestDepsRemoveOfSomethingUndeclaredDoesNotWarn(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/status") {
+			_, _ = w.Write([]byte(`{"project":"shop","services":[{"name":"api","needs":["db"]}]}`))
+			return
+		}
+		t.Error("a withdrawal of something undeclared reached the platform")
+	})
+
+	var err error
+	out := capture(t, func() { err = cmdDepsRemove("shop/api", []string{"cache"}) })
+	if err == nil {
+		t.Fatal("removing a dependency that was never declared reported success")
+	}
+	if out != "" {
+		t.Errorf("warned about a withdrawal that is not happening:\n%s", out)
+	}
+}
+
+// Adding is not gated and must not read as though it were.
+func TestDepsAddDoesNotWarn(t *testing.T) {
+	out := capture(t, func() {
+		if _, err := captureBody(t, func() error { return cmdDepsAdd("shop/api", []string{"db"}) }); err != nil {
+			t.Error(err)
+		}
+	})
+	if strings.Contains(out, "needs a human") {
+		t.Errorf("gg deps add claims to need an approval:\n%s", out)
+	}
+}

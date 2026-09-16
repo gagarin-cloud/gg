@@ -40,10 +40,11 @@ first; they are the parts that stop you getting it wrong.
 8. **If a resource type exists, use it** (`postgres`, `qdrant`, `valkey`,
    `external`). If one does not, an ordinary service with a volume is the normal
    path, not a workaround.
-9. **You can deploy; you cannot destroy.** Deleting anything — and handing a
-   project over, which is `gg transfer` — answers `approval_required` and emails
-   the account owner a button, every time the approval window has lapsed. No flag
-   grants this to an agent.
+9. **You can deploy; you cannot destroy.** Deleting anything, taking an address
+   away, withdrawing a dependency with `gg deps rm`, and handing a project over
+   with `gg transfer` all answer `approval_required` and email the account owner
+   a button, every time the approval window has lapsed. No flag grants this to an
+   agent. Adding is always free: `gg deps add` and `gg domain add` need nobody.
 10. **Errors are meant to be branched on.** gg prints `[code] message` and
     usually a `hint:` line. Act on the code, never on the prose.
 
@@ -69,7 +70,7 @@ first; they are the parts that stop you getting it wrong.
 | `gg rollback P/NAME` | put a previous revision back — a service's deploy, or an external's values |
 | `gg connect P/NAME` | that resource on this machine, for as long as the command runs |
 | `gg resource backup` / `backups` / `restore P/NEW --source OLD` | postgres recovery |
-| `gg deps add P/SVC NAME...` / `deps ls` / `deps rm` | what a service may reach, and whose credentials it holds |
+| `gg deps add P/SVC NAME...` / `deps ls` / `deps rm` | what a service may reach, and whose credentials it holds (`rm` needs a human) |
 | `gg domain add P/SVC [DOMAIN]` / `domain ls P` / `domain rm` | addresses on the internet |
 | `gg status PROJECT` | desired vs actual, addresses, sizes, today's cost |
 | `gg logs P/SVC` | recent logs |
@@ -481,9 +482,16 @@ than it is a bug in the application.**
 ```
 gg deps ls  shop/api            what it reaches today
 gg deps add shop/api db cache   and these as well
-gg deps rm  shop/api cache      and no longer that one
+gg deps rm  shop/api cache      and no longer that one (needs a human)
 ```
 
+- **Withdrawing needs a human's approval; adding does not.** `gg deps rm` is
+  gated the way `gg destroy` and `gg domain rm` are: it answers
+  `approval_required` and emails the account owner a sentence naming the edge.
+  The asymmetry is the point — opening a path breaks nothing, and closing one
+  breaks something *silently*, because the calls that used to arrive are dropped
+  rather than refused. Ask the user before you request that approval, and tell
+  them what will stop being able to reach what.
 - **The direction matters.** The declaration goes on the *caller*. If `api`
   queries `db`, it is `api` that needs `db`, never the other way round. Backwards
   is refused, not quietly accepted.
@@ -939,6 +947,7 @@ approval and can be reached for at three in the morning.
 gg resource restore shop/db2 --source db   new resource, filled from db's newest dump
 gg deps add shop/api db2                   hands api DB2_URL and the rest
 gg deps rm  shop/api db                    and stop it reading the old one
+                                           (this one needs a human's click)
 gg destroy  shop/db                        once everything reads from db2 — the only
                                            step that destroys data, and the only one
                                            that asks a human
@@ -1038,7 +1047,7 @@ gg domain rm shop/web                     make the service private again
 ```
 
 **Both need a human's approval, every time** — the same emailed click `gg
-destroy` needs. This is destructive in the way deleting something is: what breaks
+destroy` and `gg deps rm` need. This is destructive in the way deleting something is: what breaks
 is invisible from the terminal and obvious to whoever was using the address. Do
 not run either unless the user asked for it in those words.
 
@@ -1287,7 +1296,7 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `name_required` | `gg creds create` with no `--name`. Name it after where it will live |
 | `invalid_expiry` | `--expires` outside 1–365 days. There is no never; omit it for 90 |
 | `name_too_long` | over 120 characters, and it appears in a list. Shorten it |
-| `approval_required` | a human must approve a deletion, or an ownership offer. Tell the user, pass on the code, wait, retry the same command |
+| `approval_required` | a human must approve a deletion, a released address, a withdrawn dependency, or an ownership offer. Tell the user, pass on the code, wait, retry the same command. One click covers fifteen minutes, so a sequence of these needs one approval, not several |
 | `invalid_email` | ask the user for the address again; do not guess |
 | `claim_expired` / `no_such_claim` | run `gg login <email>` again for a fresh code |
 | `claim_collected` | another machine collected that code. Run `gg login <email>` again |
@@ -1346,7 +1355,7 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 |---|---|
 | `invalid_needs` / `invalid_deps` | a blank name, a service naming itself, or a job named as something to reach — a job listens on nothing. Correct them; `gg deps ls` shows what is declared |
 | `no_such_service` | a name in `gg deps add` or `--deps` is neither a service nor a resource here. `gg status` lists them; create it first |
-| `service_in_use` | something still declares it needs this. The refusal names what; `gg deps rm` that edge first |
+| `service_in_use` | something still declares it needs this. The refusal names what; `gg deps rm` that edge first — which needs its own approval, though the same click covers the destroy that follows |
 
 **Resources**
 
@@ -1412,8 +1421,9 @@ You do not say which of the last two a name is; gg asks the platform, which
 already knows.
 
 **This will be refused the first time, and that is not a bug.** Your credential
-can deploy but not delete, so destroying anything needs a human every time the
-approval window has lapsed. You get `approval_required`, and gagarin emails the
+can deploy but not delete, so destroying anything — and the other irreversible
+acts, `gg domain rm` and `gg deps rm` — needs a human every time the approval
+window has lapsed. You get `approval_required`, and gagarin emails the
 account owner. Then:
 
 1. Tell the user what you are about to delete, and that you have asked them to

@@ -99,10 +99,12 @@ project it acts on: `shop` for the project, `shop/web` for a service in it. A
 command that does not is refused, with the shape it should have had. There is no
 default to configure and no state file in your repo.
 
-**Your agent can ship, but it cannot delete.** The credential a single email click
-produces can deploy, read status and read logs. Destroying anything answers
-`approval_required` and emails you a button — every time the approval window has
-lapsed. An agent cannot grant itself that capability by asking.
+**Your agent can ship, but it cannot take anything away.** The credential a single
+email click produces can deploy, read status and read logs. Destroying anything,
+releasing an address and withdrawing a dependency all answer `approval_required`
+and email you a button — every time the approval window has lapsed. An agent
+cannot grant itself that capability by asking. Adding is free in every case: it
+is the taking away that can break something.
 
 **Errors are meant to be acted on.** Every failure carries a stable `code`, a
 message, and a `fix_hint`. Agents should branch on the code, not the prose.
@@ -112,7 +114,9 @@ reach (`gg deps`), the addresses it answers on (`gg domain`) and the volume it
 keeps are declared separately and survive every deploy — none of them can be
 released by a deploy that forgets to restate it. That includes being on the
 internet at all: `gg ship` can neither give a service an address nor take one
-away, and taking one away asks a human first.
+away, and taking one away asks a human first. So does `gg deps rm`, for a harder
+version of the same reason: a withdrawn edge produces no error anywhere — the
+calls are dropped, so the caller hangs until it gives up.
 
 `gg deploy --deps db` and `gg ship --deps db` are the one exception, and only in
 the direction that cannot lose anything: they add to what a service may reach,
