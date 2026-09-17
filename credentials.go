@@ -66,42 +66,46 @@ func loadCredentials() (*credentials, error) {
 }
 
 // saveCredentials writes the file with an owner-only mode, creating the directory
-// the same way. It writes to a temporary file and renames, so an interrupted save
-// cannot leave a half-written credential behind.
+// the same way.
 func saveCredentials(c *credentials) (string, error) {
 	path, err := credentialsPath()
 	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
 	body, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	body = append(body, '\n')
+	if err := writePrivateFile(path, append(body, '\n')); err != nil {
+		return "", err
+	}
+	return path, nil
+}
 
+// writePrivateFile writes to a temporary file with mode 0600 and renames it into
+// place, so an interrupted save cannot leave a half-written secret behind, and
+// creates the directory owner-only if it is missing.
+func writePrivateFile(path string, body []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*")
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer os.Remove(tmp.Name())
 	if err := tmp.Chmod(0o600); err != nil {
 		tmp.Close()
-		return "", err
+		return err
 	}
 	if _, err := tmp.Write(body); err != nil {
 		tmp.Close()
-		return "", err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return err
 	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return "", err
-	}
-	return path, nil
+	return os.Rename(tmp.Name(), path)
 }
 
 // resolveAuth decides what this invocation authenticates with. Environment wins
@@ -144,6 +148,6 @@ type errNotAuthenticated struct{}
 func (errNotAuthenticated) Error() string {
 	return "this machine has no gagarin credentials\n" +
 		"  to get some: gg login\n" +
-		"  it prints a link and a code for your human, and waits while they sign in\n" +
-		"  with GitHub or Google and approve this machine"
+		"  it prints a link and a code for your human, who signs in with GitHub or\n" +
+		"  Google and approves; then run gg login again to collect the credential"
 }

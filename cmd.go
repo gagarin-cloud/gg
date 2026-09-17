@@ -111,33 +111,40 @@ Environment (overrides the file; meant for CI):
 // email, then collect with --claim — until 2026-09-17, when email sign-in gave
 // way to GitHub and Google through the OAuth device grant.
 func newLoginCmd() *cobra.Command {
-	return &cobra.Command{
+	var fresh bool
+	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "get this machine access; a human approves it in a browser",
 		Long: `Get this machine access to gagarin. The same command every time: first
 machine or fifth, new account or old.
 
-  gg login
+  gg login          ask for access, or collect access already asked for
+  gg login --new    throw away a request nobody approved, and ask again
 
-It prints a link and a code, then waits. A human opens the link, signs in
-with GitHub or Google, checks that the page shows the same code and this
-machine's name, and approves. gg stores the credential and logs docker in to
-the registry. The code lasts fifteen minutes.
+The first run prints a link and a code. A human opens the link, signs in with
+GitHub or Google, checks that the page shows the same code and this machine's
+name, and approves. gg then stores the credential and logs docker in to the
+registry. A code lasts fifteen minutes.
+
+At a terminal, gg login waits for that approval. Anywhere else — an agent's
+shell, a script — it exits as soon as the link is printed, and remembers the
+request. Pass the link and the code on to your human; once they say they
+approved, run gg login again to collect. If they have not approved yet, it
+says so, prints the link again, and exits non-zero.
 
 A new account is created the first time somebody signs in, with $5 on it and
-no card asked for.
-
-If you are an agent, pass the link and the code on to your human as printed,
-as soon as they appear — the command is still running, waiting for them. Do
-not approve it yourself, and never ask your human for a token instead.
+no card asked for. Do not approve the request yourself, and never ask your
+human for a token instead.
 
 Never run it in CI: a pipeline gets its own credential from gg creds create.`,
-		Args: usageArgs(0, 0, "usage: gg login\n"+
-			"  it takes nothing: it prints a link for your human to open"),
+		Args: usageArgs(0, 0, "usage: gg login [--new]\n"+
+			"  it takes no address: it prints a link for your human to open"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdLogin()
+			return cmdLogin(fresh)
 		},
 	}
+	cmd.Flags().BoolVar(&fresh, "new", false, "discard a sign-in request nobody has approved, and ask for a new code")
+	return cmd
 }
 
 func newWhoamiCmd() *cobra.Command {
