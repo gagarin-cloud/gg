@@ -1360,7 +1360,7 @@ func newSkillCmd() *cobra.Command {
 					break
 				}
 			}
-			for _, key := range agents {
+			for _, key := range dedupeAgentKeys(agents) {
 				if err := installSkillForAgent(key); err != nil {
 					return err
 				}

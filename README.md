@@ -33,6 +33,13 @@ That writes the agent skill to `~/.claude/skills/gagarin/`, which is how a codin
 agent learns to use gagarin without you explaining it. The skill ships inside this
 binary, so it never disagrees with the CLI you have.
 
+For anything other than Claude Code, `gg skill install --agent agentskills`
+writes to `~/.agents/skills/gagarin/` — the location the
+[Agent Skills](https://agentskills.io) standard defines, and the one Cursor,
+Codex, Copilot, Cline, Windsurf, Goose, opencode and Zed all read. `--agent all`
+covers every harness gg knows by name, `-i` offers a checklist, and `--dir`
+takes an explicit path.
+
 ## Use
 
 ```

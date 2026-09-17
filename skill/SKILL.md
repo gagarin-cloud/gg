@@ -93,7 +93,7 @@ once, and each has a different next step:
 
 | what happens | what it means | do this |
 |---|---|---|
-| the shell cannot find `gg` | not installed | see "Installing gg" |
+| the shell cannot find `gg` | not installed | see "Installing gg" — unless you already hold gagarin MCP tools, in which case call `whoami` there and read "If you cannot install gg" for what they cannot do |
 | `[unauthorized]`, or it says there are no credentials | installed, no access | see "Getting access" |
 | it names an account | ready | carry on; `gg projects` says what already exists |
 
@@ -103,6 +103,10 @@ before the attempt rather than after. Project names are unique only within one
 account, so two rows can share a name — the id column tells them apart.
 
 ## Installing gg
+
+If your client is already connected to gagarin's MCP server you may not need
+`gg` at all — read "If you cannot install gg" below first, because the one thing
+it cannot do is build an image, and that is often the whole task.
 
 Prefer whichever the machine can already run, in this order:
 
@@ -127,8 +131,41 @@ deploy an image that is already in the registry, roll back, and read state.
 
 Once installed, run `gg skill install` to refresh this skill from the binary, so
 what you are reading matches the CLI you have. It installs for Claude Code by
-default; `--agent cursor,codex` and friends, `--agent all`, or `-i` for a
-checklist, cover the rest.
+default; `--agent agentskills` writes to `~/.agents/skills`, which every client
+implementing the Agent Skills standard reads — prefer it to naming harnesses one
+by one. `--agent cursor,cline` and friends, `--agent all`, or `-i` for a
+checklist, cover the rest, and `--dir` takes an explicit path.
+
+## If you cannot install gg: the MCP server
+
+Gagarin also answers MCP at `https://mcp.gagarin.cloud/mcp`. An MCP client —
+Claude Code, Claude Desktop, Cursor, Codex, ChatGPT — connects to that URL and
+installs nothing: your human signs in with GitHub or Google when the client
+asks for it, and no secret passes through you. It is this same API in another
+shape, so everything above still holds — the naming, the asynchrony, the
+default-denied graph, the human's approval before anything is destroyed.
+
+**It is a smaller surface than `gg`, and the gap is images.** Over MCP you can
+deploy an image that is already in the registry, run a job, read status and
+logs, declare dependencies, add an address, roll back, and manage resources,
+people, credentials and the bill. Four things are deliberately absent:
+
+- **No build and no push.** `gg ship`, `gg build`, `gg push` and
+  `gg registry copy` shell out to docker where the source is, and a server on
+  the internet has neither your source tree nor your docker.
+- **No tunnel.** `gg connect` binds a port on *this* machine; there is no local
+  anything at the other end of an MCP call.
+- **No waiting for a job.** `run` answers the revision naming the run and
+  returns, as every other write does. `status` is the only place an exit code
+  appears.
+- **No list of resource types, sizes or scopes.** The engine owns those and its
+  refusals name them; a second copy here would be wrong the day one is added.
+
+So: **if `gg` is installed, use it.** It does everything the MCP server does and
+the four things it cannot. Reach for MCP when you cannot install a binary, or
+when the work is purely operational — reading state, rolling back, wiring deps,
+managing addresses. If a task needs an image built and you hold only MCP tools,
+say so and install `gg` rather than reporting a deploy you were unable to make.
 
 ## Getting access
 

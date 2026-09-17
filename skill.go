@@ -27,9 +27,15 @@ func cmdSkillShow() error {
 	return nil
 }
 
+// skillDirName is the directory a SKILL.md must sit in. The Agent Skills
+// standard requires it to equal the skill's frontmatter `name`, and clients
+// that disagree with it skip the skill without saying so — so this constant
+// and the `name:` at the top of skill/SKILL.md are one fact in two places.
+const skillDirName = "gagarin"
+
 // installSkill writes SKILL.md to an explicit path (or into it, if dir names
 // a directory rather than ending in .md). This is the --dir escape hatch: a
-// single, literal destination, not a choice among known agents.
+// single destination, not a choice among known agents.
 func installSkill(dir string) error {
 	path := dir
 	if path == "" {
@@ -37,10 +43,22 @@ func installSkill(dir string) error {
 		if err != nil {
 			return fmt.Errorf("cannot find your home directory: %w", err)
 		}
-		claude, _ := findAgentTarget("claude")
-		path = filepath.Join(home, claude.homeRelDir, "gagarin", "SKILL.md")
+		claude, ok := findAgentTarget("claude")
+		if !ok {
+			// Unreachable while the table has a claude row, and a silent
+			// ~/gagarin/SKILL.md is the wrong way to find out it does not.
+			return fmt.Errorf("no install location for Claude Code; name one with --dir")
+		}
+		path = filepath.Join(home, claude.homeRelDir, skillDirName, "SKILL.md")
 	} else if !strings.HasSuffix(path, ".md") {
-		// A directory was given: put the file in it under its conventional name.
+		// A directory was given. Nest under gagarin/ unless the directory is
+		// already named that: a skill whose parent directory does not match its
+		// `name` is skipped by most clients, so writing SKILL.md straight into
+		// a skills root — the obvious thing to type — would install nothing
+		// while reporting success.
+		if filepath.Base(filepath.Clean(path)) != skillDirName {
+			path = filepath.Join(path, skillDirName)
+		}
 		path = filepath.Join(path, "SKILL.md")
 	}
 	return writeSkillFile(path, "")
@@ -57,7 +75,7 @@ func installSkillForAgent(key string) error {
 	if err != nil {
 		return fmt.Errorf("cannot find your home directory: %w", err)
 	}
-	path := filepath.Join(home, agent.homeRelDir, "gagarin", "SKILL.md")
+	path := filepath.Join(home, agent.homeRelDir, skillDirName, "SKILL.md")
 	return writeSkillFile(path, agent.displayName)
 }
 
@@ -73,7 +91,25 @@ func writeSkillFile(path, label string) error {
 	if _, err := os.Stat(path); err == nil {
 		existed = true
 	}
-	if err := os.WriteFile(path, []byte(skillMarkdown), 0o644); err != nil {
+	// Write-then-rename: a half-written SKILL.md is a skill that teaches half
+	// a flow, and an interrupted install should leave the previous one intact
+	// rather than a truncated file that still parses.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".SKILL.md.*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(skillMarkdown); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
 
