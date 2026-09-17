@@ -43,8 +43,8 @@ first; they are the parts that stop you getting it wrong.
 9. **You can deploy; you cannot destroy.** Deleting anything, taking an address
    away, withdrawing a dependency with `gg deps rm`, and handing a project over
    with `gg transfer` all answer `approval_required` and email the account owner
-   a button, every time the approval window has lapsed. No flag grants this to an
-   agent. Adding is always free: `gg deps add` and `gg domain add` need nobody.
+   a button, every time the approval window has lapsed, which approves only once
+   they are signed in. No flag grants this to an agent. Adding is always free: `gg deps add` and `gg domain add` need nobody.
 10. **Errors are meant to be branched on.** gg prints `[code] message` and
     usually a `hint:` line. Act on the code, never on the prose.
 
@@ -53,7 +53,7 @@ first; they are the parts that stop you getting it wrong.
 | | |
 |---|---|
 | `gg whoami` | which account this machine acts as — **run this first, always** |
-| `gg login EMAIL` / `gg login --claim CODE` | get this machine access — relay what the first prints, as printed |
+| `gg login` | get this machine access — relay the link and code it prints, then wait for it to exit |
 | `gg creds` / `creds create --name N` / `creds revoke ID` | what has access; mint one for CI; take one away |
 | `gg registry login` | log docker in (CI, or docker installed after gg) |
 | `gg projects` | every project you can reach, and your role on it |
@@ -132,48 +132,40 @@ checklist, cover the rest.
 
 ## Getting access
 
-`gg login` is one command whether this is the first machine on a new address or
-the fifth on an old one; there is no separate signup, a human pressing a button
-is the whole thing, and a new account starts with $5 on it and no card asked
-for.
+`gg login` is one command whether this is the first machine on a new account or
+the fifth on an old one. There is no separate signup and no address to ask for:
+the human signs in with GitHub or Google, and a new account starts with $5 on it
+and no card asked for.
 
-Where that button comes from depends on whether the address already has an
-account, and **gagarin will not tell you which**. An unauthenticated endpoint
-that answered that question would be a way to test any address for a gagarin
-account, so the answer is the same either way. An address with an account is
-emailed a link. An address with none is emailed nothing: gagarin does not write
-to an address until that address writes to it, because mailing whatever address
-it was given was being used to mail strangers. `gg login <email>` therefore
-prints one instruction covering both cases, and the person reading it knows
-which half is theirs.
+1. **Run `gg login` so that you can read its output while it is still
+   running.** It prints a link and a code straight away and then waits, for up
+   to fifteen minutes, while your human approves. If your harness shows a
+   command's output only when it exits, or gives up on a command after a couple
+   of minutes, run it in the background and read what it has printed so far.
+2. **Give the user the link and the code as printed**, as soon as they appear.
+   The link is the one to open; the plain address and the code under it are the
+   fallback for when the link does not open. Say what they will do there: sign
+   in with GitHub or Google, check that the page shows the same code and this
+   machine's name, and approve.
+3. **Wait for `gg login` to exit.** On approval it stores the credential in
+   `~/.config/gagarin/credentials.json`, logs `docker` in to the registry, and
+   says which account this machine now acts as. Confirm with `gg whoami`.
 
-1. **Ask the user for their email address.** Do not guess it, and do not use one
-   you found in the repository or in git history — a deploy that lands in a
-   stranger's account is worse than no deploy.
-2. `gg login <email>` — it prints a code and an instruction.
-3. **Give the user that instruction as printed**, code included, and do not
-   shorten it. It covers both halves: if they have an account the link is in
-   their inbox already and the email shows the same code, so they can tell it
-   apart from one they did not trigger; if they do not, they send a mail to the
-   signup address it names, from the address they want the account on, with the
-   code in the subject, and the reply carries the link. The instruction includes
-   a ready-made `mailto:` with the code filled in — pass that on too, because it
-   is the difference between a mail sent now and one meant to be sent later. The
-   address is `signup@mail.gagarin.cloud` on gagarin.cloud itself; another
-   deployment prints its own, so relay what you were given rather than this.
-   **Do not work out which of the two cases it is, and do not tell the user they
-   do or do not have an account.** You have not been told, and a guess either
-   way sends somebody to watch an inbox nothing is coming to.
-4. `gg login --claim <code>` — waits for the press, then stores credentials in
-   `~/.config/gagarin/credentials.json` and logs `docker` in to the registry.
-   It gives up after about twelve minutes, which is not long for somebody who
-   has to write an email first: if it times out, run it again with the same
-   code, and only go back to `gg login <email>` if the code is reported expired
-   or unknown.
+If it fails:
 
-Signing in, signing up and authorising another machine are the same request. The
-moment an account is created it gets its balance and the address joins gagarin's
-customer list; https://gagarin.cloud/privacy says what that list is for.
+- `[expired_token]` — nobody approved within fifteen minutes. Run `gg login`
+  again and pass the new link on; the old one is dead.
+- `[access_denied]` — the user declined on the page. Ask them why before running
+  it again, and do not retry on your own.
+
+Do not open the link yourself, and do not approve it on the user's behalf in a
+browser you control: the approval is theirs, and it is the only thing standing
+between an agent and an account. The account is whichever one they sign in to;
+if they use more than one, let them pick.
+
+The moment an account is created it gets its balance and the address the
+provider verified joins gagarin's customer list; https://gagarin.cloud/privacy
+says what that list is for.
 
 You never handle the credential yourself. Do not read that file, do not echo it,
 and never ask the user for a token — if you find yourself wanting a secret to
@@ -1188,9 +1180,10 @@ granted here, it is offered and accepted — see below.
   is running. If the user asked for "read access" or "let them look at the logs",
   pass `--role viewer`.
 - Sharing with somebody who has never used gagarin is allowed — the access waits
-  for them and lands the moment that address has an account. **Nothing is
-  emailed to them**, so tell the user to let them know; they get in by running
-  `gg login <their address>` and doing what it prints, as in "Getting access".
+  for them and lands the moment they sign in with a GitHub or Google account
+  whose verified email is that address. **Nothing is emailed to them**, so tell
+  the user to let them know; they get in by running `gg login` and approving it,
+  as in "Getting access".
 - **Ask before sharing.** Access to a project is the user's to give, not yours to
   infer from a name in the conversation.
 
@@ -1209,7 +1202,8 @@ gg members shop                      shows an offer that is standing
 It is an offer, never an assignment, and both halves need a human:
 
 1. The **owner** runs `gg transfer` and gets `approval_required` — they click a
-   button in their own inbox, and you run the same command again. This is the
+   button in their own inbox, signed in to gagarin, and you run the same command
+   again. This is the
    same human gate `gg destroy` uses, for the same reason: a handover cannot be
    undone by the person who started it.
 2. The **recipient** gets an email and presses a button. Until they do, nothing
@@ -1296,11 +1290,10 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `name_required` | `gg creds create` with no `--name`. Name it after where it will live |
 | `invalid_expiry` | `--expires` outside 1–365 days. There is no never; omit it for 90 |
 | `name_too_long` | over 120 characters, and it appears in a list. Shorten it |
-| `approval_required` | a human must approve a deletion, a released address, a withdrawn dependency, or an ownership offer. Tell the user, pass on the code, wait, retry the same command. One click covers fifteen minutes, so a sequence of these needs one approval, not several |
-| `invalid_email` | ask the user for the address again; do not guess |
-| `claim_expired` / `no_such_claim` | run `gg login <email>` again for a fresh code |
-| `claim_collected` | another machine collected that code. Run `gg login <email>` again |
-| `email_failed` | the mail did not leave gagarin. Retry once, then tell the user — nothing is waiting in an inbox to be found |
+| `approval_required` | a human must approve a deletion, a released address, a withdrawn dependency, or an ownership offer. The button is in their email, and it asks them to sign in first if they are not. Tell the user, pass on the code, wait, retry the same command. One click covers fifteen minutes, so a sequence of these needs one approval, not several |
+| `expired_token` | `gg login` waited fifteen minutes and nobody approved. Run it again and pass on the new link |
+| `access_denied` | the user declined `gg login` on the page. Ask them before running it again |
+| `invalid_email` | the address given to `gg share` or `gg transfer` is not one. Ask the user again; do not guess |
 
 **Projects and roles**
 
@@ -1427,7 +1420,8 @@ window has lapsed. You get `approval_required`, and gagarin emails the
 account owner. Then:
 
 1. Tell the user what you are about to delete, and that you have asked them to
-   approve it by email. Pass on the code from the `fix_hint`.
+   approve it by email — the button asks them to sign in to gagarin first if
+   they are not. Pass on the code from the `fix_hint`.
 2. Wait for them to say they clicked it. Do not poll in a loop.
 3. Run the same command again.
 
