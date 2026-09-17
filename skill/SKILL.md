@@ -53,7 +53,7 @@ first; they are the parts that stop you getting it wrong.
 | | |
 |---|---|
 | `gg whoami` | which account this machine acts as — **run this first, always** |
-| `gg login` | get this machine access — relay the link and code it prints, then wait for it to exit |
+| `gg login` / `gg login --new` | get this machine access — relay the link and code, then run it again once approved |
 | `gg creds` / `creds create --name N` / `creds revoke ID` | what has access; mint one for CI; take one away |
 | `gg registry login` | log docker in (CI, or docker installed after gg) |
 | `gg projects` | every project you can reach, and your role on it |
@@ -137,26 +137,30 @@ the fifth on an old one. There is no separate signup and no address to ask for:
 the human signs in with GitHub or Google, and a new account starts with $5 on it
 and no card asked for.
 
-1. **Run `gg login` so that you can read its output while it is still
-   running.** It prints a link and a code straight away and then waits, for up
-   to fifteen minutes, while your human approves. If your harness shows a
-   command's output only when it exits, or gives up on a command after a couple
-   of minutes, run it in the background and read what it has printed so far.
-2. **Give the user the link and the code as printed**, as soon as they appear.
-   The link is the one to open; the plain address and the code under it are the
-   fallback for when the link does not open. Say what they will do there: sign
-   in with GitHub or Google, check that the page shows the same code and this
-   machine's name, and approve.
-3. **Wait for `gg login` to exit.** On approval it stores the credential in
+1. **`gg login`** prints a link and a code, remembers the request, and exits.
+2. **Give the user the link and the code as printed.** The link is the one to
+   open; the plain address and the code under it are the fallback for when the
+   link does not open. Say what they will do there: sign in with GitHub or
+   Google, check that the page shows the same code and this machine's name, and
+   approve. Then wait for them to tell you they have.
+3. **`gg login` again.** It collects the request the first run made — it does
+   not ask for a new one — stores the credential in
    `~/.config/gagarin/credentials.json`, logs `docker` in to the registry, and
    says which account this machine now acts as. Confirm with `gg whoami`.
 
-If it fails:
+If the second run fails:
 
-- `[expired_token]` — nobody approved within fifteen minutes. Run `gg login`
-  again and pass the new link on; the old one is dead.
-- `[access_denied]` — the user declined on the page. Ask them why before running
-  it again, and do not retry on your own.
+- `[authorization_pending]` — it waited a minute and nobody had approved yet.
+  It prints the link and code again: pass them on again if the user seems not to
+  have them, and once they say they approved, run `gg login` again. Do not run
+  it in a loop.
+- `[expired_token]` — nobody approved within fifteen minutes, and the request is
+  gone. Run `gg login` for a fresh link and pass it on straight away.
+- `[access_denied]` — the user declined on the page, and the request is gone.
+  Ask them why before running it again, and do not retry on your own.
+
+`gg login --new` throws away a request nobody approved and asks for a new code —
+for when the user lost the link, or it was meant for a different account.
 
 Do not open the link yourself, and do not approve it on the user's behalf in a
 browser you control: the approval is theirs, and it is the only thing standing
@@ -1291,7 +1295,8 @@ gg prints failures as `[code] message`, usually with a `hint:` line under it.
 | `invalid_expiry` | `--expires` outside 1–365 days. There is no never; omit it for 90 |
 | `name_too_long` | over 120 characters, and it appears in a list. Shorten it |
 | `approval_required` | a human must approve a deletion, a released address, a withdrawn dependency, or an ownership offer. The button is in their email, and it asks them to sign in first if they are not. Tell the user, pass on the code, wait, retry the same command. One click covers fifteen minutes, so a sequence of these needs one approval, not several |
-| `expired_token` | `gg login` waited fifteen minutes and nobody approved. Run it again and pass on the new link |
+| `authorization_pending` | nobody has approved the `gg login` request yet. Relay the link again if needed; run `gg login` again once the user says they approved |
+| `expired_token` | the `gg login` request lived fifteen minutes and nobody approved it. Run it again and pass on the new link |
 | `access_denied` | the user declined `gg login` on the page. Ask them before running it again |
 | `invalid_email` | the address given to `gg share` or `gg transfer` is not one. Ask the user again; do not guess |
 

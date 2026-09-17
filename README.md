@@ -36,7 +36,8 @@ binary, so it never disagrees with the CLI you have.
 ## Use
 
 ```
-gg login                       # prints a link and a code; waits while a human approves, stores credentials, logs docker in
+gg login                       # prints a link and a code for your human to open and approve
+gg login                       # again, once they have: stores credentials, logs docker in
 
 gg creds                                     # what has access to this account
 gg creds create --name "github actions"      # mint one for CI: deploy-only, expiring, printed once
@@ -77,9 +78,11 @@ gg deploy shop/web:8080 web:v3           # release one that already exists
 ```
 
 `gg login` is the same command every time — first machine or fifth, new account
-or old. It prints a link and a code and waits. A human opens the link, signs in
-with GitHub or Google, checks that the page shows the same code and the name of
-the machine asking, and approves; `gg` stores the credential and logs docker in.
+or old. It prints a link and a code. A human opens the link, signs in with
+GitHub or Google, checks that the page shows the same code and the name of the
+machine asking, and approves; running `gg login` again then stores the
+credential and logs docker in. At a terminal it simply waits for the approval
+instead, and `gg login --new` throws away a request nobody approved.
 The first sign-in creates the account with $5 on it; no card is asked for. Never
 run it from CI: a pipeline gets its own credential from `gg creds create`, run by
 a human on a machine that already has one.
