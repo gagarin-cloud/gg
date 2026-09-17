@@ -10,7 +10,21 @@ and nothing about your deployment lives in your repository.
 ## Install
 
 ```
-brew install gagarin-cloud/tap/gg
+brew install --cask gagarin-cloud/tap/gg
+```
+
+If you installed `gg` as a formula, before casks, run `brew uninstall gg` once
+first — homebrew will not replace one with the other on its own.
+
+On Windows, with either package manager:
+
+```
+scoop bucket add gagarin https://github.com/gagarin-cloud/scoop-bucket
+scoop install gagarin/gg
+```
+
+```
+winget install Gagarin.gg
 ```
 
 Or, with a Go toolchain:
@@ -23,30 +37,29 @@ Or take a binary for your platform from
 [releases](https://github.com/gagarin-cloud/gg/releases). Every release publishes
 checksums; verify them. There is deliberately no `curl | bash` one-liner.
 
-## Claude Code
+## Teach your agent
 
-Everything below, plus the MCP server and two deploy agents, installs at once:
+`gg` drives the API; a separate **agent skill** teaches an agent how. It lives in
+[gagarin-cloud/claude-plugin](https://github.com/gagarin-cloud/claude-plugin),
+not in this binary.
+
+In Claude Code, the plugin brings the skill, the MCP server, commands and two
+deploy agents at once:
 
 ```
 /plugin marketplace add gagarin-cloud/claude-plugin
 /plugin install gagarin@gagarin-cloud
 ```
 
-## Any other agent
+For any other agent — Cursor, Codex, Copilot, Cline, Windsurf, Goose, opencode,
+Zed and about seventy others:
 
 ```
-gg skill install --agent agentskills
+npx skills add gagarin-cloud/claude-plugin -g
 ```
 
-That writes the agent skill to `~/.agents/skills/gagarin/` — the location the
-[Agent Skills](https://agentskills.io) standard defines, and the one Cursor,
-Codex, Copilot, Cline, Windsurf, Goose, opencode and Zed all read. It is how a
-coding agent learns to use gagarin without you explaining it, and the skill
-ships inside this binary, so it never disagrees with the CLI you have.
-
-A bare `gg skill install` writes to `~/.claude/skills/gagarin/`, which is what it
-did before `--agent` existed. `--agent all` covers every harness gg knows by
-name, `-i` offers a checklist, and `--dir` takes an explicit path.
+`-g` installs for your user rather than the current repository; drop it to add
+the skill to one project. `npx skills update` refreshes it later.
 
 ## Use
 
