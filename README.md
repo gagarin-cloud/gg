@@ -36,8 +36,7 @@ binary, so it never disagrees with the CLI you have.
 ## Use
 
 ```
-gg login you@example.com       # ask for access; prints a code, and what to tell your human
-gg login --claim ABCD-1234     # waits for the button in their email, stores credentials, logs docker in
+gg login                       # prints a link and a code; waits while a human approves, stores credentials, logs docker in
 
 gg creds                                     # what has access to this account
 gg creds create --name "github actions"      # mint one for CI: deploy-only, expiring, printed once
@@ -77,18 +76,13 @@ gg push   shop/web:v3                    # publish it, release nothing
 gg deploy shop/web:8080 web:v3           # release one that already exists
 ```
 
-`gg login` is the same command every time — first machine or fifth, new address
-or old — and gagarin answers it identically whether or not the address has an
-account, because an endpoint that needs no credential and says which would be a
-way to test any address for a gagarin account. What differs is behind that
-answer. An address that has an account is emailed a link, as it always was. An
-address that has none is emailed nothing at all: the person writes to the signup
-address the command prints, from the address they want the account on, and the
-reply carries the link — gagarin does not write to an address until that address
-writes to it. Either way a human presses a button, and the first press creates
-the account with $5 on it; no card is asked for. Never run it from CI: a
-pipeline gets its own credential from `gg creds create`, run by a human on a
-machine that already has one.
+`gg login` is the same command every time — first machine or fifth, new account
+or old. It prints a link and a code and waits. A human opens the link, signs in
+with GitHub or Google, checks that the page shows the same code and the name of
+the machine asking, and approves; `gg` stores the credential and logs docker in.
+The first sign-in creates the account with $5 on it; no card is asked for. Never
+run it from CI: a pipeline gets its own credential from `gg creds create`, run by
+a human on a machine that already has one.
 
 `gg help` lists everything.
 
@@ -99,11 +93,12 @@ project it acts on: `shop` for the project, `shop/web` for a service in it. A
 command that does not is refused, with the shape it should have had. There is no
 default to configure and no state file in your repo.
 
-**Your agent can ship, but it cannot take anything away.** The credential a single
-email click produces can deploy, read status and read logs. Destroying anything,
+**Your agent can ship, but it cannot take anything away.** The credential
+`gg login` produces can deploy, read status and read logs. Destroying anything,
 releasing an address and withdrawing a dependency all answer `approval_required`
-and email you a button — every time the approval window has lapsed. An agent
-cannot grant itself that capability by asking. Adding is free in every case: it
+and email you a button — every time the approval window has lapsed — and the
+button approves only once you are signed in as the account it was sent for. An
+agent cannot grant itself that capability by asking. Adding is free in every case: it
 is the taking away that can break something.
 
 **Errors are meant to be acted on.** Every failure carries a stable `code`, a
