@@ -3,133 +3,209 @@ package main
 // Onboarding, from the CLI's side.
 //
 // `gg login` exists so a human never has to copy a secret and an agent never has
-// to hold one. The agent runs it twice — once to ask, once to collect — and the
-// human's only action happens in their inbox.
+// to hold one. Since 2026-09-17 it is the OAuth 2.0 device authorization grant
+// (RFC 8628): gg asks the control plane for a code, prints a link, and waits
+// while a human opens it, signs in with GitHub or Google, and approves this
+// machine by name. Then the credential lands in the file, as it always did.
 //
-// One word, because there is one request. Asking costs the same call whether the
-// address has an account or not, and the control plane still answers identically
-// either way — deliberately, so that this endpoint cannot be used to test whether
-// an address is registered. `gg signup` and `gg auth` were two names for the two
-// halves of that, and the pair kept implying a first-time path that does not
-// exist — an implication that reached the control plane's own 401 hint, where it
-// told a machine to "run gg auth" to re-authorise, which was advice that could
-// not work.
+// It used to be two runs — `gg login EMAIL` to ask and `gg login --claim CODE`
+// to collect — with the human's part happening in an inbox. That went with email
+// sign-in; see brain/docs/051 in the gagarin repo. The reason it was two runs
+// still exists, though: an agent has to tell its human what to open before the
+// human can open it, and a command that blocks is a command whose output an
+// agent may not see until it exits. So gg prints everything the human needs
+// first, alone and in full, before it starts waiting — and the skill tells an
+// agent to run it where it can read that output while it waits.
 //
-// What changed on 2026-09-16 is what happens behind that identical answer. An
-// address with an account is emailed a link, as always. An address without one is
-// emailed nothing at all: the human writes to signup@ from it and is answered
-// there. gagarin does not write to an address until that address writes to it,
-// because the old behaviour was being used to mail strangers. The wording that
-// covers both without saying which is in auth_request.go.
-//
-// The two invocations do stay two, for a reason that has nothing to do with
-// first-versus-fifth: between them the agent has to tell its human what to press
-// and which code to match, and it can only say that between commands. Fusing
-// them would block for the whole approval window before the agent could speak.
+// Nothing here is signed up for. Signing in, signing up and authorising another
+// machine are the same page; which one it was is the control plane's business.
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
-// cmdLogin routes the two halves, and the routing is here rather than in the
-// command wiring because it is a decision rather than a flag.
-//
-// An address and a code cannot be mistaken for each other — one contains an @,
-// and the other is eight characters drawn from an alphabet that deliberately has
-// no @ in it — so a bare argument is read for what it is. An agent that types
-// `gg login ABCD-1234` meant the second half, and refusing that on syntax would
-// be pedantry.
-func cmdLogin(arg, claim string) error {
-	if claim == "" && arg != "" && !strings.Contains(arg, "@") {
-		arg, claim = "", arg
+// deviceConfig is gg as an OAuth client: public, first-party, device grant only.
+// Client authentication "in params" because gg has no secret to put in a header,
+// and the control plane expects client_id in the form.
+func deviceConfig(api string) *oauth2.Config {
+	return &oauth2.Config{
+		ClientID: "gg",
+		Scopes:   []string{"deploy"},
+		Endpoint: oauth2.Endpoint{
+			DeviceAuthURL: api + "/oauth/device_authorization",
+			TokenURL:      api + "/oauth/token",
+			AuthStyle:     oauth2.AuthStyleInParams,
+		},
 	}
-	switch {
-	case arg != "" && claim != "":
-		return fmt.Errorf("gg login takes an address or a code, not both\n" +
-			"  to ask:     gg login <your human's email>\n" +
-			"  to collect: gg login --claim <the code it printed>")
-	case claim != "":
-		return cmdLoginCollect(claim)
-	case arg != "":
-		return cmdLoginRequest(arg)
-	}
-	// Neither: say what to do rather than what is missing.
-	if creds, err := loadCredentials(); err == nil && creds.Credential != "" {
-		fmt.Printf("this machine already acts as %s (%s)\n", creds.Account, creds.Client)
-		fmt.Printf("to authorise it again: gg login %s\n", creds.Account)
-		return nil
-	}
-	return fmt.Errorf("usage: gg login EMAIL, then gg login --claim CODE\n" +
-		"  ask your human for their address — do not guess it")
 }
 
-func cmdLoginCollect(claim string) error {
-	fmt.Printf("waiting for a human to approve %s ...\n", claim)
-	// Polling, not a webhook: the CLI runs on a laptop behind NAT, and an agent
-	// harness will not host a callback. The control plane tells us how long to
-	// wait between attempts so the cadence is its decision, not ours.
-	deadline := time.Now().Add(12 * time.Minute)
-	for {
-		var out struct {
-			Status     string   `json:"status"`
-			Credential string   `json:"credential"`
-			Account    string   `json:"account"`
-			Client     string   `json:"client"`
-			Scopes     []string `json:"scopes"`
-			ExpiresAt  string   `json:"expires_at"`
-			API        string   `json:"api"`
-			RetryAfter int      `json:"retry_after"`
-		}
-		err := callAnon("POST", "/v1/claim", map[string]string{"claim": claim}, &out)
-		if err != nil {
-			return err
-		}
-		if out.Status == "approved" {
-			api := out.API
-			if api == "" {
-				api = apiBase()
-			}
-			path, err := saveCredentials(&credentials{
-				API:        api,
-				Credential: out.Credential,
-				Account:    out.Account,
-				Client:     out.Client,
-				Scopes:     out.Scopes,
-				ExpiresAt:  out.ExpiresAt,
-			})
-			if err != nil {
-				return fmt.Errorf("approved, but the credential could not be saved: %w", err)
-			}
-			fmt.Printf("\nthis machine now acts as %s\n", out.Account)
-			fmt.Printf("  credential stored in %s\n", path)
-			fmt.Printf("  it can %s — deleting anything needs a fresh approval\n",
-				strings.Join(out.Scopes, ", "))
+// cmdLogin always starts the flow, even on a machine that already holds a
+// credential. The obvious alternative — say "already acts as" and stop — is a
+// trap: the usual reason to run `gg login` on such a machine is that the stored
+// credential stopped working, and a command that refuses to replace it sends
+// the reader off to delete a file by hand.
+func cmdLogin() error {
+	api := apiBase()
+	conf := deviceConfig(api)
 
-			// The gagarin credential is also the registry credential, so there is
-			// nothing to ask for and no reason to make somebody run a second
-			// command before their first push. Best effort: docker may not be
-			// installed on this machine, and that is not a failed authorisation —
-			// reading logs and status needs no docker at all.
-			if err := cmdRegistryLogin(); err != nil {
-				fmt.Printf("\n  (docker is not logged in to the registry yet: %v)\n", err)
-				fmt.Printf("  run `gg registry login` before your first push\n")
-			}
+	// One client with a timeout for every request the flow makes, so a control
+	// plane that accepts a connection and never answers cannot hang gg for the
+	// whole fifteen minutes.
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient,
+		&http.Client{Timeout: 30 * time.Second})
 
-			fmt.Printf("\nnothing to export. try: gg projects\n")
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("nobody approved %s in time\n  ask your human to check their inbox, then: gg login <email>", claim)
-		}
-		wait := time.Duration(out.RetryAfter) * time.Second
-		if wait <= 0 {
-			wait = 2 * time.Second
-		}
-		time.Sleep(wait)
+	if creds, err := loadCredentials(); err == nil && creds.Credential != "" && creds.Account != "" {
+		fmt.Printf("this machine currently acts as %s; approving replaces that credential\n\n", creds.Account)
 	}
+
+	da, err := conf.DeviceAuth(ctx, oauth2.SetAuthURLParam("label", clientName()))
+	if err != nil {
+		return loginError(api, err)
+	}
+
+	link := da.VerificationURIComplete
+	if link == "" {
+		link = da.VerificationURI
+	}
+	fmt.Printf(`this machine is asking for access to gagarin as "%s".
+
+Tell your human to open this link, sign in with GitHub or Google, and approve:
+
+  %s
+
+If the link does not open, go to %s and enter the code %s.
+The page shows that code and the name above; both should match.%s
+
+waiting for approval ...
+`, clientName(), link, da.VerificationURI, da.UserCode, expiresIn(da.Expiry))
+
+	tok, err := conf.DeviceAccessToken(ctx, da)
+	if err != nil {
+		// oauth2 stops polling at the expiry the control plane gave, and says
+		// so as a context deadline. That is the same fact as expired_token.
+		if errors.Is(err, context.DeadlineExceeded) && !da.Expiry.IsZero() && !time.Now().Before(da.Expiry) {
+			return errCodeExpired
+		}
+		return loginError(api, err)
+	}
+
+	// The token response says what the credential can do and when it lapses,
+	// but not whose it is. whoami does, with the credential just issued — and if
+	// that fails the credential is still good, so save it and say less.
+	var who struct {
+		Account string `json:"account"`
+		Client  string `json:"client"`
+	}
+	_ = callTo(api, tok.AccessToken, "GET", "/v1/whoami", nil, &who)
+
+	var scopes []string
+	if s, ok := tok.Extra("scope").(string); ok {
+		scopes = strings.Fields(s)
+	}
+	var expires string
+	if !tok.Expiry.IsZero() {
+		expires = tok.Expiry.UTC().Format(time.RFC3339)
+	}
+	path, err := saveCredentials(&credentials{
+		API:        api,
+		Credential: tok.AccessToken,
+		Account:    who.Account,
+		Client:     who.Client,
+		Scopes:     scopes,
+		ExpiresAt:  expires,
+	})
+	if err != nil {
+		return fmt.Errorf("approved, but the credential could not be saved: %w", err)
+	}
+
+	if who.Account != "" {
+		fmt.Printf("\nthis machine now acts as %s\n", who.Account)
+	} else {
+		fmt.Printf("\napproved\n")
+	}
+	fmt.Printf("  credential stored in %s\n", path)
+	if len(scopes) > 0 {
+		fmt.Printf("  it can %s — deleting anything needs a fresh approval\n",
+			strings.Join(scopes, ", "))
+	}
+	if os.Getenv("GAGARIN_TOKEN") != "" {
+		fmt.Printf("  note: GAGARIN_TOKEN is set in this environment, and it wins over the file\n")
+	}
+
+	// The gagarin credential is also the registry credential, so there is
+	// nothing to ask for and no reason to make somebody run a second command
+	// before their first push. Best effort: docker may not be installed on this
+	// machine, and that is not a failed authorisation — reading logs and status
+	// needs no docker at all.
+	if err := cmdRegistryLogin(); err != nil {
+		fmt.Printf("\n  (docker is not logged in to the registry yet: %v)\n", err)
+		fmt.Printf("  run `gg registry login` before your first push\n")
+	}
+
+	fmt.Printf("\nnothing to export. try: gg projects\n")
+	return nil
+}
+
+// expiresIn is the sentence about how long the code lasts, or nothing when the
+// control plane did not say.
+func expiresIn(expiry time.Time) string {
+	if expiry.IsZero() {
+		return ""
+	}
+	mins := int(time.Until(expiry).Round(time.Minute) / time.Minute)
+	if mins < 1 {
+		return ""
+	}
+	return fmt.Sprintf("\nThe code works for %d minutes.", mins)
+}
+
+var errCodeExpired = apiError{Code: "expired_token",
+	Message: "nobody approved this machine before the code expired",
+	Hint:    "run gg login again for a fresh link, and pass it on straight away"}
+
+// loginError puts the flow's failures in gg's own shape — `[code] message`, and
+// a hint that says what to run — because the RFC's error codes are what an
+// agent branches on, and oauth2's own wording is not written for either reader.
+func loginError(api string, err error) error {
+	var re *oauth2.RetrieveError
+	switch {
+	case errors.As(err, &re):
+		switch re.ErrorCode {
+		case "access_denied":
+			return apiError{Code: "access_denied",
+				Message: "your human declined to give this machine access",
+				Hint:    "ask them before running gg login again; do not retry on your own"}
+		case "expired_token":
+			return errCodeExpired
+		case "":
+			status := 0
+			if re.Response != nil {
+				status = re.Response.StatusCode
+			}
+			return fmt.Errorf("the control plane at %s refused to sign this machine in (HTTP %d)", api, status)
+		default:
+			msg := re.ErrorDescription
+			if msg == "" {
+				msg = "the control plane refused to sign this machine in"
+			}
+			return apiError{Code: re.ErrorCode, Message: msg,
+				Hint: "run gg login again; if it repeats, tell your human what it says"}
+		}
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return fmt.Errorf("cannot reach control plane at %s: %w", api, err)
+	}
+	return fmt.Errorf("signing in through %s failed: %w", api, err)
 }
 
 func cmdWhoami() error {
@@ -152,9 +228,10 @@ func cmdWhoami() error {
 	return nil
 }
 
-// clientName is what the approval email will call this machine. Named honestly:
-// the human is about to make a security decision from this string, so it should
-// say what is really asking, and where.
+// clientName is what the approval page will call this machine, and what the
+// credential is named after. Named honestly: the human is about to make a
+// security decision from this string, so it should say what is really asking,
+// and where.
 //
 // Every part of it is a hint the client supplies about itself, and none of it is
 // verified by anything — which is exactly why it always ends in a hostname the
@@ -167,7 +244,7 @@ func cmdWhoami() error {
 // than a description of a machine, so anything that could get a human to approve
 // a request while GITHUB_ACTIONS was set in the environment could have that
 // approval read as a CI system rather than as whatever was really asking. And it
-// was never needed: CI does not sign up. A pipeline gets its credential from
+// was never needed: CI does not sign in. A pipeline gets its credential from
 // `gg creds create`, run by a human on a machine that is already
 // authorised, which is a name the caller states outright rather than one gg
 // guesses from the environment.
@@ -177,7 +254,7 @@ func clientName() string {
 		host = "an unknown machine"
 	}
 	// Agent harnesses advertise themselves in the environment. Using that means
-	// the email says "Claude Code on viktor-mbp" rather than "gg".
+	// the approval page says "Claude Code on viktor-mbp" rather than "gg".
 	for _, key := range []string{"CLAUDECODE", "CLAUDE_CODE", "CURSOR_AGENT", "AIDER"} {
 		if os.Getenv(key) == "" {
 			continue

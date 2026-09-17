@@ -65,7 +65,7 @@ There is nothing to export.
 
 Environment (overrides the file; meant for CI):
   GAGARIN_API      control plane URL (default ` + defaultAPI + `)
-  GAGARIN_TOKEN    a credential, for CI where no human can click a link
+  GAGARIN_TOKEN    a credential, for CI where no human can approve one
   GAGARIN_REGISTRY registry host, e.g. registry.gagarin.cloud`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -105,49 +105,39 @@ Environment (overrides the file; meant for CI):
 	return root
 }
 
-// One command for onboarding, run twice, because there is one request: the call
-// is the same whether this is the first machine on a new address or the fifth on
-// an old one, and the control plane answers it identically either way — on
-// purpose, so nobody can use it to find out which addresses have accounts.
-// It was `gg signup` and `gg auth` until 2026-09-13; two names for two halves of
-// one flow kept implying a first-time path that has never existed.
+// One command for onboarding, because there is one request: signing in, signing
+// up and authorising another machine are the same page in a browser. It was
+// `gg signup` and `gg auth` until 2026-09-13, and two runs of `gg login` — ask by
+// email, then collect with --claim — until 2026-09-17, when email sign-in gave
+// way to GitHub and Google through the OAuth device grant.
 func newLoginCmd() *cobra.Command {
-	var claim string
-	cmd := &cobra.Command{
-		Use:   "login [EMAIL]",
-		Short: "get this machine access; a human presses a button in an email",
-		Long: `Sign in, sign up, or authorise another machine — the same request every time.
+	return &cobra.Command{
+		Use:   "login",
+		Short: "get this machine access; a human approves it in a browser",
+		Long: `Get this machine access to gagarin. The same command every time: first
+machine or fifth, new account or old.
 
-  gg login you@example.com     asks, and prints a code
-  gg login --claim ABCD-1234   waits for the press, then stores credentials
+  gg login
 
-Any address works; there is no list to be on, and pressing the button in the
-email is the whole thing. A new account is created when it is pressed, with $5
-on it and no card asked for.
+It prints a link and a code, then waits. A human opens the link, signs in
+with GitHub or Google, checks that the page shows the same code and this
+machine's name, and approves. gg stores the credential and logs docker in to
+the registry. The code lasts fifteen minutes.
 
-Where that email comes from depends on whether the address already has an
-account, and gagarin will not tell you which — so pass on both halves of what
-the first run prints. An address with an account is emailed a link. An address
-without one is emailed nothing until the person writes to the signup address
-themselves, because gagarin does not mail anybody who has not asked it to.
+A new account is created the first time somebody signs in, with $5 on it and
+no card asked for.
 
-Two runs rather than one because between them you have to tell your human
-what to do and which code to match — say both before collecting.
+If you are an agent, pass the link and the code on to your human as printed,
+as soon as they appear — the command is still running, waiting for them. Do
+not approve it yourself, and never ask your human for a token instead.
 
-Ask your human for the address. Do not guess it, and do not use one you
-found in a repository or in git history.`,
-		Args: usageArgs(0, 1, "usage: gg login EMAIL\n"+
-			"  ask your human for their address — do not guess it"),
+Never run it in CI: a pipeline gets its own credential from gg creds create.`,
+		Args: usageArgs(0, 0, "usage: gg login\n"+
+			"  it takes nothing: it prints a link for your human to open"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var arg string
-			if len(args) > 0 {
-				arg = args[0]
-			}
-			return cmdLogin(arg, claim)
+			return cmdLogin()
 		},
 	}
-	cmd.Flags().StringVar(&claim, "claim", "", "the `code` that gg login EMAIL printed")
-	return cmd
 }
 
 func newWhoamiCmd() *cobra.Command {
