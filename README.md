@@ -23,22 +23,30 @@ Or take a binary for your platform from
 [releases](https://github.com/gagarin-cloud/gg/releases). Every release publishes
 checksums; verify them. There is deliberately no `curl | bash` one-liner.
 
-Then, if you use an agent:
+## Claude Code
+
+Everything below, plus the MCP server and two deploy agents, installs at once:
 
 ```
-gg skill install
+/plugin marketplace add gagarin-cloud/claude-plugin
+/plugin install gagarin@gagarin-cloud
 ```
 
-That writes the agent skill to `~/.claude/skills/gagarin/`, which is how a coding
-agent learns to use gagarin without you explaining it. The skill ships inside this
-binary, so it never disagrees with the CLI you have.
+## Any other agent
 
-For anything other than Claude Code, `gg skill install --agent agentskills`
-writes to `~/.agents/skills/gagarin/` — the location the
+```
+gg skill install --agent agentskills
+```
+
+That writes the agent skill to `~/.agents/skills/gagarin/` — the location the
 [Agent Skills](https://agentskills.io) standard defines, and the one Cursor,
-Codex, Copilot, Cline, Windsurf, Goose, opencode and Zed all read. `--agent all`
-covers every harness gg knows by name, `-i` offers a checklist, and `--dir`
-takes an explicit path.
+Codex, Copilot, Cline, Windsurf, Goose, opencode and Zed all read. It is how a
+coding agent learns to use gagarin without you explaining it, and the skill
+ships inside this binary, so it never disagrees with the CLI you have.
+
+A bare `gg skill install` writes to `~/.claude/skills/gagarin/`, which is what it
+did before `--agent` existed. `--agent all` covers every harness gg knows by
+name, `-i` offers a checklist, and `--dir` takes an explicit path.
 
 ## Use
 
