@@ -143,8 +143,7 @@ type errNotAuthenticated struct{}
 
 func (errNotAuthenticated) Error() string {
 	return "this machine has no gagarin credentials\n" +
-		"  to get some: gg login <your human's email>\n" +
-		"  then run: gg login --claim <code it prints>\n" +
-		"  the first run prints what to tell your human; a click in their email\n" +
-		"  authorises this machine, and creates the account if they have none"
+		"  to get some: gg login\n" +
+		"  it prints a link and a code for your human, and waits while they sign in\n" +
+		"  with GitHub or Google and approve this machine"
 }

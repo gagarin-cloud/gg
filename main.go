@@ -97,11 +97,6 @@ func callSlow(method, path string, body any, out any) error {
 	return callToTimeout(base, token, method, path, body, out, 5*time.Minute)
 }
 
-// callAnon talks to the onboarding endpoints, which have no credential yet.
-func callAnon(method, path string, body any, out any) error {
-	return callTo(apiBase(), "", method, path, body, out)
-}
-
 func callTo(base, token, method, path string, body any, out any) error {
 	return callToTimeout(base, token, method, path, body, out, 2*time.Minute)
 }
@@ -123,7 +118,7 @@ func callToTimeout(base, token, method, path string, body any, out any, timeout 
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// Ask for JSON explicitly: the onboarding endpoints answer in prose by default,
+	// Ask for JSON explicitly: some endpoints answer in prose by default,
 	// because their usual reader is a language model rather than a program.
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", clientName())
@@ -927,7 +922,7 @@ func cmdRegistryLogin() error {
 	cmd.Stdin = strings.NewReader(secret)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker login to %s failed: %w\n  hint: if it says the credential is not valid, run `gg login <your human's email>`", host, err)
+		return fmt.Errorf("docker login to %s failed: %w\n  hint: if it says the credential is not valid, run `gg login`", host, err)
 	}
 	fmt.Printf("docker logged in to %s\n", host)
 	return nil
