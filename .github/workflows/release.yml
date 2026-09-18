@@ -27,6 +27,12 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Needed to push the formula update to gagarin-cloud/homebrew-tap;
-          # GITHUB_TOKEN above can't write outside this repo.
+          # Needed to push the cask update to gagarin-cloud/homebrew-tap;
+          # GITHUB_TOKEN above can't write outside this repo. The same is true
+          # of the Scoop bucket and of our winget-pkgs fork, so each gets its
+          # own token rather than one key to three repositories.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
+          # Must also be able to open a pull request on microsoft/winget-pkgs,
+          # which a fine-grained token scoped to our fork alone cannot do.
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}

@@ -32,24 +32,86 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-# Publishes a formula to gagarin-cloud/homebrew-tap on every release, so
-# `brew install gagarin-cloud/tap/gg` always resolves to the latest tag.
+# Publishes a cask to gagarin-cloud/homebrew-tap on every release, so
+# `brew install --cask gagarin-cloud/tap/gg` always resolves to the latest tag.
 # Pushing to that repo needs a token with write access to it; the default
 # GITHUB_TOKEN is scoped to this repo only, so the workflow supplies
 # HOMEBREW_TAP_GITHUB_TOKEN instead.
-brews:
-  - repository:
+#
+# This was a formula until homebrew deprecated that route for pre-built
+# binaries. A formula builds from source or pours a bottle homebrew itself
+# built; a cask installs the artifact we shipped, which is what gg has always
+# really been. Anyone who installed the formula has to `brew uninstall gg`
+# once before the cask will take.
+homebrew_casks:
+  - name: gg
+    binaries: [gg]
+    repository:
       owner: gagarin-cloud
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://gagarin.cloud"
     description: "The gagarin CLI — deploy and operate applications on gagarin"
     license: "MIT"
-    test: |
-      system "#{bin}/gg", "version"
-    install: |
-      bin.install "gg"
+    hooks:
+      post:
+        # We do not sign or notarise the binaries, and homebrew quarantines
+        # what a cask downloads. Without this, gatekeeper kills the first run
+        # with "the developer cannot be verified" and the install looks broken.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gg"]
+          end
+
+# Publishes a manifest to gagarin-cloud/scoop-bucket on every release, so
+# `scoop install gagarin/gg` resolves to the latest tag. Scoop is the Windows
+# equivalent of the tap above: a bucket repo we own, updated by the release.
+scoops:
+  - repository:
+      owner: gagarin-cloud
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    # Scoop reads manifests from bucket/ when that directory exists.
+    directory: bucket
+    homepage: "https://gagarin.cloud"
+    description: "The gagarin CLI - deploy and operate applications on gagarin"
+    license: "MIT"
+
+# Opens a pull request against microsoft/winget-pkgs on every release. Unlike
+# the tap and the bucket, this repository is not ours: the release pushes a
+# branch to our fork and asks Microsoft to merge it, and their validation runs
+# before the version is installable. A release is therefore published before it
+# is in winget, and a rejected PR fails nothing here.
+winget:
+  - name: gg
+    package_identifier: Gagarin.gg
+    publisher: Gagarin
+    publisher_url: "https://gagarin.cloud"
+    homepage: "https://gagarin.cloud"
+    short_description: "Deploy and operate applications on gagarin"
+    description: |
+      gg deploys and operates applications on gagarin, a cloud your coding
+      agent can drive and you can read. It is a thin wrapper over the gagarin
+      API and holds no state of its own beyond a credential file.
+    license: "MIT"
+    license_url: "https://github.com/gagarin-cloud/gg/blob/main/LICENSE"
+    release_notes_url: "https://github.com/gagarin-cloud/gg/releases/tag/{{ .Tag }}"
+    tags: [cli, cloud, deployment, containers, devops]
+    repository:
+      # Our fork of winget-pkgs. The branch is per-version because Microsoft
+      # requires one pull request per package version.
+      owner: gagarin-cloud
+      name: winget-pkgs
+      branch: "gg-{{ .Version }}"
+      token: "{{ .Env.WINGET_GITHUB_TOKEN }}"
+      pull_request:
+        enabled: true
+        draft: false
+        base:
+          owner: microsoft
+          name: winget-pkgs
+          branch: master
 
 changelog:
   sort: asc
