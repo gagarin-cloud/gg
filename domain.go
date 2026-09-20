@@ -57,6 +57,14 @@ func cmdDomainAdd(ref, domain string) error {
 		return nil
 	}
 
+	// The name we asked for is the name we print. The server echoes it back in
+	// this response only sometimes, and a blank in the middle of an instruction
+	// ("Create this record where  is registered") is worse than no sentence at
+	// all — we typed the domain, so we already know it.
+	if out.Domain == "" {
+		out.Domain = domain
+	}
+
 	fmt.Printf("%s answers on %s\n", out.Service, out.Domain)
 
 	// The record, formatted the way a registrar's form asks for it rather than
