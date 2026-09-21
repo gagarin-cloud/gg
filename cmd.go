@@ -1127,7 +1127,12 @@ outlive it by fourteen days). --backup names an exact key from
 
 The new resource is the backup's type — a postgres for a postgres dump, a
 qdrant for a qdrant backup. The platform records it with every backup, so
-nothing needs saying, even when the old resource is already destroyed.`,
+nothing needs saying, even when the old resource is already destroyed.
+
+It is one request, and the platform does all of it: create, wait, fill.
+If the new resource is slow to start and the request gives up, run the
+same command again — it reuses the name, and only ever fills an empty
+resource.`,
 		Args: usageArgs(1, 1, "usage: gg resource restore PROJECT/NEW-NAME --source OLD-NAME\n"+
 			"  e.g. gg resource restore shop/db2 --source db"),
 		RunE: func(cmd *cobra.Command, args []string) error {

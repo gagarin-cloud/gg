@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 )
 
 // typeExternal is the one resource type gg has to know by name.
@@ -323,50 +322,39 @@ func cmdResourceRestore(ref, source, backupKey, size string, storageGB int) erro
 		return fmt.Errorf("say what to restore\n  hint: --source <old-resource> for its newest backup, or --backup <key> for an exact one")
 	}
 
-	typ, err := restoreType(project, source, backupKey)
-	if err != nil {
-		return err
+	// One request. The platform resolves the backup and its type, creates the
+	// resource as that type under the new name, waits for it to run, and fills
+	// it — the same restore an agent gets over MCP, so nothing here decides
+	// anything a different caller could decide differently. It says "working"
+	// first because the answer takes as long as the database is big.
+	body := map[string]any{}
+	if source != "" {
+		body["source"] = source
 	}
-
-	// 1. The new resource. A restatement if it already exists, which is
-	// harmless — the engine's empty-database gate is what actually protects.
-	body := map[string]any{"type": typ}
+	if backupKey != "" {
+		body["backup"] = backupKey
+	}
 	if storageGB > 0 {
 		body["storage_gb"] = storageGB
 	}
 	if size != "" {
 		body["size"] = size
 	}
-	if err := call("PUT", fmt.Sprintf("/v1/projects/%s/resources/%s", project, name), body, nil); err != nil {
-		return err
-	}
-	fmt.Printf("provisioning %s...\n", name)
-
-	// 2. Wait for it to run. A restore needs a live server to pour into, and
-	// "wait, then look" is exactly what an agent would otherwise be told to do
-	// by hand. Bounded: a resource that has not started in three minutes is
-	// not about to, and the status message says why.
-	if err := waitForResource(project, name, 3*time.Minute); err != nil {
-		return err
-	}
-
-	// 3. Pour.
+	fmt.Printf("restoring into %s — creating it, waiting for it to start, then filling it...\n", name)
 	var out struct {
 		Restored string `json:"restored"`
-		Next     string `json:"next"`
+		Type     string `json:"type"`
+		Created  bool   `json:"created"`
 	}
-	rbody := map[string]any{}
-	if source != "" {
-		rbody["source"] = source
-	}
-	if backupKey != "" {
-		rbody["backup"] = backupKey
-	}
-	if err := callSlow("POST", fmt.Sprintf("/v1/projects/%s/resources/%s/restore", project, name), rbody, &out); err != nil {
+	if err := callSlow("POST", fmt.Sprintf("/v1/projects/%s/resources/%s/restore", project, name), body, &out); err != nil {
 		return err
 	}
 
-	fmt.Printf("restored %s into %s/%s\n", out.Restored, project, name)
+	if out.Created {
+		fmt.Printf("restored %s into %s/%s, a new %s\n", out.Restored, project, name, out.Type)
+	} else {
+		fmt.Printf("restored %s into %s/%s\n", out.Restored, project, name)
+	}
 	// The old resource's name is only known when --source named it. Restoring an
 	// exact --backup key gives gg no reliable way to say which resource the key
 	// came from, and guessing by parsing the key would be a name printed into a
@@ -387,83 +375,6 @@ dependent that read %s_URL now reads %s_URL. Anything holding the old spelling
 in its own config needs a deploy too.
 `, project, name, envPrefix(name), project, old, name, envPrefix(old), envPrefix(name))
 	return nil
-}
-
-// restoreType is the type a restore provisions: the type of whatever wrote
-// the backup, because the platform restores a backup only into its own kind.
-// It is asked of the platform rather than guessed. The backups listing labels
-// every backup with its type and answers for a destroyed resource too, from
-// the backups it left — the case a restore exists for, and the one where
-// nothing else remembers what the resource was.
-//
-// Asking first has a second use: a source with nothing stored, or a key that
-// is not there, is refused here, before a resource is provisioned for nothing.
-//
-// An exact key is looked up under the resource it names — the middle of
-// <project id>/<resource>/<stamp> — and must appear in that listing verbatim,
-// so a mangled or foreign key finds nothing rather than a wrong answer.
-func restoreType(project, source, backupKey string) (string, error) {
-	name := source
-	if backupKey != "" {
-		parts := strings.Split(backupKey, "/")
-		if len(parts) != 3 || parts[1] == "" {
-			return "", fmt.Errorf("%s is not a backup key\n  hint: gg resource backups %s/NAME lists them", backupKey, project)
-		}
-		name = parts[1]
-	}
-	var out struct {
-		Backups []backupObject `json:"backups"`
-	}
-	if err := call("GET", fmt.Sprintf("/v1/projects/%s/resources/%s/backups", project, name), nil, &out); err != nil {
-		return "", err
-	}
-	var b *backupObject
-	if backupKey == "" {
-		if len(out.Backups) == 0 {
-			return "", fmt.Errorf("%s has no backups stored yet, so there is nothing to restore\n  hint: gg resource backup %s/%s takes one now", name, project, name)
-		}
-		b = &out.Backups[len(out.Backups)-1]
-	} else {
-		for i := range out.Backups {
-			if out.Backups[i].Key == backupKey {
-				b = &out.Backups[i]
-			}
-		}
-		if b == nil {
-			return "", fmt.Errorf("no backup %s is stored\n  hint: gg resource backups %s/%s lists what is", backupKey, project, name)
-		}
-	}
-	if b.Type == "" {
-		return "", fmt.Errorf("the platform did not say what type %s is; it is older than gg expects — update the control plane", b.Key)
-	}
-	return b.Type, nil
-}
-
-// waitForResource polls project status until the named service reports a ready
-// pod, an unrecoverable state, or the deadline.
-func waitForResource(project, name string, patience time.Duration) error {
-	deadline := time.Now().Add(patience)
-	for {
-		var st statusResp
-		if err := call("GET", "/v1/projects/"+project+"/status", nil, &st); err != nil {
-			return err
-		}
-		for _, s := range st.Services {
-			if s.Name != name {
-				continue
-			}
-			if s.Actual.Ready >= 1 {
-				return nil
-			}
-			if s.Actual.Stalled {
-				return fmt.Errorf("%s is not going to start: %s", name, s.Actual.Message)
-			}
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not start within %s; `gg status %s` says where it is stuck", name, patience, project)
-		}
-		time.Sleep(3 * time.Second)
-	}
 }
 
 func sizeHuman(b int64) string {
