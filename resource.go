@@ -250,6 +250,9 @@ type backupObject struct {
 	Key       string `json:"key"`
 	SizeBytes int64  `json:"size_bytes"`
 	Stored    string `json:"stored"`
+	// Type is the resource type that wrote it, which is what a restore of it
+	// must provision. Said by the platform, never parsed out of the key here.
+	Type string `json:"type"`
 }
 
 func cmdResourceBackups(ref string) error {
@@ -258,12 +261,16 @@ func cmdResourceBackups(ref string) error {
 		return err
 	}
 	var out struct {
-		Type    string         `json:"type"`
-		Backups []backupObject `json:"backups"`
+		Type      string         `json:"type"`
+		Destroyed bool           `json:"destroyed"`
+		Backups   []backupObject `json:"backups"`
 	}
 	path := fmt.Sprintf("/v1/projects/%s/resources/%s/backups", project, name)
 	if err := call("GET", path, nil, &out); err != nil {
 		return err
+	}
+	if out.Destroyed {
+		fmt.Printf("%s is destroyed; these are the %s backups it left, kept fourteen days.\n\n", name, out.Type)
 	}
 	if len(out.Backups) == 0 {
 		fmt.Printf("No backups stored yet. The nightly pass takes the first one, or take one now:\n  gg resource backup %s/%s\n", project, name)
@@ -307,7 +314,7 @@ func cmdResourceBackup(ref string) error {
 // and pours the dump in. That is also why no step here asks for approval — the
 // one destructive step in a recovery is removing the old resource, which stays
 // on `gg resource rm`'s existing human gate.
-func cmdResourceRestore(ref, source, backupKey string, size string, storageGB int) error {
+func cmdResourceRestore(ref, source, backupKey, size string, storageGB int) error {
 	project, name, _, err := parseService(ref)
 	if err != nil {
 		return err
@@ -316,9 +323,14 @@ func cmdResourceRestore(ref, source, backupKey string, size string, storageGB in
 		return fmt.Errorf("say what to restore\n  hint: --source <old-resource> for its newest backup, or --backup <key> for an exact one")
 	}
 
+	typ, err := restoreType(project, source, backupKey)
+	if err != nil {
+		return err
+	}
+
 	// 1. The new resource. A restatement if it already exists, which is
 	// harmless — the engine's empty-database gate is what actually protects.
-	body := map[string]any{"type": "postgres"}
+	body := map[string]any{"type": typ}
 	if storageGB > 0 {
 		body["storage_gb"] = storageGB
 	}
@@ -375,6 +387,56 @@ dependent that read %s_URL now reads %s_URL. Anything holding the old spelling
 in its own config needs a deploy too.
 `, project, name, envPrefix(name), project, old, name, envPrefix(old), envPrefix(name))
 	return nil
+}
+
+// restoreType is the type a restore provisions: the type of whatever wrote
+// the backup, because the platform restores a backup only into its own kind.
+// It is asked of the platform rather than guessed. The backups listing labels
+// every backup with its type and answers for a destroyed resource too, from
+// the backups it left — the case a restore exists for, and the one where
+// nothing else remembers what the resource was.
+//
+// Asking first has a second use: a source with nothing stored, or a key that
+// is not there, is refused here, before a resource is provisioned for nothing.
+//
+// An exact key is looked up under the resource it names — the middle of
+// <project id>/<resource>/<stamp> — and must appear in that listing verbatim,
+// so a mangled or foreign key finds nothing rather than a wrong answer.
+func restoreType(project, source, backupKey string) (string, error) {
+	name := source
+	if backupKey != "" {
+		parts := strings.Split(backupKey, "/")
+		if len(parts) != 3 || parts[1] == "" {
+			return "", fmt.Errorf("%s is not a backup key\n  hint: gg resource backups %s/NAME lists them", backupKey, project)
+		}
+		name = parts[1]
+	}
+	var out struct {
+		Backups []backupObject `json:"backups"`
+	}
+	if err := call("GET", fmt.Sprintf("/v1/projects/%s/resources/%s/backups", project, name), nil, &out); err != nil {
+		return "", err
+	}
+	var b *backupObject
+	if backupKey == "" {
+		if len(out.Backups) == 0 {
+			return "", fmt.Errorf("%s has no backups stored yet, so there is nothing to restore\n  hint: gg resource backup %s/%s takes one now", name, project, name)
+		}
+		b = &out.Backups[len(out.Backups)-1]
+	} else {
+		for i := range out.Backups {
+			if out.Backups[i].Key == backupKey {
+				b = &out.Backups[i]
+			}
+		}
+		if b == nil {
+			return "", fmt.Errorf("no backup %s is stored\n  hint: gg resource backups %s/%s lists what is", backupKey, project, name)
+		}
+	}
+	if b.Type == "" {
+		return "", fmt.Errorf("the platform did not say what type %s is; it is older than gg expects — update the control plane", b.Key)
+	}
+	return b.Type, nil
 }
 
 // waitForResource polls project status until the named service reports a ready

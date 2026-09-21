@@ -516,3 +516,89 @@ func TestRotatingWithNoDependentsSaysSo(t *testing.T) {
 		t.Errorf("the output does not say how to connect something:\n%s", out)
 	}
 }
+
+// --- restore provisions the backup's own type ------------------------------
+//
+// The platform restores a backup only into a resource of the type that wrote
+// it, so the resource gg provisions first has to be that type — and gg asks
+// the platform's backups listing rather than guessing, including for a source
+// that is already destroyed.
+
+// restoreAgainst runs a restore against a fake API whose backups listing for
+// the looked-up name is listing, and returns the type provisioned ("" when
+// nothing was) and the command's error.
+func restoreAgainst(t *testing.T, listing, source, key string) (string, error) {
+	t.Helper()
+	var provisioned, listed string
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/backups"):
+			listed = r.URL.Path
+			_, _ = w.Write([]byte(listing))
+		case r.Method == http.MethodPut:
+			var body map[string]any
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &body)
+			provisioned, _ = body["type"].(string)
+			_, _ = w.Write([]byte(`{}`))
+		case strings.HasSuffix(r.URL.Path, "/status"):
+			_, _ = w.Write([]byte(`{"project":"shop","services":[{"name":"vec2","kind":"resource:` +
+				provisioned + `","actual":{"exists":true,"ready_replicas":1}}]}`))
+		case strings.HasSuffix(r.URL.Path, "/restore"):
+			_, _ = w.Write([]byte(`{"restored":"x"}`))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	})
+	var err error
+	capture(t, func() { err = cmdResourceRestore("shop/vec2", source, key, "", 0) })
+	if listed != "" && !strings.HasSuffix(listed, "/resources/vec/backups") {
+		t.Errorf("listed %s, not the source's backups", listed)
+	}
+	return provisioned, err
+}
+
+const vecBackups = `{"resource":"vec","type":"qdrant","destroyed":true,"backups":[
+	{"key":"p1/vec/20260920T021500Z.dump","type":"postgres"},
+	{"key":"p1/vec/20260921T021500Z.tar","type":"qdrant"}]}`
+
+// A destroyed source is the case restore exists for, and its backups say
+// what it was: the newest one's type, since that is the one poured.
+func TestRestoreOfADestroyedSourceProvisionsItsType(t *testing.T) {
+	got, err := restoreAgainst(t, vecBackups, "vec", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "qdrant" {
+		t.Errorf("provisioned a %q for a source whose newest backup is qdrant's", got)
+	}
+}
+
+// An exact key takes the type the platform lists for that key.
+func TestRestoreOfAnExactKeyProvisionsItsType(t *testing.T) {
+	got, err := restoreAgainst(t, vecBackups, "", "p1/vec/20260920T021500Z.dump")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "postgres" {
+		t.Errorf("provisioned a %q for a postgres dump", got)
+	}
+}
+
+// Nothing to restore is found out before anything is provisioned.
+func TestRestoreProvisionsNothingWithoutABackup(t *testing.T) {
+	for _, tc := range []struct{ name, source, key string }{
+		{"no backups", "vec", ""},
+		{"unknown key", "", "p1/vec/20260101T000000Z.tar"},
+		{"not a key", "", "vec.tar"},
+	} {
+		got, err := restoreAgainst(t, `{"resource":"vec","type":"qdrant","backups":[]}`, tc.source, tc.key)
+		if err == nil {
+			t.Errorf("%s: restore went ahead", tc.name)
+		}
+		if got != "" {
+			t.Errorf("%s: provisioned a %q for nothing", tc.name, got)
+		}
+	}
+}

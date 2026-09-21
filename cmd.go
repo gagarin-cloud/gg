@@ -846,10 +846,10 @@ other decision is the platform's.
   --size m   1 vCPU / 2 GB, dedicated. What a real database wants.
   --size l   2 vCPU / 4 GB, dedicated.
 
-One instance, one volume, no failover. Postgres is dumped nightly and
-kept fourteen days — ` + "`gg resource backups`" + ` lists them, and
-` + "`gg resource restore`" + ` puts one back into a NEW resource. Valkey keeps
-nothing across a restart, by design; qdrant has no backups yet. See
+One instance, one volume, no failover. Postgres and qdrant are backed up
+nightly and kept fourteen days — ` + "`gg resource backups`" + ` lists them,
+and ` + "`gg resource restore`" + ` puts one back into a NEW resource. Valkey
+keeps nothing across a restart, by design. See
 ` + "`gg deps add`" + ` for how to connect something to it — that one call opens
 the route and hands over the credentials — and the docs for what all this
 means before you put a client's data in one.
@@ -1063,8 +1063,8 @@ func newResourceBackupsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "backups PROJECT/NAME",
 		Short: "list its stored backups, newest last",
-		Long: `Every stored backup of this resource. Postgres is dumped nightly and
-kept fourteen days; the newest is the last line.
+		Long: `Every stored backup of this resource. Postgres and qdrant are backed
+up nightly and kept fourteen days; the newest is the last line.
 
 A backup is used by restoring it into a NEW resource — never over this
 one. See ` + "`gg resource restore`" + `.`,
@@ -1099,9 +1099,10 @@ func newResourceRestoreCmd() *cobra.Command {
 		Short: "create a NEW resource from a backup",
 		Long: `Bring backed-up data back, as a new resource.
 
-This never overwrites anything: it provisions a fresh postgres under the
-name you give, waits for it to run, and fills it from the backup. The
-platform refuses to restore into a database that already holds data. So
+This never overwrites anything: it provisions a fresh resource of the
+backup's type under the name you give, waits for it to run, and fills it
+from the backup. The platform refuses to restore into a database that
+already holds data. So
 this command needs no approval and is safe to reach for at three in the
 morning.
 
@@ -1122,7 +1123,11 @@ the old spelling in its own config needs a deploy as well.
 Which backup: --source names the old resource and takes its newest dump
 (the old resource may already be destroyed — that is fine, its backups
 outlive it by fourteen days). --backup names an exact key from
-` + "`gg resource backups`" + `.`,
+` + "`gg resource backups`" + `.
+
+The new resource is the backup's type — a postgres for a postgres dump, a
+qdrant for a qdrant backup. The platform records it with every backup, so
+nothing needs saying, even when the old resource is already destroyed.`,
 		Args: usageArgs(1, 1, "usage: gg resource restore PROJECT/NEW-NAME --source OLD-NAME\n"+
 			"  e.g. gg resource restore shop/db2 --source db"),
 		RunE: func(cmd *cobra.Command, args []string) error {
