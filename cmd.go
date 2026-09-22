@@ -97,6 +97,7 @@ Environment (overrides the file; meant for CI):
 		newResourceCmd(),
 		newConnectCmd(),
 		newDomainCmd(),
+		newAlertsCmd(),
 		newRegistryCmd(),
 		newVersionCmd(),
 	)
@@ -1204,6 +1205,71 @@ runs, and its values are "gg resource secrets".`,
 // newDomainCmd is its own verb rather than a flag on deploy, because a domain is
 // a claim on a name rather than part of the artifact a deploy produces — and a
 // flag could release one by being forgotten, which is the failure nobody sees.
+func newAlertsCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "alerts",
+		Short: "be told on your phone when a service goes down",
+		Long: `Alerts go to an ntfy topic — a free app with no account to make.
+
+` + "`gg alerts on PROJECT`" + ` turns them on, with ntfy.sh and a topic nobody can
+guess. Subscribe to it in the app and you will hear when a service is down for
+three minutes, when a deploy will not start, and when a container crashes and
+restarts — once when it starts, and once when it is over.
+
+A server, topic or token of your own are flags on the same command.`,
+	}
+	cmd.AddCommand(newAlertsOnCmd(), newAlertsTestCmd(), newAlertsOffCmd())
+	// Bare `gg alerts shop` shows where they go, the way a bare noun lists.
+	cmd.Args = usageArgs(0, 1, "usage: gg alerts PROJECT\n  gg alerts on PROJECT to turn them on")
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if len(args) == 0 {
+			return cmd.Help()
+		}
+		return cmdAlertsShow(args[0])
+	}
+	return cmd
+}
+
+func newAlertsOnCmd() *cobra.Command {
+	var server, topic, token string
+	cmd := &cobra.Command{
+		Use:   "on PROJECT",
+		Short: "turn alerts on, or change where they go",
+		Args: usageArgs(1, 1, "usage: gg alerts on PROJECT [--server URL] [--topic NAME] [--token TOKEN]\n"+
+			"  e.g. gg alerts on shop                                   ntfy.sh, a topic made up for you\n"+
+			"       gg alerts on shop --server https://ntfy.example.com --token tk_..."),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdAlertsOn(args[0], server, topic, token)
+		},
+	}
+	cmd.Flags().StringVar(&server, "server", "", "your own ntfy server; default https://ntfy.sh")
+	cmd.Flags().StringVar(&topic, "topic", "", "a topic of your own; default keeps the current one, or makes one up")
+	cmd.Flags().StringVar(&token, "token", "", "an ntfy access token to publish with, for your server or a reserved topic")
+	return cmd
+}
+
+func newAlertsTestCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "test PROJECT",
+		Short: "send one now, to see it arrive",
+		Args:  usageArgs(1, 1, "usage: gg alerts test PROJECT"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdAlertsTest(args[0])
+		},
+	}
+}
+
+func newAlertsOffCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "off PROJECT",
+		Short: "stop sending alerts",
+		Args:  usageArgs(1, 1, "usage: gg alerts off PROJECT"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdAlertsOff(args[0])
+		},
+	}
+}
+
 func newDomainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
