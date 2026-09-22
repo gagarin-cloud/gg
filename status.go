@@ -256,6 +256,13 @@ func printStatusTable(st statusResp) {
 			lines = append(lines, line{text: runLine(s)})
 		}
 
+		// A restore still under way, or one that failed, under the resource it
+		// was for — where `gg resource restore --no-wait` sends the reader. A
+		// finished one says nothing: the resource simply holds its data now.
+		if l := restoreLine(s); l != "" {
+			lines = append(lines, line{text: l})
+		}
+
 		// Every address the service answers on, under it, in the order the
 		// control plane put them: a name somebody owns first, because that is the
 		// one that can be waiting on them.
@@ -525,4 +532,22 @@ func sizeLabel(size string) string {
 		return "—"
 	}
 	return size
+}
+
+// restoreLine is a resource's restore while it matters: pending, with the
+// last try's trouble if it had any, or failed, with why. Empty once it is
+// done and for any resource that was not restored.
+func restoreLine(s serviceStatus) string {
+	r := s.Restore
+	if r == nil || r.State == "done" {
+		return ""
+	}
+	if r.State == "failed" {
+		return "○  └ restore failed: " + r.Error
+	}
+	out := "◐  └ restoring from " + r.Backup
+	if r.Error != "" {
+		out += fmt.Sprintf(" (try %d; the last one hit: %s)", r.Attempts+1, r.Error)
+	}
+	return out
 }

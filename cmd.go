@@ -1094,6 +1094,7 @@ schedule keeps running regardless. Kept fourteen days like every backup.`,
 func newResourceRestoreCmd() *cobra.Command {
 	var source, backupKey, size string
 	var storage int
+	var noWait bool
 	cmd := &cobra.Command{
 		Use:   "restore PROJECT/NEW-NAME",
 		Short: "create a NEW resource from a backup",
@@ -1129,14 +1130,15 @@ The new resource is the backup's type — a postgres for a postgres dump, a
 qdrant for a qdrant backup. The platform records it with every backup, so
 nothing needs saying, even when the old resource is already destroyed.
 
-It is one request, and the platform does all of it: create, wait, fill.
-If the new resource is slow to start and the request gives up, run the
-same command again — it reuses the name, and only ever fills an empty
-resource.`,
+The platform does the restore, not this command: it creates the resource,
+waits for it to start and fills it, on its own schedule. gg waits and
+shows each step by default, and stopping gg stops nothing — ` + "`gg status`" + `
+shows the restore as pending, then done or failed with the reason.
+--no-wait returns as soon as the restore is accepted.`,
 		Args: usageArgs(1, 1, "usage: gg resource restore PROJECT/NEW-NAME --source OLD-NAME\n"+
 			"  e.g. gg resource restore shop/db2 --source db"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdResourceRestore(args[0], source, backupKey, size, storage)
+			return cmdResourceRestore(args[0], source, backupKey, size, storage, !noWait)
 		},
 	}
 	cmd.Flags().StringVar(&source, "source", "",
@@ -1147,6 +1149,8 @@ resource.`,
 		"the new resource's size: s, m or l (default s)")
 	cmd.Flags().IntVar(&storage, "storage", 0,
 		"the new resource's storage ceiling in GB (default 10)")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false,
+		"return once the restore is accepted; `gg status` follows it from there")
 	return cmd
 }
 

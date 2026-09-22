@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // --- external resources ----------------------------------------------------
@@ -517,44 +519,103 @@ func TestRotatingWithNoDependentsSaysSo(t *testing.T) {
 	}
 }
 
-// --- restore is one request ----------------------------------------------
+// --- restore: accepted by the platform, followed by gg ---------------------
 //
-// The platform resolves the backup and its type, creates the resource, waits
-// for it and fills it. gg's whole job is to send what the user said and read
-// the answer back — so these assert that it sends exactly one request, and
-// never one that picks a type.
+// The platform resolves the backup and its type, creates the resource and
+// records the restore, answering at once; its restore job fills it. gg sends
+// what the user said, then — by default — follows the restore through status
+// until it is done or failed. These pin both halves.
 
-func TestRestoreIsOneRequestThatNamesNoType(t *testing.T) {
+// restoreAPI answers the restore POST, then walks status through the given
+// restore states one poll at a time, and records every request.
+func restoreAPI(t *testing.T, states ...string) *[]string {
+	t.Helper()
+	restorePoll = time.Millisecond
+	t.Cleanup(func() { restorePoll = 3 * time.Second })
 	var calls []string
-	var body map[string]any
+	polls := 0
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
-		calls = append(calls, r.Method+" "+r.URL.Path)
-		b, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(b, &body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"restored":"p1/vec/20260921T021500Z.tar","type":"qdrant","created":true}`))
+		if r.Method == http.MethodPost {
+			calls = append(calls, "POST "+r.URL.Path+" "+readBody(r))
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"type":"qdrant","restore":{"backup":"p1/vec/20260921T021500Z.tar","state":"pending"}}`))
+			return
+		}
+		calls = append(calls, "GET "+r.URL.Path)
+		state := states[min(polls, len(states)-1)]
+		polls++
+		ready, restore := 1, `{"state":"pending"}`
+		switch state {
+		case "starting":
+			ready = 0
+		case "retrying":
+			restore = `{"state":"pending","attempts":1,"error":"stream reset"}`
+		case "done":
+			restore = `{"state":"done","attempts":1}`
+		case "failed":
+			restore = `{"state":"failed","attempts":3,"error":"vec2 holds 2 collections"}`
+		}
+		_, _ = w.Write([]byte(`{"project":"shop","services":[{"name":"vec2","kind":"resource:qdrant",` +
+			`"actual":{"exists":true,"desired_replicas":1,"ready_replicas":` + strconv.Itoa(ready) + `},` +
+			`"restore":` + restore + `}]}`))
 	})
+	return &calls
+}
+
+func readBody(r *http.Request) string {
+	b, _ := io.ReadAll(r.Body)
+	return string(b)
+}
+
+// By default gg waits, and says each step once — not once per poll.
+func TestRestoreWaitsAndShowsEachStep(t *testing.T) {
+	calls := restoreAPI(t, "starting", "starting", "filling", "retrying", "done")
 	out := capture(t, func() {
-		if err := cmdResourceRestore("shop/vec2", "vec", "", "m", 20); err != nil {
+		if err := cmdResourceRestore("shop/vec2", "vec", "", "m", 20, true); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if len(calls) != 1 || calls[0] != "POST /v1/projects/shop/resources/vec2/restore" {
-		t.Fatalf("calls = %v, want the one restore", calls)
+	if (*calls)[0] != `POST /v1/projects/shop/resources/vec2/restore {"size":"m","source":"vec","storage_gb":20}` {
+		t.Errorf("the request was %q — and never a type, which is the platform's to decide", (*calls)[0])
 	}
-	if _, ok := body["type"]; ok {
-		t.Errorf("gg chose a type; the platform decides it: %v", body)
+	for _, want := range []string{"a new qdrant", "starting vec2", "filling it", "after: stream reset", "done", "gg deps add"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q missing from:\n%s", want, out)
+		}
 	}
-	if body["source"] != "vec" || body["size"] != "m" || body["storage_gb"] != float64(20) {
-		t.Errorf("body = %v", body)
-	}
-	if !strings.Contains(out, "a new qdrant") {
-		t.Errorf("the output does not say what was created:\n%s", out)
+	if strings.Count(out, "starting vec2") != 1 {
+		t.Errorf("a step was printed once per poll:\n%s", out)
 	}
 }
 
-// A refusal is the platform's, passed through — nothing was created locally
-// to be cleaned up, because gg creates nothing.
+// A failed restore is an error, carrying the platform's reason.
+func TestRestoreThatFailsIsAnError(t *testing.T) {
+	restoreAPI(t, "filling", "failed")
+	var err error
+	capture(t, func() { err = cmdResourceRestore("shop/vec2", "vec", "", "", 0, true) })
+	if err == nil || !strings.Contains(err.Error(), "vec2 holds 2 collections") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// --no-wait returns once the restore is accepted, and says where to look.
+func TestRestoreNoWaitReturnsAtOnce(t *testing.T) {
+	calls := restoreAPI(t, "starting")
+	out := capture(t, func() {
+		if err := cmdResourceRestore("shop/vec2", "vec", "", "", 0, false); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(*calls) != 1 {
+		t.Errorf("--no-wait still polled: %v", *calls)
+	}
+	if !strings.Contains(out, "gg status shop") {
+		t.Errorf("the output does not say where to follow it:\n%s", out)
+	}
+}
+
+// A refusal is the platform's, passed through before anything is waited on.
 func TestRestoreRefusalIsThePlatforms(t *testing.T) {
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -562,7 +623,7 @@ func TestRestoreRefusalIsThePlatforms(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"code":"no_backups","message":"acme/vec: no backups stored","fix_hint":"take one now"}}`))
 	})
 	var err error
-	capture(t, func() { err = cmdResourceRestore("shop/vec2", "vec", "", "", 0) })
+	capture(t, func() { err = cmdResourceRestore("shop/vec2", "vec", "", "", 0, true) })
 	if err == nil || !strings.Contains(err.Error(), "no backups stored") {
 		t.Errorf("err = %v", err)
 	}

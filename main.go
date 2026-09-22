@@ -632,6 +632,18 @@ type serviceStatus struct {
 		// stay up.
 		Run *runState `json:"run"`
 	} `json:"actual"`
+	// Restore is the restore this resource was created to hold, and nil for
+	// anything made another way. The platform carries a restore out after
+	// answering the request for it, so this is where its outcome is read.
+	Restore *restoreState `json:"restore"`
+}
+
+// restoreState is one resource's restore as status reports it.
+type restoreState struct {
+	Backup   string `json:"backup"`
+	State    string `json:"state"` // pending, done or failed
+	Attempts int    `json:"attempts"`
+	Error    string `json:"error"`
 }
 
 // runState is one run of a job, as the control plane reports it.
