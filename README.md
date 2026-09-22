@@ -90,6 +90,8 @@ gg resource rotate shop/openai --env-file .env.new   # new key, and every holder
 gg resource rotate shop/db          # a database: gagarin mints it, no downtime
 
 gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
+gg alerts on shop                         # your phone hears when a service goes down; prints the ntfy topic
+gg alerts test shop                       # send one now, to see it arrive
 gg share shop teammate@example.com        # editors deploy and manage; viewers read
 gg transfer shop teammate@example.com     # offer them the project, and its bill; they accept by email
 gg destroy shop                           # asks your human, every time
