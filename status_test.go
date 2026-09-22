@@ -587,3 +587,23 @@ func TestNoDoneLegendWithoutAJob(t *testing.T) {
 		t.Errorf("legend mentions a state nothing is in:\n%s", out)
 	}
 }
+
+// A restore under way or failed shows under its resource; a finished one, or
+// none, adds nothing.
+func TestRestoreLine(t *testing.T) {
+	for _, tc := range []struct {
+		r    *restoreState
+		want string
+	}{
+		{nil, ""},
+		{&restoreState{State: "done"}, ""},
+		{&restoreState{State: "pending", Backup: "p1/db/x.dump"}, "◐  └ restoring from p1/db/x.dump"},
+		{&restoreState{State: "pending", Backup: "p1/db/x.dump", Attempts: 1, Error: "stream reset"},
+			"◐  └ restoring from p1/db/x.dump (try 2; the last one hit: stream reset)"},
+		{&restoreState{State: "failed", Error: "db2 holds 3 tables"}, "○  └ restore failed: db2 holds 3 tables"},
+	} {
+		if got := restoreLine(serviceStatus{Restore: tc.r}); got != tc.want {
+			t.Errorf("restoreLine(%+v) = %q, want %q", tc.r, got, tc.want)
+		}
+	}
+}

@@ -250,6 +250,9 @@ type backupObject struct {
 	Key       string `json:"key"`
 	SizeBytes int64  `json:"size_bytes"`
 	Stored    string `json:"stored"`
+	// Type is the resource type that wrote it, which is what a restore of it
+	// must provision. Said by the platform, never parsed out of the key here.
+	Type string `json:"type"`
 }
 
 func cmdResourceBackups(ref string) error {
@@ -258,12 +261,16 @@ func cmdResourceBackups(ref string) error {
 		return err
 	}
 	var out struct {
-		Type    string         `json:"type"`
-		Backups []backupObject `json:"backups"`
+		Type      string         `json:"type"`
+		Destroyed bool           `json:"destroyed"`
+		Backups   []backupObject `json:"backups"`
 	}
 	path := fmt.Sprintf("/v1/projects/%s/resources/%s/backups", project, name)
 	if err := call("GET", path, nil, &out); err != nil {
 		return err
+	}
+	if out.Destroyed {
+		fmt.Printf("%s is destroyed; these are the %s backups it left, kept fourteen days.\n\n", name, out.Type)
 	}
 	if len(out.Backups) == 0 {
 		fmt.Printf("No backups stored yet. The nightly pass takes the first one, or take one now:\n  gg resource backup %s/%s\n", project, name)
@@ -307,7 +314,7 @@ func cmdResourceBackup(ref string) error {
 // and pours the dump in. That is also why no step here asks for approval — the
 // one destructive step in a recovery is removing the old resource, which stays
 // on `gg resource rm`'s existing human gate.
-func cmdResourceRestore(ref, source, backupKey string, size string, storageGB int) error {
+func cmdResourceRestore(ref, source, backupKey, size string, storageGB int, wait bool) error {
 	project, name, _, err := parseService(ref)
 	if err != nil {
 		return err
@@ -316,45 +323,41 @@ func cmdResourceRestore(ref, source, backupKey string, size string, storageGB in
 		return fmt.Errorf("say what to restore\n  hint: --source <old-resource> for its newest backup, or --backup <key> for an exact one")
 	}
 
-	// 1. The new resource. A restatement if it already exists, which is
-	// harmless — the engine's empty-database gate is what actually protects.
-	body := map[string]any{"type": "postgres"}
+	// One request, answered at once. The platform checks the backup, creates
+	// the resource as its type, and records the restore; a job then fills it.
+	// Nothing about the restore happens in this process, so nothing about it
+	// stops if this process does.
+	body := map[string]any{}
+	if source != "" {
+		body["source"] = source
+	}
+	if backupKey != "" {
+		body["backup"] = backupKey
+	}
 	if storageGB > 0 {
 		body["storage_gb"] = storageGB
 	}
 	if size != "" {
 		body["size"] = size
 	}
-	if err := call("PUT", fmt.Sprintf("/v1/projects/%s/resources/%s", project, name), body, nil); err != nil {
-		return err
-	}
-	fmt.Printf("provisioning %s...\n", name)
-
-	// 2. Wait for it to run. A restore needs a live server to pour into, and
-	// "wait, then look" is exactly what an agent would otherwise be told to do
-	// by hand. Bounded: a resource that has not started in three minutes is
-	// not about to, and the status message says why.
-	if err := waitForResource(project, name, 3*time.Minute); err != nil {
-		return err
-	}
-
-	// 3. Pour.
 	var out struct {
-		Restored string `json:"restored"`
-		Next     string `json:"next"`
+		Type    string       `json:"type"`
+		Restore restoreState `json:"restore"`
 	}
-	rbody := map[string]any{}
-	if source != "" {
-		rbody["source"] = source
+	if err := call("POST", fmt.Sprintf("/v1/projects/%s/resources/%s/restore", project, name), body, &out); err != nil {
+		return err
 	}
-	if backupKey != "" {
-		rbody["backup"] = backupKey
+	fmt.Printf("%s/%s is a new %s, to be filled from %s\n", project, name, out.Type, out.Restore.Backup)
+
+	if !wait {
+		fmt.Printf("The platform is restoring it now. `gg status %s` shows when it is done, or why it failed.\n", project)
+		return nil
 	}
-	if err := callSlow("POST", fmt.Sprintf("/v1/projects/%s/resources/%s/restore", project, name), rbody, &out); err != nil {
+	fmt.Println("Waiting for it. Stopping gg here does not stop the restore.")
+	if err := waitForRestore(project, name, restorePoll); err != nil {
 		return err
 	}
 
-	fmt.Printf("restored %s into %s/%s\n", out.Restored, project, name)
 	// The old resource's name is only known when --source named it. Restoring an
 	// exact --backup key gives gg no reliable way to say which resource the key
 	// came from, and guessing by parsing the key would be a name printed into a
@@ -377,30 +380,52 @@ in its own config needs a deploy too.
 	return nil
 }
 
-// waitForResource polls project status until the named service reports a ready
-// pod, an unrecoverable state, or the deadline.
-func waitForResource(project, name string, patience time.Duration) error {
-	deadline := time.Now().Add(patience)
+// restorePoll is how often waitForRestore looks. A variable so tests do not
+// spend seconds of wall clock on it.
+var restorePoll = 3 * time.Second
+
+// waitForRestore follows a restore through status until it is done or failed,
+// printing each change once. No deadline of its own: the platform gives up on a
+// resource that will not start and on a fill that keeps failing, and says so
+// in the row this reads — so the wait ends when the restore does, however long
+// a big database takes to pour.
+func waitForRestore(project, name string, poll time.Duration) error {
+	last := ""
+	say := func(line string) {
+		if line != last {
+			fmt.Println("  " + line)
+			last = line
+		}
+	}
 	for {
 		var st statusResp
 		if err := call("GET", "/v1/projects/"+project+"/status", nil, &st); err != nil {
 			return err
 		}
-		for _, s := range st.Services {
-			if s.Name != name {
-				continue
-			}
-			if s.Actual.Ready >= 1 {
-				return nil
-			}
-			if s.Actual.Stalled {
-				return fmt.Errorf("%s is not going to start: %s", name, s.Actual.Message)
+		var svc *serviceStatus
+		for i := range st.Services {
+			if st.Services[i].Name == name {
+				svc = &st.Services[i]
 			}
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not start within %s; `gg status %s` says where it is stuck", name, patience, project)
+		switch {
+		case svc == nil:
+			return fmt.Errorf("%s is gone — destroyed while it was being restored", name)
+		case svc.Restore == nil:
+			return fmt.Errorf("%s has no restore; this control plane does not report one", name)
+		case svc.Restore.State == "done":
+			say("done")
+			return nil
+		case svc.Restore.State == "failed":
+			return fmt.Errorf("the restore of %s failed: %s\n  hint: %s holds nothing worth keeping; destroy it and restore under a new name once the cause is fixed", name, svc.Restore.Error, name)
+		case svc.Actual.Ready < 1:
+			say(fmt.Sprintf("starting %s", name))
+		case svc.Restore.Error != "":
+			say(fmt.Sprintf("filling it again, after: %s", svc.Restore.Error))
+		default:
+			say("filling it")
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(poll)
 	}
 }
 
