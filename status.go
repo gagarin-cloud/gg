@@ -50,6 +50,12 @@ func state(s serviceStatus) string {
 	// small lie that makes a reader distrust the whole screen.
 	case isExternalKind(s.Kind):
 		return "external"
+	// Any other resource with no image — a bucket, today — runs nothing too,
+	// and would be "failing" forever for the same reason. Read off the row
+	// rather than off a list of type names, the way the console reads it, so
+	// the next type with no pod is drawn right without gg learning its name.
+	case runsNothing(s):
+		return "inert"
 	// A job has a run rather than replicas, and the run has an end. "Done" is
 	// a state the dots cannot say: a filled dot means "up", and a job that
 	// ran to completion is not up, it is finished — which is its success.
@@ -161,6 +167,10 @@ func printStatusTable(st statusResp) {
 	// reaching `openai` is a note about who uses a key — and a reader has to be
 	// able to see that without cross-referencing the rows below.
 	externals := map[string]bool{}
+	// Rows that run nothing and are not externals — buckets — whose edges are
+	// not enforced either: a bucket is reached over the internet, so declaring
+	// it hands over a key and closes no network path.
+	inert := map[string]bool{}
 	for _, s := range st.Services {
 		if s.VolumePath != "" {
 			anyVolume = true
@@ -170,6 +180,9 @@ func printStatusTable(st statusResp) {
 		}
 		if isExternalKind(s.Kind) {
 			externals[s.Name] = true
+		}
+		if runsNothing(s) && !isExternalKind(s.Kind) {
+			inert[s.Name] = true
 		}
 	}
 
@@ -200,12 +213,15 @@ func printStatusTable(st statusResp) {
 		// shade of it.
 		mark := map[string]string{
 			"running": "●", "starting": "◐", "failing": "○", "stopped": "◌",
-			"external": "◆", "done": "✓",
+			"external": "◆", "inert": "◇", "done": "✓",
 		}[state(s)]
 		marked := make([]string, 0, len(s.Needs))
 		for _, n := range s.Needs {
 			if externals[n] {
 				n += "◆"
+			}
+			if inert[n] {
+				n += "◇"
 			}
 			marked = append(marked, n)
 		}
@@ -218,7 +234,7 @@ func printStatusTable(st statusResp) {
 			row = append(row, kindLabel(s.Kind))
 		}
 		switch {
-		case isExternalKind(s.Kind):
+		case runsNothing(s):
 			// Size, readiness, port and image are all facts about a container.
 			// A dash says "not applicable" where a zero would say "zero" and
 			// send somebody looking for the pod that is not listening on it.
@@ -330,6 +346,9 @@ func printStatusTable(st statusResp) {
 	// on the network.
 	if seen["external"] {
 		notes = append(notes, "◆ external (runs nothing; declaring it grants its variables, not egress)")
+	}
+	if seen["inert"] {
+		notes = append(notes, "◇ bucket (runs nothing; reached over the internet, so declaring it grants its key, not a network path)")
 	}
 	fmt.Printf("\n  %s\n", strings.Join(notes, "   "))
 
@@ -483,6 +502,11 @@ func runDuration(r *runState, now time.Time) string {
 // control plane: the status response carries the kind, and a table that needed a
 // second request to know how to draw a row would be a table that fails to draw.
 func isExternalKind(kind string) bool { return kind == "resource:"+typeExternal }
+
+// runsNothing is a resource with no image: nothing of it is scheduled, so it
+// has no readiness, port or pod state to show. Every external, and every
+// bucket.
+func runsNothing(s serviceStatus) bool { return isResourceKind(s.Kind) && s.Image == "" }
 
 // kindLabel is what the table shows. "service" rather than "container": this
 // table is at human altitude, and container is the word the platform uses to
