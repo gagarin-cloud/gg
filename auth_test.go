@@ -2,9 +2,9 @@ package main
 
 // `gg login` against a control plane that speaks the device grant.
 //
-// The server here implements the two endpoints the way brain/docs/051 in the
-// gagarin repo describes them, and each test scripts what the token endpoint
-// answers on each poll. What is asserted is what a script or an agent can see:
+// The server here implements the two endpoints the way docs/051 in
+// gagarin-cloud/brain describes them, and each test scripts what the token
+// endpoint answers on each poll. What is asserted is what a script or an agent can see:
 // the exit (an error or not), the code in the error, the text, and which files
 // exist afterwards.
 //

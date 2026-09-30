@@ -10,7 +10,7 @@ package main
 //
 // It used to be two runs — `gg login EMAIL` to ask and `gg login --claim CODE`
 // to collect — with the human's part happening in an inbox. That went with email
-// sign-in; see brain/docs/051 in the gagarin repo.
+// sign-in; see docs/051 in gagarin-cloud/brain.
 //
 // # Two runs for an agent, one for a person
 //
