@@ -253,3 +253,14 @@ func TestLocalizeEnvForAnIggy(t *testing.T) {
 		}
 	}
 }
+
+func TestArticle(t *testing.T) {
+	for typ, want := range map[string]string{
+		"iggy": "an iggy", "external": "an external", "s3": "an s3",
+		"postgres": "a postgres", "qdrant": "a qdrant", "valkey": "a valkey",
+	} {
+		if got := article(typ); got != want {
+			t.Errorf("article(%q) = %q, want %q", typ, got, want)
+		}
+	}
+}
