@@ -85,7 +85,7 @@ func TestExternalOutputTranslatesADashedName(t *testing.T) {
 // never heard of — the control plane refuses it too, but saying so here costs
 // no round trip and names the command that does what they wanted.
 func TestEnvIsRefusedOnAMintedType(t *testing.T) {
-	for _, typ := range []string{"postgres", "valkey", "qdrant", "s3"} {
+	for _, typ := range []string{"postgres", "valkey", "qdrant", "iggy", "s3"} {
 		err := cmdResourceAdd("shop/db", typ, "", 0, map[string]string{"API_KEY": "x"})
 		if err == nil {
 			t.Fatalf("%s accepted --env", typ)
@@ -486,6 +486,29 @@ func TestRotatingAQdrantDoesNotClaimDataLoss(t *testing.T) {
 	}
 }
 
+// An iggy is replaced on rotation, and its data is on a volume: the platform's
+// note says nothing was lost, and gg must print that rather than a cache's
+// warning.
+func TestRotatingAnIggyDoesNotClaimDataLoss(t *testing.T) {
+	rotateServer(t, `{"resource":"events","type":"iggy","rotated":["EVENTS_URL","EVENTS_PASSWORD"],"dependents":["api"],
+	  "restarted":true,"restart_note":"events was restarted to read its new credential. Its data is on a volume and a graceful stop flushes it, so nothing was lost.",
+	  "sentence":"events has new credentials, and api is restarting to pick them up."}`)
+	out := capture(t, func() {
+		if err := cmdResourceRotate("shop/events", nil, nil, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if strings.Contains(out, "held in memory is gone") {
+		t.Errorf("an iggy rotation claimed data loss that did not happen:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing was lost") {
+		t.Errorf("the platform's restart note was not printed:\n%s", out)
+	}
+	if strings.Contains(out, "EVENTS_PASSWORD=") {
+		t.Errorf("a value was printed, not just names:\n%s", out)
+	}
+}
+
 // A postgres takes an ALTER ROLE live, so there is no restart to warn about and
 // warning anyway would be a lie about an outage.
 func TestRotatingAPostgresDoesNotClaimARestart(t *testing.T) {
@@ -530,6 +553,13 @@ func TestRotatingWithNoDependentsSaysSo(t *testing.T) {
 // restore states one poll at a time, and records every request.
 func restoreAPI(t *testing.T, states ...string) *[]string {
 	t.Helper()
+	return restoreAPIOf(t, "vec2", "qdrant", "p1/vec/20260921T021500Z.tar", states...)
+}
+
+// restoreAPIOf is restoreAPI for a resource of the given name and type, whose newest
+// backup has the given key.
+func restoreAPIOf(t *testing.T, name, typ, key string, states ...string) *[]string {
+	t.Helper()
 	restorePoll = time.Millisecond
 	t.Cleanup(func() { restorePoll = 3 * time.Second })
 	var calls []string
@@ -539,7 +569,7 @@ func restoreAPI(t *testing.T, states ...string) *[]string {
 		if r.Method == http.MethodPost {
 			calls = append(calls, "POST "+r.URL.Path+" "+readBody(r))
 			w.WriteHeader(http.StatusAccepted)
-			_, _ = w.Write([]byte(`{"type":"qdrant","restore":{"backup":"p1/vec/20260921T021500Z.tar","state":"pending"}}`))
+			_, _ = w.Write([]byte(`{"type":"` + typ + `","restore":{"backup":"` + key + `","state":"pending"}}`))
 			return
 		}
 		calls = append(calls, "GET "+r.URL.Path)
@@ -556,7 +586,7 @@ func restoreAPI(t *testing.T, states ...string) *[]string {
 		case "failed":
 			restore = `{"state":"failed","attempts":3,"error":"vec2 holds 2 collections"}`
 		}
-		_, _ = w.Write([]byte(`{"project":"shop","services":[{"name":"vec2","kind":"resource:qdrant",` +
+		_, _ = w.Write([]byte(`{"project":"shop","services":[{"name":"` + name + `","kind":"resource:` + typ + `",` +
 			`"actual":{"exists":true,"desired_replicas":1,"ready_replicas":` + strconv.Itoa(ready) + `},` +
 			`"restore":` + restore + `}]}`))
 	})
@@ -626,5 +656,22 @@ func TestRestoreRefusalIsThePlatforms(t *testing.T) {
 	capture(t, func() { err = cmdResourceRestore("shop/vec2", "vec", "", "", 0, true) })
 	if err == nil || !strings.Contains(err.Error(), "no backups stored") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// Restoring an iggy backup: the request still names no type, and the new
+// resource is announced as the type the platform recorded.
+func TestRestoreOfAnIggyBackup(t *testing.T) {
+	calls := restoreAPIOf(t, "events2", "iggy", "p1/events/20260921T021500Z.iggy.tar", "starting", "filling", "done")
+	out := capture(t, func() {
+		if err := cmdResourceRestore("shop/events2", "events", "", "", 0, true); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains((*calls)[0], "iggy") {
+		t.Errorf("the request named a type, which is the platform's to decide: %q", (*calls)[0])
+	}
+	if !strings.Contains(out, "a new iggy") {
+		t.Errorf("the restored type was not announced:\n%s", out)
 	}
 }

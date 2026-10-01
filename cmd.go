@@ -745,8 +745,8 @@ rotated. To put those back, roll back the resource itself:
   gg rollback shop/config --to 4
 
 which works for an external, whose values are yours. It is refused for a
-postgres, qdrant, valkey or s3: gagarin mints those credentials, so there is
-no earlier value of yours to go back to.
+postgres, qdrant, iggy, valkey or s3: gagarin mints those credentials, so
+there is no earlier value of yours to go back to.
 
 Rolling back an external changes what every service declaring it holds,
 and they are restarted for it — so the answer names them. That is the
@@ -831,6 +831,14 @@ func newResourceAddCmd() *cobra.Command {
              on <NAME>_PORT and gRPC on <NAME>_GRPC_PORT — and
              authenticates with <NAME>_API_KEY, which is a header
              rather than part of the URL.
+  iggy       Apache Iggy, a persistent message-streaming log, on a
+             volume. Survives restarts. Producers append to streams
+             and topics, consumers read them back at their own pace.
+             It answers on two ports — TCP on <NAME>_PORT, the binary
+             protocol every Iggy SDK speaks, and HTTP on
+             <NAME>_HTTP_PORT — and <NAME>_URL is the iggy:// connection
+             string the SDKs read, with the root user and its password
+             in it. <NAME>_USER and <NAME>_PASSWORD are published too.
   valkey     An in-memory store speaking the redis protocol — every
              redis client and every redis:// URL work unchanged.
              --storage is refused, and a restart loses everything in
@@ -853,10 +861,13 @@ other decision is the platform's.
   --size m   1 vCPU / 2 GB, dedicated. What a real database wants.
   --size l   2 vCPU / 4 GB, dedicated.
 
-One instance, one volume, no failover. Postgres and qdrant are backed up
-nightly and kept fourteen days — ` + "`gg resource backups`" + ` lists them,
-and ` + "`gg resource restore`" + ` puts one back into a NEW resource. Valkey
-keeps nothing across a restart, by design. See
+One instance, one volume, no failover. Postgres, qdrant and iggy are backed
+up nightly and kept fourteen days — ` + "`gg resource backups`" + ` lists them,
+and ` + "`gg resource restore`" + ` puts one back into a NEW resource. An iggy
+is backed up while it runs, so a backup holds every topic created with
+persisted durability (--durability persisted, in Iggy's own CLI and SDKs)
+completely, and may be missing the newest messages of the rest — the ones
+not yet flushed to disk. Valkey keeps nothing across a restart, by design. See
 ` + "`gg deps add`" + ` for how to connect something to it — that one call opens
 the route and hands over the credentials — and the docs for what all this
 means before you put a client's data in one.
@@ -887,7 +898,7 @@ in a project can already reach the internet; what the declaration grants
 is the credentials and a line on the graph saying who uses them.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
-			"  the types that exist are: postgres, qdrant, valkey, s3, external"),
+			"  the types that exist are: postgres, qdrant, iggy, valkey, s3, external"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := v.finish()
 			if err != nil {
@@ -989,7 +1000,7 @@ resource is restarted with them.
   gg resource rotate shop/openai --env-file .env.openai.new  all of them
 
 Who supplies the new value is the only difference between the types. For
-a postgres, qdrant, valkey or s3, gagarin mints one and --env is refused —
+a postgres, qdrant, iggy, valkey or s3, gagarin mints one and --env is refused —
 a password you chose is one the running server has never heard of. For an
 external the values are yours, so one of --set, --unset, --env-file or
 --env is required.
@@ -1023,6 +1034,11 @@ What happens per type, because the costs are not the same:
   qdrant     The key is read when the server starts, so the pod is
              replaced. It comes back with everything in it — the data
              is on a volume — so the cost is the seconds it is away.
+  iggy       The root password is changed on the running server first,
+             then recorded; the pod is replaced because its environment
+             changed, not because the server needs it. Nothing stored is
+             lost — a stopping iggy flushes to its volume — so the cost
+             is the seconds it is away.
   valkey     The password is read when the server starts, so the pod is
              replaced — which empties the cache. That is what a restart
              of a valkey always does, but it is worth knowing before you
@@ -1073,8 +1089,13 @@ func newResourceBackupsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "backups PROJECT/NAME",
 		Short: "list its stored backups, newest last",
-		Long: `Every stored backup of this resource. Postgres and qdrant are backed
-up nightly and kept fourteen days; the newest is the last line.
+		Long: `Every stored backup of this resource. Postgres, qdrant and iggy are
+backed up nightly and kept fourteen days; the newest is the last line.
+
+An iggy is backed up while it runs, so a backup holds every topic created
+with persisted durability (--durability persisted, in Iggy's own CLI and
+SDKs) completely, and may be missing the newest messages of the rest —
+the ones not yet flushed to disk.
 
 A backup is used by restoring it into a NEW resource — never over this
 one. See ` + "`gg resource restore`" + `.`,
@@ -1137,8 +1158,9 @@ outlive it by fourteen days). --backup names an exact key from
 ` + "`gg resource backups`" + `.
 
 The new resource is the backup's type — a postgres for a postgres dump, a
-qdrant for a qdrant backup. The platform records it with every backup, so
-nothing needs saying, even when the old resource is already destroyed.
+qdrant for a qdrant backup, an iggy for an iggy backup. The platform
+records it with every backup, so nothing needs saying, even when the old
+resource is already destroyed.
 
 The platform does the restore, not this command: it creates the resource,
 waits for it to start and fills it, on its own schedule. gg waits and
@@ -1182,8 +1204,9 @@ as long as this command does.
 
 prints the same connection variables a service in the project would hold —
 DB_URL and the parts — rewritten to point at 127.0.0.1, and then holds the
-path open. Point psql, redis-cli or an ORM's migration tool at them; when
-you stop the command, the tunnel and everything through it closes.
+path open. Point psql, redis-cli, an Iggy SDK or an ORM's migration tool
+at them; when you stop the command, the tunnel and everything through it
+closes.
 
 Resources are deliberately not on the internet, and this does not put one
 there: nothing is exposed, nothing to undo afterwards, and nobody else can

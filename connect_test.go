@@ -213,3 +213,54 @@ func TestPipeLocalCarriesBytes(t *testing.T) {
 		}
 	}
 }
+
+// An iggy answers on two ports, TCP (primary) and HTTP, and its URL carries
+// the credentials in userinfo under a scheme of its own. Both ports get a local
+// end, and the URL is rewritten to the primary's with the password intact.
+func TestLocalizeEnvForAnIggy(t *testing.T) {
+	env := map[string]string{
+		"EVENTS_URL":       "iggy://root:s3cr3t@events:8090",
+		"EVENTS_HOST":      "events",
+		"EVENTS_PORT":      "8090",
+		"EVENTS_HTTP_PORT": "3000",
+		"EVENTS_USER":      "root",
+		"EVENTS_PASSWORD":  "s3cr3t",
+	}
+	tuns := tunnelPortsOf("EVENTS", env)
+	if len(tuns) != 2 {
+		t.Fatalf("want 2 ports, got %d: %+v", len(tuns), tuns)
+	}
+	if !tuns[0].primary || tuns[0].remote != 8090 {
+		t.Errorf("primary first: got %+v", tuns[0])
+	}
+	if tuns[1].key != "EVENTS_HTTP_PORT" || tuns[1].remote != 3000 {
+		t.Errorf("extra port: got %+v", tuns[1])
+	}
+	tuns[0].local, tuns[1].local = 18090, 13000
+
+	got := localizeEnv(env, "EVENTS", tuns)
+	want := map[string]string{
+		"EVENTS_URL":       "iggy://root:s3cr3t@127.0.0.1:18090",
+		"EVENTS_HOST":      "127.0.0.1",
+		"EVENTS_PORT":      "18090",
+		"EVENTS_HTTP_PORT": "13000",
+		"EVENTS_USER":      "root",
+		"EVENTS_PASSWORD":  "s3cr3t",
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %q, want %q", k, got[k], w)
+		}
+	}
+}
+
+func TestArticle(t *testing.T) {
+	for typ, want := range map[string]string{
+		"iggy": "an iggy", "external": "an external", "s3": "an s3",
+		"postgres": "a postgres", "qdrant": "a qdrant", "valkey": "a valkey",
+	} {
+		if got := article(typ); got != want {
+			t.Errorf("article(%q) = %q, want %q", typ, got, want)
+		}
+	}
+}

@@ -124,7 +124,7 @@ func cmdConnect(ref string, localPort int) error {
 	}
 	ws.Close()
 
-	fmt.Printf("%s is a %s. The tunnel is up:\n\n", name, sec.Type)
+	fmt.Printf("%s is %s. The tunnel is up:\n\n", name, article(sec.Type))
 	local := localizeEnv(sec.Env, envPrefix(name), tuns)
 	keys := make([]string, 0, len(local))
 	for k := range local {
@@ -378,4 +378,13 @@ func pipeLocal(ws *websocket.Conn, conn net.Conn) {
 		time.Now().Add(tunnelWriteWait))
 	ws.Close()
 	<-done
+}
+
+// article is a type's name with the article English gives it — "a postgres",
+// "an iggy", "an s3" — the platform's resource.Article, said the same way here.
+func article(typ string) string {
+	if typ == "s3" || (typ != "" && strings.ContainsRune("aeiou", rune(typ[0]))) {
+		return "an " + typ
+	}
+	return "a " + typ
 }
