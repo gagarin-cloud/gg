@@ -745,7 +745,7 @@ rotated. To put those back, roll back the resource itself:
   gg rollback shop/config --to 4
 
 which works for an external, whose values are yours. It is refused for a
-postgres, qdrant or valkey: gagarin mints those credentials, so there is
+postgres, qdrant, valkey or s3: gagarin mints those credentials, so there is
 no earlier value of yours to go back to.
 
 Rolling back an external changes what every service declaring it holds,
@@ -835,6 +835,12 @@ func newResourceAddCmd() *cobra.Command {
              redis client and every redis:// URL work unchanged.
              --storage is refused, and a restart loses everything in
              it: this is a cache, not a database.
+  s3         An S3-compatible bucket for object storage. gagarin mints
+             the credentials and endpoint, so you get <NAME>_ENDPOINT,
+             <NAME>_REGION, <NAME>_BUCKET, <NAME>_ACCESS_KEY_ID and
+             <NAME>_SECRET_ACCESS_KEY. Every S3 client library works. The
+             bucket is private and reached over the internet; there is no
+             container, so --size and --storage are refused.
   external   Something gagarin does NOT run: an OpenAI account, a Stripe
              key, a bucket elsewhere. It holds the values you give it and
              publishes them to whatever declares it needs them. No
@@ -881,7 +887,7 @@ in a project can already reach the internet; what the declaration grants
 is the credentials and a line on the graph saying who uses them.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
-			"  the types that exist are: postgres, qdrant, valkey, external"),
+			"  the types that exist are: postgres, qdrant, valkey, s3, external"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := v.finish()
 			if err != nil {
@@ -983,7 +989,7 @@ resource is restarted with them.
   gg resource rotate shop/openai --env-file .env.openai.new  all of them
 
 Who supplies the new value is the only difference between the types. For
-a postgres, qdrant or valkey, gagarin mints one and --env is refused —
+a postgres, qdrant, valkey or s3, gagarin mints one and --env is refused —
 a password you chose is one the running server has never heard of. For an
 external the values are yours, so one of --set, --unset, --env-file or
 --env is required.
@@ -1021,6 +1027,9 @@ What happens per type, because the costs are not the same:
              replaced — which empties the cache. That is what a restart
              of a valkey always does, but it is worth knowing before you
              run this on a hot one.
+  s3         The key is revoked immediately and a new one takes effect at
+             once. Services holding the old key are restarted; for the
+             seconds the restart takes, their S3 calls fail.
   external   Nothing of ours runs, so nothing of ours restarts. Only the
              services holding the values are rolled.
 

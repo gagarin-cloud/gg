@@ -607,3 +607,30 @@ func TestRestoreLine(t *testing.T) {
 		}
 	}
 }
+
+// A bucket has no Deployment either, and without a case of its own it would
+// read "failing" forever — the bug the external case above was written for,
+// arriving through a second type.
+func TestABucketIsNotReportedAsFailing(t *testing.T) {
+	bucket := serviceStatus{Name: "files", Kind: "resource:s3"}
+	if got := state(bucket); got != "inert" {
+		t.Fatalf("state = %q, want inert", got)
+	}
+	web := svc("web")
+	web.Needs = []string{"files"}
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "p1", Services: []serviceStatus{web, bucket}})
+	})
+	if strings.Contains(out, "\u25cb failing") {
+		t.Errorf("a bucket is being reported as a failure:\n%s", out)
+	}
+	if !strings.Contains(out, "files\u25c7") {
+		t.Errorf("an edge to a bucket is indistinguishable from an enforced one:\n%s", out)
+	}
+	if !strings.Contains(out, "\u25c7 bucket") {
+		t.Errorf("no legend entry for the bucket mark:\n%s", out)
+	}
+	if runsNothing(serviceStatus{Kind: "resource:postgres", Image: "postgres:17-alpine"}) {
+		t.Error("a postgres was taken for a row that runs nothing")
+	}
+}

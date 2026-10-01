@@ -85,7 +85,7 @@ func TestExternalOutputTranslatesADashedName(t *testing.T) {
 // never heard of — the control plane refuses it too, but saying so here costs
 // no round trip and names the command that does what they wanted.
 func TestEnvIsRefusedOnAMintedType(t *testing.T) {
-	for _, typ := range []string{"postgres", "valkey", "qdrant"} {
+	for _, typ := range []string{"postgres", "valkey", "qdrant", "s3"} {
 		err := cmdResourceAdd("shop/db", typ, "", 0, map[string]string{"API_KEY": "x"})
 		if err == nil {
 			t.Fatalf("%s accepted --env", typ)
