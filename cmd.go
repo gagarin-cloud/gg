@@ -98,6 +98,7 @@ Environment (overrides the file; meant for CI):
 		newConnectCmd(),
 		newDomainCmd(),
 		newAlertsCmd(),
+		newReferralCmd(),
 		newRegistryCmd(),
 		newVersionCmd(),
 	)
@@ -111,6 +112,7 @@ Environment (overrides the file; meant for CI):
 // way to GitHub and Google through the OAuth device grant.
 func newLoginCmd() *cobra.Command {
 	var fresh bool
+	var ref string
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "get this machine access; a human approves it in a browser",
@@ -119,6 +121,7 @@ machine or fifth, new account or old.
 
   gg login          ask for access, or collect access already asked for
   gg login --new    throw away a request nobody approved, and ask again
+  gg login --ref CODE   the same, for somebody a friend invited
 
 The first run prints a link and a code. A human opens the link, signs in with
 GitHub or Google, checks that the page shows the same code and this machine's
@@ -132,17 +135,27 @@ approved, run gg login again to collect. If they have not approved yet, it
 says so, prints the link again, and exits non-zero.
 
 A new account is created the first time somebody signs in, with $5 on it and
-no card asked for. Do not approve the request yourself, and never ask your
+no card asked for. If a friend sent a referral code, pass it with --ref and it
+is added to the link, so the new account is matched to them; it counts at
+sign-up only, never for an account that already exists. Do not approve the request yourself, and never ask your
 human for a token instead.
 
 Never run it in CI: a pipeline gets its own credential from gg creds create.`,
-		Args: usageArgs(0, 0, "usage: gg login [--new]\n"+
+		Args: usageArgs(0, 0, "usage: gg login [--new] [--ref CODE]\n"+
 			"  it takes no address: it prints a link for your human to open"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdLogin(fresh)
+			if cmd.Flags().Changed("ref") {
+				code, err := normalizeRef(ref)
+				if err != nil {
+					return err
+				}
+				ref = code
+			}
+			return cmdLogin(fresh, ref)
 		},
 	}
 	cmd.Flags().BoolVar(&fresh, "new", false, "discard a sign-in request nobody has approved, and ask for a new code")
+	cmd.Flags().StringVar(&ref, "ref", "", "a friend's referral code: ties a new account to whoever invited it")
 	return cmd
 }
 

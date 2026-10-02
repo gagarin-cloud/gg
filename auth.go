@@ -39,8 +39,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -85,6 +87,39 @@ type pendingLogin struct {
 	Interval                int64     `json:"interval"`
 	ExpiresAt               time.Time `json:"expires_at"`
 	Label                   string    `json:"label"`
+	// Ref is the referral code the human arrived with, if any. It rides along
+	// with the request so a second run prints the same link as the first.
+	Ref string `json:"ref,omitempty"`
+}
+
+var refCodeRE = regexp.MustCompile(`^[0-9A-Z]{8}$`)
+
+// normalizeRef upper-cases a referral code and checks its shape: eight
+// characters, digits and capital letters. A code that is not that cannot be one
+// of ours, so it is refused here rather than carried into a URL.
+func normalizeRef(code string) (string, error) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if !refCodeRE.MatchString(code) {
+		return "", errors.New("usage: gg login --ref CODE\n" +
+			"  a referral code is eight letters and digits, like 7K3M9QXA")
+	}
+	return code, nil
+}
+
+// withRef adds ref=CODE to a verification URL, keeping whatever it carries.
+// An address that does not parse is returned as it came.
+func withRef(link, ref string) string {
+	if ref == "" || link == "" {
+		return link
+	}
+	u, err := url.Parse(link)
+	if err != nil {
+		return link
+	}
+	q := u.Query()
+	q.Set("ref", ref)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 func (p *pendingLogin) expired() bool {
@@ -142,7 +177,7 @@ func removePendingLogin() {
 // `gg login` on a machine that has a credential is that the credential stopped
 // working, and a command that refuses to replace it sends the reader off to
 // delete a file by hand.
-func cmdLogin(fresh bool) error {
+func cmdLogin(fresh bool, ref string) error {
 	api := apiBase()
 	conf := deviceConfig(api)
 	tty := stdoutIsTerminal()
@@ -165,6 +200,14 @@ func cmdLogin(fresh bool) error {
 		fmt.Printf("the code from before (%s) expired unapproved; here is a new one\n\n", p.UserCode)
 		p = nil
 	}
+	if p != nil && ref != "" && p.Ref != ref {
+		// A code given again wins over the one remembered: it is the one the
+		// human was handed this time.
+		p.Ref = ref
+		if err := savePendingLogin(p); err != nil {
+			return fmt.Errorf("could not remember the sign-in request: %w", err)
+		}
+	}
 
 	if p == nil {
 		if creds, err := loadCredentials(); err == nil && creds.Credential != "" && creds.Account != "" {
@@ -184,6 +227,7 @@ func cmdLogin(fresh bool) error {
 			Interval:                da.Interval,
 			ExpiresAt:               da.Expiry,
 			Label:                   label,
+			Ref:                     ref,
 		}
 		if err := savePendingLogin(p); err != nil {
 			return fmt.Errorf("could not remember the sign-in request: %w", err)
@@ -243,6 +287,7 @@ func printApprovalRequest(p *pendingLogin) {
 	if link == "" {
 		link = p.VerificationURI
 	}
+	link = withRef(link, p.Ref)
 	fmt.Printf(`this machine is asking for access to gagarin as "%s".
 
 Tell your human to open this link, sign in with GitHub or Google, and approve:
@@ -251,7 +296,7 @@ Tell your human to open this link, sign in with GitHub or Google, and approve:
 
 If the link does not open, go to %s and enter the code %s.
 The page shows that code and the name above; both should match.%s
-`, p.Label, link, p.VerificationURI, p.UserCode, expiresIn(p.ExpiresAt))
+`, p.Label, link, withRef(p.VerificationURI, p.Ref), p.UserCode, expiresIn(p.ExpiresAt))
 }
 
 // storeLogin saves an issued credential and does what a fresh credential makes
