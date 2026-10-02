@@ -1,81 +1,150 @@
 package main
 
-// What `gg alerts` sends, and what it tells somebody to do next. The engine
-// decides the defaults — ntfy.sh, a topic made up — so the thing to pin here is
-// that the CLI does not decide them first by sending empty strings.
+// What `gg alerts` sends, and what it tells somebody to do next. Alerts are an
+// opt-in with no body: the old --server/--topic/--token are gone, and the
+// engine refuses a body that carries one. A device can only be added from a
+// browser, so the output has to say that — loudly when there are none.
 
 import (
-	"encoding/json"
+	"bytes"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 )
 
-const alertsOn = `{"enabled":true,"server":"https://ntfy.sh","topic":"gagarin-abc","subscribe":"https://ntfy.sh/gagarin-abc"}`
-
-func TestAlertsOnSendsOnlyWhatWasSaid(t *testing.T) {
-	var got map[string]any
+func TestAlertsOnOptsInWithNoBody(t *testing.T) {
+	var method, path string
+	var body []byte
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/v1/projects/shop/alerts" {
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &got)
-		_, _ = w.Write([]byte(alertsOn))
+		method, path = r.Method, r.URL.Path
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"enabled":true,"devices":2}`))
 	})
 
 	out := capture(t, func() {
-		if err := cmdAlertsOn("shop", "", "", ""); err != nil {
+		if err := cmdAlertsOn("shop"); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if len(got) != 0 {
-		t.Errorf("a bare `gg alerts on` must leave the defaults to the engine, sent %v", got)
+	if method != http.MethodPut || path != "/v1/projects/shop/alerts" {
+		t.Errorf("unexpected request: %s %s", method, path)
 	}
-	for _, want := range []string{"https://ntfy.sh/gagarin-abc", "subscribe to topic gagarin-abc", "gg alerts test shop"} {
+	if len(body) != 0 {
+		t.Errorf("opting in carries nothing, sent %q", body)
+	}
+	for _, want := range []string{"alerts are on for shop", "notifications from the console",
+		"https://my.gagarin.cloud/projects/shop/alerts", "gg alerts test shop"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output is missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "on server") {
-		t.Errorf("ntfy.sh is the app's default and needs no mention:\n%s", out)
+	if strings.Contains(out, "NO DEVICE YET") {
+		t.Errorf("a member with devices needs no warning:\n%s", out)
 	}
 }
 
-func TestAlertsOnPassesAServerAndToken(t *testing.T) {
-	var got map[string]any
+func TestAlertsOnWithNoDevicesSaysSoProminently(t *testing.T) {
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &got)
-		_, _ = w.Write([]byte(`{"enabled":true,"server":"https://ntfy.example.com","topic":"ops","subscribe":"https://ntfy.example.com/ops","has_token":true}`))
+		_, _ = w.Write([]byte(`{"enabled":true,"devices":0}`))
 	})
 	out := capture(t, func() {
-		if err := cmdAlertsOn("shop", "https://ntfy.example.com", "ops", "tk_x"); err != nil {
+		if err := cmdAlertsOn("shop"); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if got["server"] != "https://ntfy.example.com" || got["topic"] != "ops" || got["token"] != "tk_x" {
-		t.Errorf("sent %v", got)
-	}
-	if !strings.Contains(out, "on server https://ntfy.example.com") {
-		t.Errorf("a server of your own has to be typed into the app too:\n%s", out)
-	}
-	if strings.Contains(out, "tk_x") {
-		t.Errorf("the token was printed back:\n%s", out)
+	if !strings.Contains(out, "NO DEVICE YET") || !strings.Contains(out, "https://my.gagarin.cloud/projects/shop/alerts") {
+		t.Errorf("opting in with no device delivers nothing, and must say so:\n%s", out)
 	}
 }
 
-func TestAlertsShowSaysHowToTurnThemOn(t *testing.T) {
+// The ntfy flags are removed outright: a script that still passes one has to
+// fail, not be quietly ignored.
+func TestAlertsOnTakesNoNtfyFlags(t *testing.T) {
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"enabled":false}`))
+		t.Errorf("a refused command called %s", r.URL.Path)
+	})
+	for _, flag := range []string{"--server", "--topic", "--token"} {
+		cmd := rootCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+		cmd.SetArgs([]string{"alerts", "on", "shop", flag, "x"})
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), "unknown flag") {
+			t.Errorf("%s: want an unknown flag error, got %v", flag, err)
+		}
+	}
+}
+
+func TestAlertsShowOffSaysHowToTurnThemOn(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/notifications") {
+			_, _ = w.Write([]byte(`{"notifications":[],"next":null}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"enabled":false,"devices":1}`))
 	})
 	out := capture(t, func() {
 		if err := cmdAlertsShow("shop"); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(out, "alerts are off for shop") || !strings.Contains(out, "gg alerts on shop") {
+	for _, want := range []string{"alerts are off for shop", "gg alerts on shop", "no recent notifications"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output is missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestAlertsShowListsStateDevicesAndFeed(t *testing.T) {
+	var seen []string
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.RequestURI())
+		if strings.HasSuffix(r.URL.Path, "/notifications") {
+			_, _ = w.Write([]byte(`{"notifications":[
+				{"id":"2","title":"web is back","body":"","url":"/projects/shop/services/web","resolved":true,"created_at":"2026-10-02T09:05:00Z"},
+				{"id":"1","title":"web is down","body":"","url":"/projects/shop/services/web","resolved":false,"created_at":"2026-10-02T09:00:00Z"}],"next":null}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"enabled":true,"devices":3}`))
+	})
+	out := capture(t, func() {
+		if err := cmdAlertsShow("shop"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	want := []string{"GET /v1/projects/shop/alerts", "GET /v1/projects/shop/notifications?limit=5"}
+	if strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Errorf("requests %v, want %v", seen, want)
+	}
+	for _, w := range []string{"alerts are on for shop", "3 device(s)", "web is down", "web is back  [resolved]"} {
+		if !strings.Contains(out, w) {
+			t.Errorf("output is missing %q:\n%s", w, out)
+		}
+	}
+	if strings.Contains(out, "web is down  [resolved]") {
+		t.Errorf("an open alert was marked resolved:\n%s", out)
+	}
+	if strings.Contains(out, "NO DEVICE YET") {
+		t.Errorf("devices exist, no warning wanted:\n%s", out)
+	}
+}
+
+func TestAlertsShowOnWithNoDevicesWarns(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/notifications") {
+			_, _ = w.Write([]byte(`{"notifications":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"enabled":true,"devices":0}`))
+	})
+	out := capture(t, func() {
+		if err := cmdAlertsShow("shop"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "NO DEVICE YET") {
 		t.Errorf("output:\n%s", out)
 	}
 }
@@ -84,9 +153,13 @@ func TestAlertsTestAndOffHitTheirRoutes(t *testing.T) {
 	var seen []string
 	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.Method+" "+r.URL.Path)
-		_, _ = w.Write([]byte(`{"sent":true,"subscribe":"https://ntfy.sh/gagarin-abc","enabled":false}`))
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, _ = w.Write([]byte(`{"sent":2}`))
 	})
-	_ = capture(t, func() {
+	out := capture(t, func() {
 		if err := cmdAlertsTest("shop"); err != nil {
 			t.Fatal(err)
 		}
@@ -97,5 +170,24 @@ func TestAlertsTestAndOffHitTheirRoutes(t *testing.T) {
 	want := []string{"POST /v1/projects/shop/alerts/test", "DELETE /v1/projects/shop/alerts"}
 	if strings.Join(seen, ",") != strings.Join(want, ",") {
 		t.Errorf("requests %v, want %v", seen, want)
+	}
+	if !strings.Contains(out, "sent to 2 device(s)") || !strings.Contains(out, "alerts are off for shop") {
+		t.Errorf("output:\n%s", out)
+	}
+}
+
+func TestAlertsTestRefusalsAreExplained(t *testing.T) {
+	for code, want := range map[string]string{
+		"alerts_off": "gg alerts on shop",
+		"no_devices": "https://my.gagarin.cloud/projects/shop/alerts",
+	} {
+		fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"` + code + `","message":"engine words"}}`))
+		})
+		err := cmdAlertsTest("shop")
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: want a message containing %q, got %v", code, want, err)
+		}
 	}
 }
