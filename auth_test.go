@@ -445,3 +445,80 @@ func TestLoginTakesNoArguments(t *testing.T) {
 		}
 	}
 }
+
+// --ref lands in the link a human is told to open, and in the fallback address.
+func TestLoginRefIsAddedToTheVerificationLink(t *testing.T) {
+	d := startLogin(t)
+	out, err := runLogin(t, "--ref", "7k3m9qxa")
+	if err != nil {
+		t.Fatalf("gg login --ref failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"https://api.example/device?ref=7K3M9QXA&user_code=BCDF-GHJ1",
+		"go to https://api.example/device?ref=7K3M9QXA and enter the code",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q:\n%s", want, out)
+		}
+	}
+	// The code is for the browser page only; the device grant itself never sees it.
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.authForms[0]["ref"]; ok {
+		t.Errorf("ref leaked into the device authorization request: %v", d.authForms[0])
+	}
+}
+
+// A second run, which only collects, still shows the link with the code.
+func TestLoginRefSurvivesPendingLogin(t *testing.T) {
+	d := startLogin(t)
+	if out, err := runLogin(t, "--ref", "7K3M9QXA"); err != nil {
+		t.Fatalf("first run: %v\n%s", err, out)
+	}
+	if p := loadPendingLogin(); p == nil || p.Ref != "7K3M9QXA" {
+		t.Fatalf("pending login holds %+v", p)
+	}
+	// Still unapproved: the second run prints the link again, with the code.
+	out, err := runLogin(t)
+	if err == nil {
+		t.Fatalf("an unapproved second run should fail:\n%s", out)
+	}
+	if !strings.Contains(out, "device?ref=7K3M9QXA&user_code=BCDF-GHJ1") {
+		t.Errorf("the second run lost the referral code:\n%s", out)
+	}
+	if asks, _ := d.counts(); asks != 1 {
+		t.Errorf("asked %d times, want 1", asks)
+	}
+	// Giving a different code later replaces the remembered one.
+	out, _ = runLogin(t, "--ref", "ABCD2345")
+	if !strings.Contains(out, "ref=ABCD2345") || strings.Contains(out, "7K3M9QXA") {
+		t.Errorf("a new --ref should replace the old one:\n%s", out)
+	}
+}
+
+func TestLoginWithoutRefAddsNothing(t *testing.T) {
+	startLogin(t)
+	out, err := runLogin(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "ref=") {
+		t.Errorf("no code was given, none should appear:\n%s", out)
+	}
+}
+
+func TestLoginRejectsAMalformedRef(t *testing.T) {
+	for _, bad := range []string{"", "SHORT", "TOOLONG123", "7K3M9QX!", "7K3M 9QX", "7K3M9QXA&x=1", "../../etc"} {
+		d := startLogin(t)
+		out, err := runLogin(t, "--ref", bad)
+		if err == nil || !strings.Contains(err.Error(), "usage: gg login --ref CODE") {
+			t.Errorf("--ref %q: err = %v, want a usage error", bad, err)
+		}
+		if asks, _ := d.counts(); asks != 0 {
+			t.Errorf("--ref %q still asked the control plane (%s)", bad, out)
+		}
+		if pendingExists(t) {
+			t.Errorf("--ref %q left a pending login", bad)
+		}
+	}
+}
