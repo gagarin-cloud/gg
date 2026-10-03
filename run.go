@@ -200,8 +200,16 @@ func waitForRun(project, name string, revision int) error {
 	// What it wrote, whatever happened. The failure case is the one where
 	// this matters most, and it is printed before the verdict so the last
 	// line on the screen is the one that says what to do.
-	var out struct{ Logs string }
-	if err := call("GET", "/v1/projects/"+project+"/services/"+name+"/logs", nil, &out); err == nil && out.Logs != "" {
+	//
+	// Only this run's: the store lags a job that has just finished, and asked
+	// for "the latest lines" of a job that ran before, it answers with the
+	// earlier run's. Bounded by this run's start, a store that has nothing yet
+	// is what sends the engine to the node, which has it all.
+	var f logsFlags
+	if run.StartedAt != nil {
+		f.since = run.StartedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if out, err := fetchLogs(project, name, f); err == nil && out.Logs != "" {
 		fmt.Println()
 		fmt.Print(out.Logs)
 		if !strings.HasSuffix(out.Logs, "\n") {

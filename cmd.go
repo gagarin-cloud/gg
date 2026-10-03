@@ -414,14 +414,33 @@ func newStatusCmd() *cobra.Command {
 }
 
 func newLogsCmd() *cobra.Command {
-	return &cobra.Command{
+	var f logsFlags
+	cmd := &cobra.Command{
 		Use:   "logs PROJECT/SERVICE",
-		Short: "recent logs",
-		Args:  usageArgs(1, 1, "usage: gg logs PROJECT/SERVICE\n  e.g. gg logs shop/web"),
+		Short: "what a service printed, for the last week",
+		Long: `What a service printed, oldest first. gagarin keeps a week of it, including
+the lines of containers that crashed, were redeployed or were evicted.
+
+With no flags it is the latest 200 lines. When there are older ones, the last
+line on stderr is the command that prints the page before.
+
+--since and --until take a duration back from now (30m, 6h, 2d) or an RFC 3339
+time. --grep keeps the lines containing a string, exactly as written.`,
+		Example: `  gg logs shop/web
+  gg logs shop/web --since 1h
+  gg logs shop/web --grep "panic:" --since 2d
+  gg logs shop/web --previous      the container before the latest restart`,
+		Args: usageArgs(1, 1, "usage: gg logs PROJECT/SERVICE\n  e.g. gg logs shop/web"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdLogs(args[0])
+			return cmdLogs(args[0], f)
 		},
 	}
+	cmd.Flags().StringVar(&f.since, "since", "", "start here: 30m, 6h, 2d or an RFC 3339 time")
+	cmd.Flags().StringVar(&f.until, "until", "", "stop here: the same forms; the next page's hint sets it")
+	cmd.Flags().IntVarP(&f.limit, "limit", "n", 0, "how many lines, at most (default 200)")
+	cmd.Flags().StringVar(&f.grep, "grep", "", "only lines containing this")
+	cmd.Flags().BoolVar(&f.previous, "previous", false, "the container before the latest restart, from the node")
+	return cmd
 }
 
 // --- credentials -----------------------------------------------------------
