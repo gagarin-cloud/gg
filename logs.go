@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // gg logs reads the logs route, which since core#64 answers from a store
@@ -77,19 +78,21 @@ func cmdLogs(ref string, f logsFlags) error {
 		fmt.Fprintf(os.Stderr, "gg: %s\n", out.Notice)
 	}
 	if out.Next != nil {
-		fmt.Fprintf(os.Stderr, "older: %s\n", nextLogsCommand(project, service, f, *out.Next))
+		fmt.Fprintf(os.Stderr, "older: %s\n", nextLogsCommandAt(project, service, f, *out.Next, time.Now()))
 	}
 	return nil
 }
 
-// nextLogsCommand is the invocation that reads the page before this one: the
-// same flags, with --until moved back to where this page starts. --since stays
-// if it was given, so paging stops at the start of the window that was asked
-// about rather than running on to the end of the week.
-func nextLogsCommand(project, service string, f logsFlags, next string) string {
+// nextLogsCommandAt is the invocation that reads the page before this one:
+// the same flags, with --until moved back to where this page starts. --since
+// stays if it was given, so paging stops at the start of the window that was
+// asked about rather than running on to the end of the week — pinned to the
+// time it meant at now, because "2h" pasted back an hour later is a window
+// that starts an hour later, and past the --until the hint just set.
+func nextLogsCommandAt(project, service string, f logsFlags, next string, now time.Time) string {
 	args := []string{"gg logs", project + "/" + service}
 	if f.since != "" {
-		args = append(args, "--since", shellQuote(f.since))
+		args = append(args, "--since", shellQuote(pinWhen(f.since, now)))
 	}
 	args = append(args, "--until", next)
 	if f.limit > 0 {
@@ -115,4 +118,25 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// pinWhen is a --since or --until as the time it means at now: a duration back
+// from now (30m, 6h, 2d) becomes RFC 3339, and anything else — already a time,
+// or not something the engine will accept either — is left for it to judge.
+// The engine reads the same forms (parseWhen in core's logs route).
+func pinWhen(v string, now time.Time) string {
+	var d time.Duration
+	if days, ok := strings.CutSuffix(v, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n < 0 {
+			return v
+		}
+		d = time.Duration(n) * 24 * time.Hour
+	} else {
+		var err error
+		if d, err = time.ParseDuration(v); err != nil || d < 0 {
+			return v
+		}
+	}
+	return now.Add(-d).UTC().Format(time.RFC3339Nano)
 }
