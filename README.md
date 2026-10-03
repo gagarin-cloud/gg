@@ -76,7 +76,8 @@ gg ship shop/web:8080          # build the current directory, push it, run it
 gg run shop/migrate migrate:v3 # run an image to completion, wait, exit with its code
 gg domain add shop/web         # put it on the internet, at an address gagarin gives you
 gg status shop                 # what gagarin intends, and what the cluster is actually doing
-gg logs shop/web
+gg logs shop/web               # the latest 200 lines; a week is kept, crashed containers included
+gg logs shop/web --since 2h --grep "panic:"
 
 gg resource add shop/db postgres    # a database; you choose the name and the size, nothing else
 gg resource add shop/cache valkey   # postgres, qdrant, iggy, valkey and s3 — valkey is in-memory and loses data on restart

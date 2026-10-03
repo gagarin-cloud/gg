@@ -200,8 +200,7 @@ func waitForRun(project, name string, revision int) error {
 	// What it wrote, whatever happened. The failure case is the one where
 	// this matters most, and it is printed before the verdict so the last
 	// line on the screen is the one that says what to do.
-	var out struct{ Logs string }
-	if err := call("GET", "/v1/projects/"+project+"/services/"+name+"/logs", nil, &out); err == nil && out.Logs != "" {
+	if out, err := fetchLogs(project, name, logsFlags{}); err == nil && out.Logs != "" {
 		fmt.Println()
 		fmt.Print(out.Logs)
 		if !strings.HasSuffix(out.Logs, "\n") {

@@ -674,19 +674,6 @@ func cmdStatus(ref string) error {
 	return nil
 }
 
-func cmdLogs(ref string) error {
-	project, service, _, err := parseService(ref)
-	if err != nil {
-		return err
-	}
-	var out struct{ Logs string }
-	if err := call("GET", "/v1/projects/"+project+"/services/"+service+"/logs", nil, &out); err != nil {
-		return err
-	}
-	fmt.Print(out.Logs)
-	return nil
-}
-
 // ---- sharing ------------------------------------------------------------
 //
 // A project has one owner — the account that pays for it — and any number of
