@@ -40,9 +40,9 @@ func TestReferralEligible(t *testing.T) {
 	}
 	for _, want := range []string{
 		"https://gagarin.cloud/?ref=7K3M9QXA", "7K3M9QXA", "gg login --ref 7K3M9QXA",
-		"matched up to $50.000", "15%", "3 months", "as credit",
-		"2 invited, 1 earning now, $120.000 topped up by them, $18.000 earned by you",
-		"USER", "alice", "j***@gmail.com", "$100.000", "$15.000", "ends 2100-01-0", "ended 2020-04-0",
+		"matched up to $50;", "15%", "3 months", "as credit",
+		"2 invited, 1 earning now, $120 topped up by them, $18 earned by you",
+		"USER", "alice", "j***@gmail.com", "$100.0000", "$15.0000", "$20.0000", "$3.0000", "ends 2100-01-0", "ended 2020-04-0",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output is missing %q:\n%s", want, out)
