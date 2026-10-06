@@ -382,20 +382,8 @@ func printStatusTable(st statusResp) {
 		}
 		fmt.Printf("  %s %s: %s\n", g, s.Name, s.Actual.Message)
 	}
-	fmt.Printf("  %s today so far\n", formatUSD(st.UsageToday.MicroUSD))
+	fmt.Printf("  %s today so far\n", money(st.UsageToday.MicroUSD))
 	fmt.Println()
-}
-
-// formatUSD renders micro-dollars the way the pricing page prices things:
-// integer arithmetic, not a float that would round a few millionths away.
-//
-// Three decimal places, always. Two would be the conventional choice and would
-// read "$0.00" for the first three quarters of an hour of a single service —
-// a meter that shows nothing while it is running is the one thing this line
-// must not do. One format rather than two, so "$1.050" is the price of never
-// having a threshold where the readout changes shape.
-func formatUSD(microUSD int64) string {
-	return fmt.Sprintf("$%d.%03d", microUSD/1_000_000, (microUSD%1_000_000)/1_000)
 }
 
 func isResourceKind(kind string) bool { return strings.HasPrefix(kind, "resource:") }

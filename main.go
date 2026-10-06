@@ -554,7 +554,7 @@ type platformState struct {
 // An estimate, not a bill: the minute a service is currently in is still
 // running, so this total only grows across a single day.
 //
-// Micro-dollars — millionths — because the tariff is $0.014 per running hour
+// Micro-dollars — millionths — because the tariff is $0.0140 per running hour
 // and bills per minute, so cents would round a minute of a service away to
 // nothing. The server chose the unit for the same reason; this is the same
 // integer it sent.

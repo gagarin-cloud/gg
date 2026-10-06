@@ -94,7 +94,7 @@ func printReferral(v referralView) {
 	fmt.Printf("your invite link  %s\n", v.Link)
 	fmt.Printf("your code         %s   (a friend can use it with: gg login --ref %s)\n", v.Code, v.Code)
 	fmt.Printf("\nthe deal: a friend's first top-up is matched up to %s; you earn %d%% of what they top up for %d months, as credit\n",
-		formatUSD(v.MatchCapMicroUSD), v.RatePercent, v.WindowMonths)
+		prose(v.MatchCapMicroUSD), v.RatePercent, v.WindowMonths)
 
 	if len(v.Invited) == 0 {
 		fmt.Println("\nnobody has signed up through your link yet")
@@ -102,7 +102,7 @@ func printReferral(v referralView) {
 	}
 	t := v.Totals
 	fmt.Printf("\n%d invited, %d earning now, %s topped up by them, %s earned by you\n",
-		t.Invited, t.EarningNow, formatUSD(t.InvitedToppedUpMicroUSD), formatUSD(t.EarnedMicroUSD))
+		t.Invited, t.EarningNow, prose(t.InvitedToppedUpMicroUSD), prose(t.EarnedMicroUSD))
 
 	fmt.Printf("\n%-28s  %-10s  %-10s  %-10s  %-12s  %s\n",
 		"USER", "JOINED", "TOPPED UP", "YOU EARNED", "WINDOW", "STATUS")
@@ -122,6 +122,6 @@ func printReferral(v referralView) {
 		}
 		fmt.Printf("%-28s  %-10s  %-10s  %-10s  %-12s  %s\n",
 			strings.TrimSpace(in.Display), refDate(in.JoinedAt),
-			formatUSD(in.ToppedUpMicroUSD), formatUSD(in.EarnedMicroUSD), window, status)
+			money(in.ToppedUpMicroUSD), money(in.EarnedMicroUSD), window, status)
 	}
 }

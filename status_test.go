@@ -196,12 +196,12 @@ func TestUsageTodayIsIntegerMicroDollarsNotAFloat(t *testing.T) {
 			Services:   []serviceStatus{svc("web")},
 			UsageToday: usageToday{MicroUSD: 12_050_000}})
 	})
-	if !strings.Contains(out, "$12.050 today so far") {
+	if !strings.Contains(out, "$12.0500 today so far") {
 		t.Errorf("expected today's usage on screen:\n%s", out)
 	}
 }
 
-// One running hour is $0.014, and that has to be legible. Two decimal places
+// One running hour is $0.0140, and that has to be legible. Two decimal places
 // would print "$0.01"; the first forty-two minutes would print "$0.00".
 func TestUsageTodayStaysLegibleBelowACent(t *testing.T) {
 	out := capture(t, func() {
@@ -209,8 +209,8 @@ func TestUsageTodayStaysLegibleBelowACent(t *testing.T) {
 			Services:   []serviceStatus{svc("web")},
 			UsageToday: usageToday{MicroUSD: 14_000}})
 	})
-	if !strings.Contains(out, "$0.014 today so far") {
-		t.Errorf("an hour of one service should read as $0.014:\n%s", out)
+	if !strings.Contains(out, "$0.0140 today so far") {
+		t.Errorf("an hour of one service should read as $0.0140:\n%s", out)
 	}
 }
 
