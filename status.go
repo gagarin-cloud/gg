@@ -172,7 +172,8 @@ func printStatusTable(st statusResp) {
 	// it hands over a key and closes no network path.
 	inert := map[string]bool{}
 	for _, s := range st.Services {
-		if s.VolumePath != "" {
+		// The size, not the path: the engine sends no path for a resource.
+		if s.VolumePath != "" || s.VolumeSizeGB > 0 {
 			anyVolume = true
 		}
 		if isResourceKind(s.Kind) || isJobKind(s.Kind) {
@@ -257,7 +258,14 @@ func printStatusTable(st statusResp) {
 		}
 		if anyVolume {
 			v := "—"
-			if s.VolumePath != "" {
+			// A service's mount path is the deployer's own choice and worth
+			// seeing; a resource's is the platform's, as much our business as
+			// its base image, so it gets the size alone.
+			// The engine no longer sends a resource's path; an older one did,
+			// so the column ignores it either way.
+			if isResourceKind(s.Kind) && s.VolumeSizeGB > 0 {
+				v = fmt.Sprintf("%dGB", s.VolumeSizeGB)
+			} else if s.VolumePath != "" {
 				v = fmt.Sprintf("%dGB %s", s.VolumeSizeGB, s.VolumePath)
 			}
 			row = append(row, v)

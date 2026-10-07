@@ -634,3 +634,40 @@ func TestABucketIsNotReportedAsFailing(t *testing.T) {
 		t.Error("a postgres was taken for a row that runs nothing")
 	}
 }
+
+// A resource's mount path is where the platform put its disk, which nobody
+// using it can act on, so the table gives a resource its size alone. A
+// service's path is the deployer's own choice and stays.
+func TestAResourceVolumeShowsItsSizeNotItsMountPath(t *testing.T) {
+	db := svc("pg")
+	db.Kind = "resource:postgres"
+	db.VolumePath, db.VolumeSizeGB = "/var/lib/postgresql/data", 10
+	web := svc("web")
+	web.VolumePath, web.VolumeSizeGB = "/data", 5
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0", Services: []serviceStatus{db, web}})
+	})
+	if strings.Contains(out, "/var/lib/postgresql/data") {
+		t.Errorf("a resource's mount path is in the table:\n%s", out)
+	}
+	if !strings.Contains(out, "10GB") {
+		t.Errorf("a resource's volume lost its size:\n%s", out)
+	}
+	if !strings.Contains(out, "5GB /data") {
+		t.Errorf("a service's mount path went missing:\n%s", out)
+	}
+}
+
+// What the engine sends now: a resource's size and no path. The column must
+// still exist and still say the size.
+func TestAResourceVolumeWithNoPathStillShowsItsSize(t *testing.T) {
+	db := svc("pg")
+	db.Kind = "resource:postgres"
+	db.VolumeSizeGB = 10
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0", Services: []serviceStatus{db}})
+	})
+	if !strings.Contains(out, "VOLUME") || !strings.Contains(out, "10GB") {
+		t.Errorf("a resource sent with only its size lost its volume:\n%s", out)
+	}
+}
