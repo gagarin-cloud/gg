@@ -257,7 +257,12 @@ func printStatusTable(st statusResp) {
 		}
 		if anyVolume {
 			v := "—"
-			if s.VolumePath != "" {
+			// A service's mount path is the deployer's own choice and worth
+			// seeing; a resource's is the platform's, as much our business as
+			// its base image, so it gets the size alone.
+			if s.VolumePath != "" && isResourceKind(s.Kind) {
+				v = fmt.Sprintf("%dGB", s.VolumeSizeGB)
+			} else if s.VolumePath != "" {
 				v = fmt.Sprintf("%dGB %s", s.VolumeSizeGB, s.VolumePath)
 			}
 			row = append(row, v)
