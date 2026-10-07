@@ -657,3 +657,17 @@ func TestAResourceVolumeShowsItsSizeNotItsMountPath(t *testing.T) {
 		t.Errorf("a service's mount path went missing:\n%s", out)
 	}
 }
+
+// What the engine sends now: a resource's size and no path. The column must
+// still exist and still say the size.
+func TestAResourceVolumeWithNoPathStillShowsItsSize(t *testing.T) {
+	db := svc("pg")
+	db.Kind = "resource:postgres"
+	db.VolumeSizeGB = 10
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0", Services: []serviceStatus{db}})
+	})
+	if !strings.Contains(out, "VOLUME") || !strings.Contains(out, "10GB") {
+		t.Errorf("a resource sent with only its size lost its volume:\n%s", out)
+	}
+}
