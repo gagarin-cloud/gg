@@ -367,6 +367,7 @@ func newRunCmd() *cobra.Command {
 
   gg run shop/migrate migrate:v3
   gg run shop/migrate migrate:v3 --deps db --env-file .env
+  gg run shop/migrate migrate:v3 --timeout 5m
 
 A job is a service that runs to completion instead of serving: a database
 migration, a backfill, an import, a report. It has no port and no address,
@@ -379,7 +380,10 @@ code — so a pipeline can branch on it as if it had run the script itself.
 --detach submits and returns instead; "gg status" then reports how the run
 ended and "gg logs" prints what it wrote.
 
-A run that fails is not retried. A run is stopped after sixty minutes.
+A run that fails is not retried. A run is stopped when --timeout has passed,
+counted from when it is submitted, so pulling the image uses some of it. The
+timeout is at most sixty minutes, and sixty minutes unless you give one; omit
+--timeout and the job keeps the one its last run was given.
 Environment is replaced wholesale, as it is for a deploy; the connection
 variables of any resource the job reaches are added by the platform each
 run and never stored against the revision.`,

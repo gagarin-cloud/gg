@@ -26,10 +26,14 @@ type runFlags struct {
 	// detach submits the run and returns, for a caller that has something
 	// better to do than wait — or that wants the old asynchronous shape back.
 	detach bool
+	// timeout is the run's own limit, in whole seconds, when --timeout was
+	// given; zero means it was not, and the job keeps the one it has.
+	timeout int
 }
 
 type runFlagVars struct {
-	f *runFlags
+	f       *runFlags
+	timeout string
 	*envFlagVars
 }
 
@@ -50,7 +54,58 @@ func bindRunFlags(fs *pflag.FlagSet) *runFlagVars {
 		"Adds to what it already reaches and never removes;\n"+
 		"use \"gg deps rm\" to withdraw one")
 	fs.BoolVar(&v.f.detach, "detach", false, "submit the run and return; \"gg status\" reports how it\nends")
+	fs.StringVar(&v.timeout, "timeout", "", "stop the run if it has not finished after `DURATION`, e.g. 45s,\n"+
+		"5m, 1h; at most 60m, the default. Counted from when the\n"+
+		"run is submitted, so pulling the image uses some of it.\n"+
+		"Omit to keep the job's current timeout")
 	return v
+}
+
+// The platform's bounds on a run's timeout, in seconds.
+const (
+	minRunTimeout = 1
+	maxRunTimeout = 3600
+)
+
+// parseTimeout turns --timeout into whole seconds, refusing what the platform
+// would: under a second, over an hour, or a fraction of a second.
+func parseTimeout(s string) (int, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("--timeout %q is not a duration; write it like 45s, 5m or 1h", s)
+	}
+	if d%time.Second != 0 {
+		return 0, fmt.Errorf("--timeout %s is not a whole number of seconds", s)
+	}
+	secs := int(d / time.Second)
+	if secs < minRunTimeout {
+		return 0, fmt.Errorf("--timeout %s is under one second", s)
+	}
+	if secs > maxRunTimeout {
+		return 0, fmt.Errorf("--timeout %s is over the 60m limit on a run", s)
+	}
+	return secs, nil
+}
+
+// runBody is the request that submits one run. timeout_seconds is sent only
+// when --timeout was given: absent, the server keeps the job's current one.
+func runBody(ref, digest string, f *runFlags) map[string]any {
+	body := map[string]any{
+		"kind":   "job",
+		"image":  ref,
+		"digest": digest,
+		"env":    f.env,
+	}
+	if f.size != "" {
+		body["size"] = f.size
+	}
+	if len(f.deps) > 0 {
+		body["deps"] = f.deps
+	}
+	if f.timeout > 0 {
+		body["timeout_seconds"] = f.timeout
+	}
+	return body
 }
 
 func (v *runFlagVars) finish() (*runFlags, error) {
@@ -59,6 +114,11 @@ func (v *runFlagVars) finish() (*runFlags, error) {
 		return nil, err
 	}
 	v.f.env = env
+	if v.timeout != "" {
+		if v.f.timeout, err = parseTimeout(v.timeout); err != nil {
+			return nil, err
+		}
+	}
 	if len(v.f.deps) > 0 {
 		if err := checkNames(v.f.deps); err != nil {
 			return nil, err
@@ -88,8 +148,8 @@ func runPoll(elapsed time.Duration) time.Duration {
 }
 
 // runWait is how long gg waits before giving up on a run and leaving it to
-// `gg status`. Over the platform's own ceiling on a run, so that the ceiling
-// is what a stuck script hits, with its message, rather than this.
+// `gg status`. Over any timeout a run can be given, so that the timeout is
+// what a stuck script hits, with its message, rather than this.
 const runWait = 65 * time.Minute
 
 func cmdRun(ref, image string, f *runFlags) error {
@@ -111,18 +171,7 @@ func cmdRun(ref, image string, f *runFlags) error {
 	}
 
 	fmt.Printf("→ running %s as job %s\n", target.short(), name)
-	body := map[string]any{
-		"kind":   "job",
-		"image":  target.ref,
-		"digest": digest,
-		"env":    f.env,
-	}
-	if f.size != "" {
-		body["size"] = f.size
-	}
-	if len(f.deps) > 0 {
-		body["deps"] = f.deps
-	}
+	body := runBody(target.ref, digest, f)
 	var made struct {
 		Name     string `json:"name"`
 		Revision int    `json:"revision"`
