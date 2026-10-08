@@ -749,9 +749,18 @@ func TestAScheduledRunLineAppendsTheNextFiring(t *testing.T) {
 	next := time.Now().Add(21*time.Hour + 30*time.Minute)
 	row := scheduledRow("0 3 * * *", &runState{Revision: 3, Phase: "done", StartedAt: &started, FinishedAt: &finished}, &next)
 	got := runLine(row)
-	if !strings.HasPrefix(got, "✓  └ run 3 finished 2h ago, took 41s, exit 0") || !strings.HasSuffix(got, " · next in 21h") {
-		t.Errorf("got %q", got)
+	// Named by when it started, not by revision: every firing of a template
+	// shares revision 3, and "run 3" on each of them says nothing.
+	want := "✓  └ run at " + started.UTC().Format("15:04") + " finished 2h ago, took 41s, exit 0"
+	if !strings.HasPrefix(got, want) || !strings.HasSuffix(got, " · next in 21h") {
+		t.Errorf("got %q, want prefix %q", got, want)
 	}
+	row.TimeZone = "Asia/Tokyo"
+	tokyo, _ := time.LoadLocation("Asia/Tokyo")
+	if got := runLine(row); !strings.Contains(got, "run at "+started.In(tokyo).Format("15:04")+" finished") {
+		t.Errorf("a firing is named on the schedule's own clock: got %q", got)
+	}
+	row.TimeZone = ""
 	if cell := runPhase(row); cell != "done ⏱ 0 3 * * *" {
 		t.Errorf("READY cell %q", cell)
 	}

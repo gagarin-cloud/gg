@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	// The zone database, inside the binary: Windows has none for Go to read,
+	// and without this every --tz but UTC is refused there.
+	_ "time/tzdata"
 
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/pflag"

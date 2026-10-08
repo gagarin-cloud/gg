@@ -515,7 +515,7 @@ func runLine(s serviceStatus) string {
 	var text string
 	switch r.Phase {
 	case "done":
-		text = fmt.Sprintf("run %d finished", r.Revision)
+		text = runName(s, r) + " finished"
 		if r.FinishedAt != nil {
 			text += " " + ago(*r.FinishedAt)
 		}
@@ -524,7 +524,7 @@ func runLine(s serviceStatus) string {
 		}
 		text += ", exit 0"
 	case "failed":
-		text = fmt.Sprintf("run %d failed", r.Revision)
+		text = runName(s, r) + " failed"
 		if r.FinishedAt != nil {
 			text += " " + ago(*r.FinishedAt)
 		}
@@ -538,19 +538,40 @@ func runLine(s serviceStatus) string {
 			text += ": " + s.Actual.Message
 		}
 	case "running":
-		text = fmt.Sprintf("run %d running", r.Revision)
+		text = runName(s, r) + " running"
 		if took != "" {
 			text += " for " + took
 		}
 	case "suspended":
-		text = fmt.Sprintf("run %d suspended with the project", r.Revision)
+		text = runName(s, r) + " suspended with the project"
 	default:
-		text = fmt.Sprintf("run %d pending", r.Revision)
+		text = runName(s, r) + " pending"
 		if s.Actual.Message != "" {
 			text += ": " + s.Actual.Message
 		}
 	}
 	return mark + "  └ " + text + nextNote(s, time.Now(), false)
+}
+
+// runName is how the run line names a run. A one-shot job's run is its
+// revision, because each `gg run` is one. A scheduled job's firings all share
+// the revision their template had, so every one would read "run 1"; a firing
+// is named by when it started instead, on the schedule's own clock.
+func runName(s serviceStatus, r *runState) string {
+	if !isScheduled(s) || r.StartedAt == nil {
+		return fmt.Sprintf("run %d", r.Revision)
+	}
+	loc := time.UTC
+	if s.TimeZone != "" {
+		if l, err := time.LoadLocation(s.TimeZone); err == nil {
+			loc = l
+		}
+	}
+	t := r.StartedAt.In(loc)
+	if time.Since(t) > 20*time.Hour {
+		return "run at " + t.Format("Jan 2 15:04")
+	}
+	return "run at " + t.Format("15:04")
 }
 
 // runDuration is how long a run took, or has been going. Seconds under two
