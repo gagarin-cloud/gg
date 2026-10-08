@@ -80,6 +80,18 @@ func state(s serviceStatus) string {
 // vocabulary. Failed is "failing" because the fix is the same — read the
 // message under the table — and a finished run is "done".
 func jobState(s serviceStatus) string {
+	// A scheduled job that has not fired yet is waiting, which is what it is
+	// meant to be doing: nothing has run, so nothing has failed.
+	if isScheduled(s) && s.Actual.Exists && s.Actual.Run == nil {
+		switch {
+		case !s.InSync:
+			return "starting"
+		case s.Actual.Schedule != nil && s.Actual.Schedule.Suspended:
+			return "stopped"
+		default:
+			return "scheduled"
+		}
+	}
 	if !s.Actual.Exists || s.Actual.Run == nil {
 		return "failing"
 	}
@@ -214,7 +226,7 @@ func printStatusTable(st statusResp) {
 		// shade of it.
 		mark := map[string]string{
 			"running": "●", "starting": "◐", "failing": "○", "stopped": "◌",
-			"external": "◆", "inert": "◇", "done": "✓",
+			"external": "◆", "inert": "◇", "done": "✓", "scheduled": "◷",
 		}[state(s)]
 		marked := make([]string, 0, len(s.Needs))
 		for _, n := range s.Needs {
@@ -347,6 +359,9 @@ func printStatusTable(st statusResp) {
 	if seen["done"] {
 		notes = append(notes, "✓ done (a job that ran to completion)")
 	}
+	if seen["scheduled"] {
+		notes = append(notes, "◷ scheduled (waiting for its first run)")
+	}
 	// Says what it is rather than how it is, because there is no how: nothing
 	// runs, so there is no state to be in. The clause about egress is here and
 	// not only in the docs — this table is where somebody forms their idea of
@@ -402,10 +417,68 @@ func isJobKind(kind string) bool { return kind == "job" }
 
 // runPhase is what a job's READY cell says: one word about the latest run.
 func runPhase(s serviceStatus) string {
-	if s.Actual.Run == nil {
-		return "—"
+	phase := "—"
+	if s.Actual.Run != nil {
+		phase = s.Actual.Run.Phase
 	}
-	return s.Actual.Run.Phase
+	// The schedule rides in the same cell: it is the one fact about a
+	// scheduled job that is not about its latest run.
+	if isScheduled(s) {
+		if phase == "—" {
+			return "⏱ " + s.Schedule
+		}
+		return phase + " ⏱ " + s.Schedule
+	}
+	return phase
+}
+
+// isScheduled is a job that fires on a cron schedule.
+func isScheduled(s serviceStatus) bool { return isJobKind(s.Kind) && s.Schedule != "" }
+
+// untilNext is how far off a firing is, in the one unit that matters.
+func untilNext(t, now time.Time) string {
+	d := t.Sub(now)
+	switch {
+	case d < time.Minute:
+		return "under a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// nextNote is what a scheduled job's run line appends: when it fires next, as
+// a distance once there has been a run and as a date before, or that the
+// schedule is suspended. Empty for a job that is not scheduled.
+func nextNote(s serviceStatus, now time.Time, absolute bool) string {
+	if !isScheduled(s) {
+		return ""
+	}
+	sc := s.Actual.Schedule
+	if sc != nil && sc.Suspended {
+		return " · schedule suspended"
+	}
+	if sc == nil || sc.NextAt == nil {
+		return ""
+	}
+	if !absolute {
+		if !sc.NextAt.After(now) {
+			return " · next due now"
+		}
+		return " · next in " + untilNext(*sc.NextAt, now)
+	}
+	zone := s.TimeZone
+	if zone == "" {
+		zone = "UTC"
+	}
+	t := *sc.NextAt
+	if loc, err := time.LoadLocation(zone); err == nil {
+		t = t.In(loc)
+	}
+	return " · next " + t.Format("2006-01-02 15:04") + " " + zone
 }
 
 // runLine is the sentence under a job's row — the run's number, how it
@@ -415,8 +488,15 @@ func runPhase(s serviceStatus) string {
 func runLine(s serviceStatus) string {
 	mark := map[string]string{
 		"running": "●", "starting": "◐", "failing": "○", "stopped": "◌", "done": "✓",
+		"scheduled": "◷",
 	}[state(s)]
 	r := s.Actual.Run
+	if r == nil && isScheduled(s) && s.Actual.Exists {
+		if !s.InSync {
+			return mark + "  └ waiting for the schedule to be applied"
+		}
+		return mark + "  └ no run yet" + nextNote(s, time.Now(), true)
+	}
 	if r == nil {
 		out := mark + "  └ no run in the cluster"
 		if s.Actual.Message != "" && s.Actual.Message != "no run in cluster" {
@@ -435,7 +515,7 @@ func runLine(s serviceStatus) string {
 	var text string
 	switch r.Phase {
 	case "done":
-		text = fmt.Sprintf("run %d finished", r.Revision)
+		text = runName(s, r) + " finished"
 		if r.FinishedAt != nil {
 			text += " " + ago(*r.FinishedAt)
 		}
@@ -444,7 +524,7 @@ func runLine(s serviceStatus) string {
 		}
 		text += ", exit 0"
 	case "failed":
-		text = fmt.Sprintf("run %d failed", r.Revision)
+		text = runName(s, r) + " failed"
 		if r.FinishedAt != nil {
 			text += " " + ago(*r.FinishedAt)
 		}
@@ -458,19 +538,40 @@ func runLine(s serviceStatus) string {
 			text += ": " + s.Actual.Message
 		}
 	case "running":
-		text = fmt.Sprintf("run %d running", r.Revision)
+		text = runName(s, r) + " running"
 		if took != "" {
 			text += " for " + took
 		}
 	case "suspended":
-		text = fmt.Sprintf("run %d suspended with the project", r.Revision)
+		text = runName(s, r) + " suspended with the project"
 	default:
-		text = fmt.Sprintf("run %d pending", r.Revision)
+		text = runName(s, r) + " pending"
 		if s.Actual.Message != "" {
 			text += ": " + s.Actual.Message
 		}
 	}
-	return mark + "  └ " + text
+	return mark + "  └ " + text + nextNote(s, time.Now(), false)
+}
+
+// runName is how the run line names a run. A one-shot job's run is its
+// revision, because each `gg run` is one. A scheduled job's firings all share
+// the revision their template had, so every one would read "run 1"; a firing
+// is named by when it started instead, on the schedule's own clock.
+func runName(s serviceStatus, r *runState) string {
+	if !isScheduled(s) || r.StartedAt == nil {
+		return fmt.Sprintf("run %d", r.Revision)
+	}
+	loc := time.UTC
+	if s.TimeZone != "" {
+		if l, err := time.LoadLocation(s.TimeZone); err == nil {
+			loc = l
+		}
+	}
+	t := r.StartedAt.In(loc)
+	if time.Since(t) > 20*time.Hour {
+		return "run at " + t.Format("Jan 2 15:04")
+	}
+	return "run at " + t.Format("15:04")
 }
 
 // runDuration is how long a run took, or has been going. Seconds under two

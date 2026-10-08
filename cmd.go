@@ -368,6 +368,7 @@ func newRunCmd() *cobra.Command {
   gg run shop/migrate migrate:v3
   gg run shop/migrate migrate:v3 --deps db --env-file .env
   gg run shop/migrate migrate:v3 --timeout 5m
+  gg run shop/report report:v2 --schedule "0 3 * * *" --tz Europe/Berlin
 
 A job is a service that runs to completion instead of serving: a database
 migration, a backfill, an import, a report. It has no port and no address,
@@ -386,7 +387,23 @@ timeout is at most sixty minutes, and sixty minutes unless you give one; omit
 --timeout and the job keeps the one its last run was given.
 Environment is replaced wholesale, as it is for a deploy; the connection
 variables of any resource the job reaches are added by the platform each
-run and never stored against the revision.`,
+run and never stored against the revision.
+
+--schedule runs the job on a cron schedule instead of now: five fields
+("0 3 * * *") or @hourly, @daily, @weekly, @monthly, @yearly. --tz is the
+zone it is read in, an IANA name like Europe/Berlin; UTC when omitted. A
+scheduled job runs nothing when you submit it, so gg does not wait, whatever
+--detach says; "gg status" shows the next run and how the last one ended.
+Runs never overlap: a firing while the last run is still going waits, and
+starts when that run ends; several missed that way start once.
+Each run is billed for the time it ran, and a waiting schedule costs nothing.
+On a job that is already scheduled, "gg run" with an image updates what the
+next firing runs; --schedule changes when, and --tz alone changes the zone.
+Giving --schedule to a one-shot job makes it a scheduled one.
+
+A schedule cannot be removed. "gg run" means "run this", so a
+--schedule off would fire a run when you only wanted the schedule to stop.
+To stop one, destroy the job and run it again without --schedule.`,
 		Args: usageArgs(2, 2, "usage: gg run PROJECT/JOB IMAGE[:TAG]\n"+
 			"  e.g. gg run shop/migrate migrate:v3\n"+
 			"  build the image first with gg build"),

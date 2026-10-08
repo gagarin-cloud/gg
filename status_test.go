@@ -671,3 +671,116 @@ func TestAResourceVolumeWithNoPathStillShowsItsSize(t *testing.T) {
 		t.Errorf("a resource sent with only its size lost its volume:\n%s", out)
 	}
 }
+
+// --- scheduled jobs -----------------------------------------------------------
+
+func scheduledRow(expr string, run *runState, next *time.Time) serviceStatus {
+	s := jobRow("report", "", 0)
+	s.Schedule, s.TimeZone = expr, "UTC"
+	s.Actual.Run = run
+	s.Actual.Schedule = &scheduleState{NextAt: next}
+	return s
+}
+
+// Before its first firing a scheduled job is waiting, not failing: nothing has
+// run, which is what it is supposed to look like.
+func TestAScheduledJobWithNoRunIsWaitingNotFailing(t *testing.T) {
+	next := time.Date(2026, 10, 9, 3, 0, 0, 0, time.UTC)
+	row := scheduledRow("0 3 * * *", nil, &next)
+	if got := state(row); got != "scheduled" {
+		t.Fatalf("state %q, want scheduled", got)
+	}
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0", Services: []serviceStatus{row}})
+	})
+	for _, want := range []string{
+		"◷  report", "⏱ 0 3 * * *", "◷  └ no run yet · next 2026-10-09 03:00 UTC", "◷ scheduled",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "○") {
+		t.Errorf("a waiting schedule was marked failing:\n%s", out)
+	}
+}
+
+// The same job with nothing in the cluster is still a fault, and one that is
+// not scheduled and has no run still reads as failing.
+func TestNoRunIsStillFailingUnlessScheduledAndPresent(t *testing.T) {
+	missing := scheduledRow("0 3 * * *", nil, nil)
+	missing.Actual.Exists = false
+	if got := state(missing); got != "failing" {
+		t.Errorf("scheduled but absent: %q, want failing", got)
+	}
+	plain := jobRow("j", "", 0)
+	plain.Actual.Run = nil
+	if got := state(plain); got != "failing" {
+		t.Errorf("one-shot with no run: %q, want failing", got)
+	}
+	drift := scheduledRow("0 3 * * *", nil, nil)
+	drift.InSync = false
+	if got := state(drift); got != "starting" {
+		t.Errorf("scheduled and drifting: %q, want starting", got)
+	}
+}
+
+func TestASuspendedScheduleSaysSo(t *testing.T) {
+	row := scheduledRow("@daily", nil, nil)
+	row.Actual.Schedule.Suspended = true
+	if got := state(row); got != "stopped" {
+		t.Errorf("state %q, want stopped", got)
+	}
+	if got, want := runLine(row), "◌  └ no run yet · schedule suspended"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	started := time.Now().Add(-2 * time.Hour)
+	finished := started.Add(41 * time.Second)
+	done := scheduledRow("@daily", &runState{Revision: 3, Phase: "done", StartedAt: &started, FinishedAt: &finished}, nil)
+	done.Actual.Schedule.Suspended = true
+	if got := runLine(done); !strings.HasSuffix(got, " · schedule suspended") {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestAScheduledRunLineAppendsTheNextFiring(t *testing.T) {
+	started := time.Now().Add(-3 * time.Hour)
+	finished := started.Add(41 * time.Second)
+	next := time.Now().Add(21*time.Hour + 30*time.Minute)
+	row := scheduledRow("0 3 * * *", &runState{Revision: 3, Phase: "done", StartedAt: &started, FinishedAt: &finished}, &next)
+	got := runLine(row)
+	// Named by when it started, not by revision: every firing of a template
+	// shares revision 3, and "run 3" on each of them says nothing.
+	want := "✓  └ run at " + started.UTC().Format("15:04") + " finished 2h ago, took 41s, exit 0"
+	if !strings.HasPrefix(got, want) || !strings.HasSuffix(got, " · next in 21h") {
+		t.Errorf("got %q, want prefix %q", got, want)
+	}
+	row.TimeZone = "Asia/Tokyo"
+	tokyo, _ := time.LoadLocation("Asia/Tokyo")
+	if got := runLine(row); !strings.Contains(got, "run at "+started.In(tokyo).Format("15:04")+" finished") {
+		t.Errorf("a firing is named on the schedule's own clock: got %q", got)
+	}
+	row.TimeZone = ""
+	if cell := runPhase(row); cell != "done ⏱ 0 3 * * *" {
+		t.Errorf("READY cell %q", cell)
+	}
+	// A failed scheduled run is failing, schedule or not.
+	row.Actual.Run.Phase = "failed"
+	if got := state(row); got != "failing" {
+		t.Errorf("failed scheduled run: %q", got)
+	}
+	// A one-shot job has no next firing to append.
+	if got := runLine(jobRow("m", "done", 1)); strings.Contains(got, "next") {
+		t.Errorf("one-shot run line mentions a next run: %q", got)
+	}
+}
+
+func TestNoScheduledLegendWithoutAScheduledJob(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{jobRow("migrate", "done", 3)}})
+	})
+	if strings.Contains(out, "◷") {
+		t.Errorf("legend mentions a state nothing is in:\n%s", out)
+	}
+}
