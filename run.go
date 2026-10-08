@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/robfig/cron/v3"
 	"github.com/spf13/pflag"
 )
 
@@ -29,11 +30,18 @@ type runFlags struct {
 	// timeout is the run's own limit, in whole seconds, when --timeout was
 	// given; zero means it was not, and the job keeps the one it has.
 	timeout int
+	// schedule is a cron expression, and timeZone the IANA zone it is read in.
+	// Empty means the flag was not given and the job keeps what it has.
+	schedule string
+	timeZone string
 }
 
 type runFlagVars struct {
-	f       *runFlags
-	timeout string
+	f        *runFlags
+	fs       *pflag.FlagSet
+	timeout  string
+	schedule string
+	tz       string
 	*envFlagVars
 }
 
@@ -41,7 +49,8 @@ type runFlagVars struct {
 // plus --detach.
 func bindRunFlags(fs *pflag.FlagSet) *runFlagVars {
 	v := &runFlagVars{
-		f: &runFlags{env: map[string]string{}},
+		f:  &runFlags{env: map[string]string{}},
+		fs: fs,
 		envFlagVars: bindEnvFlags(fs,
 			"set an env var K=V (repeatable)",
 			"read KEY=VALUE lines from a file (repeatable; later\nfiles win, --env flags win over all files)"),
@@ -58,6 +67,12 @@ func bindRunFlags(fs *pflag.FlagSet) *runFlagVars {
 		"5m, 1h; at most 60m, the default. Counted from when the\n"+
 		"run is submitted, so pulling the image uses some of it.\n"+
 		"Omit to keep the job's current timeout")
+	fs.StringVar(&v.schedule, "schedule", "", "run it on a schedule: a 5-field cron expression such as\n"+
+		"\"0 3 * * *\", or @hourly, @daily, @weekly, @monthly,\n"+
+		"@yearly. Nothing runs now and gg does not wait. A schedule\n"+
+		"cannot be removed; destroy the job to stop it")
+	fs.StringVar(&v.tz, "tz", "", "the time zone a schedule is read in, an IANA name such as\n"+
+		"Europe/Berlin. Omit for UTC, or to keep the job's zone")
 	return v
 }
 
@@ -87,6 +102,61 @@ func parseTimeout(s string) (int, error) {
 	return secs, nil
 }
 
+// parseSchedule checks a cron expression the way the control plane will, so a
+// typo is refused before an image is resolved. It returns the expression to
+// send. A CRON_TZ=/TZ= prefix is refused because the zone is --tz's business,
+// and an empty one because a schedule cannot be removed: `gg run` means "run
+// this", so a way to say "no schedule" would fire a run when all somebody
+// wanted was to stop the schedule.
+func parseSchedule(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", fmt.Errorf("--schedule is empty, and a schedule cannot be removed\n" +
+			"  hint: destroy the job and run it again without --schedule")
+	}
+	if strings.HasPrefix(s, "CRON_TZ=") || strings.HasPrefix(s, "TZ=") {
+		return "", fmt.Errorf("--schedule %q sets a time zone inside the expression\n"+
+			"  hint: leave it out and pass --tz Europe/Berlin", s)
+	}
+	if strings.HasPrefix(s, "@every") {
+		return "", fmt.Errorf("--schedule %q is not supported\n"+
+			"  hint: write 5 fields like \"*/5 * * * *\", or a macro such as @hourly", s)
+	}
+	if _, err := cron.ParseStandard(s); err != nil {
+		return "", fmt.Errorf("--schedule %q is not a cron expression: %v\n"+
+			"  hint: 5 fields (minute hour day month weekday) like \"0 3 * * *\", or @hourly, @daily, @weekly, @monthly, @yearly", s, err)
+	}
+	return s, nil
+}
+
+// parseTimeZone checks --tz against the zone database.
+func parseTimeZone(s string) (string, error) {
+	if s == "" || s == "Local" {
+		return "", fmt.Errorf("--tz %q is not an IANA time zone name\n"+
+			"  hint: e.g. Europe/Berlin or America/New_York; leave it out for UTC", s)
+	}
+	if _, err := time.LoadLocation(s); err != nil {
+		return "", fmt.Errorf("--tz %q is not an IANA time zone name\n"+
+			"  hint: e.g. Europe/Berlin or America/New_York; leave it out for UTC", s)
+	}
+	return s, nil
+}
+
+// nextRun is when a schedule next fires after now, read in zone ("" is UTC).
+func nextRun(expr, zone string, now time.Time) (time.Time, error) {
+	sched, err := cron.ParseStandard(expr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	loc := time.UTC
+	if zone != "" {
+		if loc, err = time.LoadLocation(zone); err != nil {
+			return time.Time{}, err
+		}
+	}
+	return sched.Next(now.In(loc)), nil
+}
+
 // runBody is the request that submits one run. timeout_seconds is sent only
 // when --timeout was given: absent, the server keeps the job's current one.
 func runBody(ref, digest string, f *runFlags) map[string]any {
@@ -105,6 +175,12 @@ func runBody(ref, digest string, f *runFlags) map[string]any {
 	if f.timeout > 0 {
 		body["timeout_seconds"] = f.timeout
 	}
+	if f.schedule != "" {
+		body["schedule"] = f.schedule
+	}
+	if f.timeZone != "" {
+		body["time_zone"] = f.timeZone
+	}
 	return body
 }
 
@@ -116,6 +192,18 @@ func (v *runFlagVars) finish() (*runFlags, error) {
 	v.f.env = env
 	if v.timeout != "" {
 		if v.f.timeout, err = parseTimeout(v.timeout); err != nil {
+			return nil, err
+		}
+	}
+	// Changed rather than non-empty, so --schedule "" is refused instead of
+	// quietly meaning "not given".
+	if v.fs.Changed("schedule") {
+		if v.f.schedule, err = parseSchedule(v.schedule); err != nil {
+			return nil, err
+		}
+	}
+	if v.fs.Changed("tz") {
+		if v.f.timeZone, err = parseTimeZone(v.tz); err != nil {
 			return nil, err
 		}
 	}
@@ -175,6 +263,8 @@ func cmdRun(ref, image string, f *runFlags) error {
 	var made struct {
 		Name     string `json:"name"`
 		Revision int    `json:"revision"`
+		Schedule string `json:"schedule"`
+		TimeZone string `json:"time_zone"`
 	}
 	if err := call("PUT", fmt.Sprintf("/v1/projects/%s/services/%s", project, name), body, &made); err != nil {
 		return err
@@ -182,6 +272,24 @@ func cmdRun(ref, image string, f *runFlags) error {
 	fmt.Printf("  revision %d submitted\n", made.Revision)
 	if len(f.deps) > 0 {
 		fmt.Printf("  reaching %s as well while it runs\n", strings.Join(f.deps, " and "))
+	}
+	// A scheduled job runs nothing now, so there is no run to wait for —
+	// whether or not --detach was given.
+	if made.Schedule != "" {
+		zone := made.TimeZone
+		if zone == "" {
+			zone = "UTC"
+		}
+		next, err := nextRun(made.Schedule, made.TimeZone, time.Now())
+		if err != nil || next.IsZero() {
+			fmt.Printf("  scheduled %q (%s)\n", made.Schedule, zone)
+		} else {
+			fmt.Printf("  scheduled %q (%s), next run %s\n", made.Schedule, zone,
+				next.Format("2006-01-02 15:04 MST"))
+		}
+		fmt.Printf("\n`gg status %s` reports each run, and `gg logs %s/%s` prints what it wrote.\n",
+			project, project, name)
+		return nil
 	}
 	if f.detach {
 		fmt.Printf("\n`gg status %s` reports how it ends, and `gg logs %s/%s` prints what it wrote.\n",

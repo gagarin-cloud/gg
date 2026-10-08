@@ -597,6 +597,10 @@ type serviceStatus struct {
 	VolumePath   string   `json:"volume_path"`
 	VolumeSizeGB int      `json:"volume_size_gb"`
 	InSync       bool     `json:"in_sync"`
+	// Schedule and TimeZone are a job's cron expression and the zone it is
+	// read in; empty for anything that is not a scheduled job.
+	Schedule string `json:"schedule"`
+	TimeZone string `json:"time_zone"`
 	// Domains is every address this service answers on — a name its owner brought
 	// first, the one gagarin handed out last — and empty for a service that is not
 	// on the internet.
@@ -631,6 +635,8 @@ type serviceStatus struct {
 		// not a job. Ready and Desired are zero for one: nothing is meant to
 		// stay up.
 		Run *runState `json:"run"`
+		// Schedule is a scheduled job's next firing; nil for anything else.
+		Schedule *scheduleState `json:"schedule"`
 	} `json:"actual"`
 	// Restore is the restore this resource was created to hold, and nil for
 	// anything made another way. The platform carries a restore out after
@@ -644,6 +650,13 @@ type restoreState struct {
 	State    string `json:"state"` // pending, done or failed
 	Attempts int    `json:"attempts"`
 	Error    string `json:"error"`
+}
+
+// scheduleState is what the cluster says about a scheduled job's schedule.
+type scheduleState struct {
+	NextAt          *time.Time `json:"next_at"`
+	LastScheduledAt *time.Time `json:"last_scheduled_at"`
+	Suspended       bool       `json:"suspended"`
 }
 
 // runState is one run of a job, as the control plane reports it.
