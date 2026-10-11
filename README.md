@@ -83,6 +83,7 @@ gg logs shop/web --since 2h --grep "panic:"
 gg resource add shop/db postgres    # a database; you choose the name and the size, nothing else
 gg resource add shop/cache valkey   # postgres, qdrant, iggy, valkey and s3 — valkey is in-memory and loses data on restart
 gg deps add shop/web db             # let web reach it, and hand it DB_URL and the rest
+gg resource add shop/files s3      # a private bucket; `gg resource public shop/files` opens it to the world for reading
 gg resource secrets shop/db         # the values, when something outside the project needs them
 gg connect shop/db                  # that database on 127.0.0.1, for as long as the command runs
 

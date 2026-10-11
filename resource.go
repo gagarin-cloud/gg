@@ -242,6 +242,86 @@ func cmdResourceKeys(ref, format string) error {
 	return nil
 }
 
+// publicResult is the one answer both verbs get: where the bucket stands now,
+// and who was restarted for it.
+type publicResult struct {
+	Resource   string   `json:"resource"`
+	Public     bool     `json:"public"`
+	URL        string   `json:"url"`
+	Dependents []string `json:"dependents"`
+	Sentence   string   `json:"sentence"`
+}
+
+// cmdResourcePublic makes a bucket listable and readable by anyone.
+//
+// The exposure is said in the output rather than left to the help, because the
+// help is read once, before, and this is read by whoever — or whatever — just
+// ran it. Printed after the call, not before: a refusal (it is not a bucket, the
+// platform could not publish it) changed nothing, and a warning about exposure
+// above an error would read as though something had been exposed.
+func cmdResourcePublic(ref string) error {
+	project, name, _, err := parseService(ref)
+	if err != nil {
+		return err
+	}
+	var out publicResult
+	path := fmt.Sprintf("/v1/projects/%s/resources/%s/public", project, name)
+	if err := call("PUT", path, nil, &out); err != nil {
+		return err
+	}
+
+	if out.Sentence != "" {
+		fmt.Printf("%s\n", out.Sentence)
+	}
+	fmt.Printf("\n%s is public at %s\n", name, out.URL)
+	// The claim that must not be lost, said by gg itself rather than left to the
+	// server's prose: anyone who has the address can list every object in the
+	// bucket, not just fetch the ones they were told the name of.
+	fmt.Printf(`
+Every object in it can now be listed and read by anyone who has that address.
+Writing still needs the key.
+`)
+	prefix := envPrefix(name)
+	if len(out.Dependents) > 0 {
+		fmt.Printf("\n%s now get %s_PUBLIC_URL, and are restarting to pick it up.\n",
+			strings.Join(out.Dependents, ", "), prefix)
+	} else {
+		// Not a failure, but silence would read as one — the caller expected
+		// something to be handed the address.
+		fmt.Printf("\nNothing declares %s yet, so nothing holds %s_PUBLIC_URL.\n  gg deps add %s/<service> %s\n",
+			name, prefix, project, name)
+	}
+	fmt.Printf("\n  gg resource private %s/%s     makes it private again\n", project, name)
+	return nil
+}
+
+// cmdResourcePrivate takes a bucket's public access away. Idempotent, like the
+// verb that gave it, and it needs no warning first: it only ever closes things.
+func cmdResourcePrivate(ref string) error {
+	project, name, _, err := parseService(ref)
+	if err != nil {
+		return err
+	}
+	var out publicResult
+	path := fmt.Sprintf("/v1/projects/%s/resources/%s/public", project, name)
+	if err := call("DELETE", path, nil, &out); err != nil {
+		return err
+	}
+
+	if out.Sentence != "" {
+		fmt.Printf("%s\n", out.Sentence)
+	}
+	fmt.Printf("\n%s is private again — only its key reads it.\n", name)
+	if len(out.Dependents) > 0 {
+		fmt.Printf("%s no longer get %s_PUBLIC_URL, and are restarting without it.\n",
+			strings.Join(out.Dependents, ", "), envPrefix(name))
+	}
+	// Said because it is the thing a reader assumes the opposite of: closing the
+	// bucket does not recall an address, or anything fetched through it.
+	fmt.Printf("\nAnything already fetched while it was public stays fetched.\n")
+	return nil
+}
+
 // ---- backups ------------------------------------------------------------
 
 // backupObject mirrors the API's shape: the key's basename is a UTC timestamp,
