@@ -530,6 +530,19 @@ func TestTheRunLineSaysWhenAndHowLong(t *testing.T) {
 	if got := runLine(running); !strings.HasPrefix(got, "●  └ run 5 running for 5 min") {
 		t.Errorf("running: got %q", got)
 	}
+	// A run that waited for a machine took the time its container ran, which
+	// is what it was billed for — not the time since it was submitted.
+	ran := now.Add(-4*time.Minute - 30*time.Second)
+	waited := jobRow("render", "done", 7)
+	waited.Actual.Run.StartedAt, waited.Actual.Run.ContainerStartedAt, waited.Actual.Run.FinishedAt = &started, &ran, &finished
+	if got, want := runLine(waited), "✓  └ run 7 finished 4m ago, took 30s, exit 0"; got != want {
+		t.Errorf("waited: got %q, want %q", got, want)
+	}
+	since := now.Add(-3 * time.Minute)
+	running.Actual.Run.ContainerStartedAt = &since
+	if got := runLine(running); !strings.HasPrefix(got, "●  └ run 5 running for 3 min") {
+		t.Errorf("running from the container: got %q", got)
+	}
 	pending := jobRow("migrate", "pending", 6)
 	pending.Actual.Message = "ImagePullBackOff"
 	if got, want := runLine(pending), "◐  └ run 6 pending: ImagePullBackOff"; got != want {

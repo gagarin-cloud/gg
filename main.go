@@ -668,9 +668,14 @@ type runState struct {
 	Phase string `json:"phase"`
 	// ExitCode is what the process returned, once it has; nil for a run the
 	// platform stopped rather than one that stopped itself.
-	ExitCode   *int       `json:"exit_code"`
-	StartedAt  *time.Time `json:"started_at"`
-	FinishedAt *time.Time `json:"finished_at"`
+	ExitCode *int `json:"exit_code"`
+	// StartedAt is when the run was picked up — about when it was submitted,
+	// so it includes waiting for a machine and pulling the image.
+	StartedAt *time.Time `json:"started_at"`
+	// ContainerStartedAt is when its process began, nil until it has. It is
+	// where the run's bill starts, and so where its duration does.
+	ContainerStartedAt *time.Time `json:"container_started_at"`
+	FinishedAt         *time.Time `json:"finished_at"`
 }
 
 func cmdStatus(ref string) error {
