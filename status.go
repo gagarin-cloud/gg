@@ -576,15 +576,25 @@ func runName(s serviceStatus, r *runState) string {
 
 // runDuration is how long a run took, or has been going. Seconds under two
 // minutes, then minutes; nothing is allowed past an hour.
+//
+// Counted from the container's start, which is where the run is billed from:
+// a run that waited two minutes for the autoscaler to add a machine and then
+// ran for four took four, and saying six would make the duration and the bill
+// disagree. The submission time stands in only when the control plane does
+// not report a container start — an older engine, or a run that never got one.
 func runDuration(r *runState, now time.Time) string {
-	if r.StartedAt == nil {
+	start := r.ContainerStartedAt
+	if start == nil {
+		start = r.StartedAt
+	}
+	if start == nil {
 		return ""
 	}
 	end := now
 	if r.FinishedAt != nil {
 		end = *r.FinishedAt
 	}
-	secs := int(end.Sub(*r.StartedAt).Round(time.Second).Seconds())
+	secs := int(end.Sub(*start).Round(time.Second).Seconds())
 	if secs < 0 {
 		secs = 0
 	}
