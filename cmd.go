@@ -1013,8 +1013,12 @@ a download, a static site's assets. Anything a user uploaded and expects to
 stay theirs belongs in a private bucket, behind your own code.
 
 What to know before relying on it:
-  - Plain links and <img> work. A browser's cross-origin fetch does not:
-    there is no CORS configuration.
+  - Browsers on any site can read it: making it public also sets a CORS
+    rule (any origin, GET and HEAD only, no credentials), so fetch(),
+    web fonts, ES modules and <img crossorigin> work. It adds no exposure
+    and writes still need the key. ` + "`gg resource private`" + ` removes
+    it; a bucket made public before CORS existed gets it by running
+    ` + "`gg resource public`" + ` again. You cannot set CORS yourself.
   - Egress is free today and not metered per bucket, but a public bucket
     can be hot. A heavy-traffic one is worth telling whoever pays.
   - Making it private again closes the door; it cannot take back anything
