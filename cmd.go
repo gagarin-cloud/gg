@@ -868,7 +868,8 @@ func newResourceCmd() *cobra.Command {
 		Short: "databases and the like: what a project has, rather than what it runs",
 	}
 	cmd.AddCommand(newResourceAddCmd(), newResourceSecretsCmd(), newResourceRotateCmd(),
-		newResourceBackupsCmd(), newResourceBackupCmd(), newResourceRestoreCmd())
+		newResourceBackupsCmd(), newResourceBackupCmd(), newResourceRestoreCmd(),
+		newResourcePublicCmd(), newResourcePrivateCmd())
 	return cmd
 }
 
@@ -903,7 +904,8 @@ func newResourceAddCmd() *cobra.Command {
              the credentials and endpoint, so you get <NAME>_ENDPOINT,
              <NAME>_REGION, <NAME>_BUCKET, <NAME>_ACCESS_KEY_ID and
              <NAME>_SECRET_ACCESS_KEY. Every S3 client library works. The
-             bucket is private and reached over the internet; there is no
+             bucket is private until ` + "`gg resource public`" + ` says
+             otherwise, and reached over the internet; there is no
              container, so --size and --storage are refused.
   external   Something gagarin does NOT run: an OpenAI account, a Stripe
              key, a bucket elsewhere. It holds the values you give it and
@@ -984,6 +986,72 @@ is the credentials and a line on the graph saying who uses them.`,
 		"a value an external publishes, K=V (repeatable).\nPrefer --env-file: this goes into your shell history",
 		"read an external's values from KEY=VALUE lines\n(repeatable; later files win, --env wins over all files)")
 	return cmd
+}
+
+func newResourcePublicCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "public PROJECT/NAME",
+		Short: "make an s3 bucket listable and readable by anyone",
+		Long: `Open a bucket to the internet, for reading.
+
+An s3 resource is private: only the credentials it publishes can touch it.
+This makes the WHOLE bucket listable and readable by anyone who has its
+address, with no key. Listing means every object name in it is visible, not
+only the ones you meant to link to. Writing is not opened — that still
+needs the key, and so does deleting.
+
+  gg resource public shop/files
+
+prints the bucket's address, https://<bucket>.s3.fr-par.scw.cloud. Every
+service that declares the resource also gets <NAME>_PUBLIC_URL while the
+bucket is public — FILES_PUBLIC_URL for one called files — and is
+restarted to pick it up. ` + "`gg status`" + ` lists the address among the
+project's domains.
+
+Only make public what is genuinely meant to be public: images for a page,
+a download, a static site's assets. Anything a user uploaded and expects to
+stay theirs belongs in a private bucket, behind your own code.
+
+What to know before relying on it:
+  - Plain links and <img> work. A browser's cross-origin fetch does not:
+    there is no CORS configuration.
+  - Egress is free today and not metered per bucket, but a public bucket
+    can be hot. A heavy-traffic one is worth telling whoever pays.
+  - Making it private again closes the door; it cannot take back anything
+    already fetched.
+
+Needs the editor role and a credential that can deploy. Safe to run twice.
+Only an s3 resource can be public; a service gets an address with
+` + "`gg domain add`" + `. If the platform could not publish it, nothing
+changed and running it again is safe.`,
+		Args: usageArgs(1, 1, "usage: gg resource public PROJECT/NAME\n  e.g. gg resource public shop/files"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourcePublic(args[0])
+		},
+	}
+}
+
+func newResourcePrivateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "private PROJECT/NAME",
+		Short: "make a public s3 bucket private again",
+		Long: `Close a bucket that ` + "`gg resource public`" + ` opened.
+
+After this only the credentials the resource publishes can list or read it.
+Services that declare it lose <NAME>_PUBLIC_URL and are restarted without
+it, so anything of yours that built links from that variable should be
+changed first.
+
+Anything fetched while it was public stays fetched; this stops the next
+request, not the last one.
+
+Safe to run on a bucket that is already private. Needs the editor role and
+a credential that can deploy.`,
+		Args: usageArgs(1, 1, "usage: gg resource private PROJECT/NAME\n  e.g. gg resource private shop/files"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdResourcePrivate(args[0])
+		},
+	}
 }
 
 func newResourceSecretsCmd() *cobra.Command {

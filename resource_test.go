@@ -542,6 +542,128 @@ func TestRotatingWithNoDependentsSaysSo(t *testing.T) {
 	}
 }
 
+// --- public buckets --------------------------------------------------------
+//
+// Opening a bucket discloses every object in it, so these pin what is said
+// about that and that the verbs send exactly the request the platform expects.
+
+// publicServer answers the way the platform does and records each request.
+func publicServer(t *testing.T, resp string) *[]string {
+	t.Helper()
+	var seen []string
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(resp))
+	})
+	return &seen
+}
+
+func TestPublicPutsToThePublicPath(t *testing.T) {
+	seen := publicServer(t, `{"resource":"files","public":true,"url":"https://b.s3.fr-par.scw.cloud",
+	  "dependents":["web","worker"],"sentence":"files is public."}`)
+	out := capture(t, func() {
+		if err := cmdResourcePublic("shop/files"); err != nil {
+			t.Error(err)
+		}
+	})
+	if len(*seen) != 1 || (*seen)[0] != "PUT /v1/projects/shop/resources/files/public" {
+		t.Errorf("requests = %v", *seen)
+	}
+	for _, want := range []string{
+		"https://b.s3.fr-par.scw.cloud",
+		"listed and read by anyone",
+		"Writing still needs the key",
+		"web, worker now get FILES_PUBLIC_URL",
+		"files is public.",
+		"gg resource private shop/files",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q missing from the output:\n%s", want, out)
+		}
+	}
+}
+
+// With no dependents the caller expected something to be handed the address;
+// silence would read as a failure.
+func TestPublicWithNoDependentsSaysSo(t *testing.T) {
+	publicServer(t, `{"resource":"files","public":true,"url":"https://b.s3.fr-par.scw.cloud","dependents":[]}`)
+	out := capture(t, func() {
+		if err := cmdResourcePublic("shop/files"); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "Nothing declares files yet") || !strings.Contains(out, "gg deps add") {
+		t.Errorf("no explanation for why nothing was restarted:\n%s", out)
+	}
+}
+
+// A dashed name is a legal DNS label and an illegal shell variable.
+func TestPublicTranslatesADashedName(t *testing.T) {
+	publicServer(t, `{"resource":"user-files","public":true,"url":"https://b.s3.fr-par.scw.cloud","dependents":["web"]}`)
+	out := capture(t, func() {
+		if err := cmdResourcePublic("shop/user-files"); err != nil {
+			t.Error(err)
+		}
+	})
+	if !strings.Contains(out, "USER_FILES_PUBLIC_URL") {
+		t.Errorf("the prefix was not translated:\n%s", out)
+	}
+}
+
+// A refusal changed nothing, so the exposure warning must not appear above or
+// instead of it: it would read as though the bucket had been opened.
+func TestPublicRefusalPrintsNoExposureWarning(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":{"code":"not_a_bucket","message":"only an s3 resource can be public"}}`))
+	})
+	var err error
+	out := capture(t, func() { err = cmdResourcePublic("shop/db") })
+	if err == nil {
+		t.Fatal("a refusal was not an error")
+	}
+	if strings.Contains(out, "anyone") {
+		t.Errorf("a refused request warned of an exposure that did not happen:\n%s", out)
+	}
+}
+
+func TestPrivateDeletesThePublicPath(t *testing.T) {
+	seen := publicServer(t, `{"resource":"files","public":false,"url":"","dependents":["web"],
+	  "sentence":"files is private."}`)
+	out := capture(t, func() {
+		if err := cmdResourcePrivate("shop/files"); err != nil {
+			t.Error(err)
+		}
+	})
+	if len(*seen) != 1 || (*seen)[0] != "DELETE /v1/projects/shop/resources/files/public" {
+		t.Errorf("requests = %v", *seen)
+	}
+	for _, want := range []string{"files is private again", "web no longer get FILES_PUBLIC_URL", "files is private."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q missing from the output:\n%s", want, out)
+		}
+	}
+}
+
+// Both verbs go through the same reference parser as the rest, and refuse a
+// malformed one before any request is made.
+func TestPublicAndPrivateRefuseABadRefBeforeTheRequest(t *testing.T) {
+	seen := publicServer(t, `{}`)
+	for _, ref := range []string{"files", "shop/", "shop/Files"} {
+		if err := cmdResourcePublic(ref); err == nil {
+			t.Errorf("public accepted %q", ref)
+		}
+		if err := cmdResourcePrivate(ref); err == nil {
+			t.Errorf("private accepted %q", ref)
+		}
+	}
+	if len(*seen) != 0 {
+		t.Errorf("a malformed ref reached the wire: %v", *seen)
+	}
+}
+
 // --- restore: accepted by the platform, followed by gg ---------------------
 //
 // The platform resolves the backup and its type, creates the resource and
