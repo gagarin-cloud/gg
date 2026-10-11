@@ -68,7 +68,8 @@ func bindRunFlags(fs *pflag.FlagSet) *runFlagVars {
 	fs.BoolVar(&v.f.detach, "detach", false, "submit the run and return; \"gg status\" reports how it\nends")
 	fs.StringVar(&v.timeout, "timeout", "", "stop the run if it has not finished after `DURATION`, e.g. 45s,\n"+
 		"5m, 1h; at most 60m, the default. Counted from when the\n"+
-		"run is submitted, so pulling the image uses some of it.\n"+
+		"run gets a machine, so pulling the image uses some of it\n"+
+		"but waiting for a machine does not.\n"+
 		"Omit to keep the job's current timeout")
 	fs.StringVar(&v.schedule, "schedule", "", "run it on a schedule: a 5-field cron expression such as\n"+
 		"\"0 3 * * *\", or @hourly, @daily, @weekly, @monthly,\n"+

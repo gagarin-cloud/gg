@@ -382,7 +382,9 @@ code — so a pipeline can branch on it as if it had run the script itself.
 ended and "gg logs" prints what it wrote.
 
 A run that fails is not retried. A run is stopped when --timeout has passed,
-counted from when it is submitted, so pulling the image uses some of it. The
+counted from when it gets a machine, so pulling the image uses some of it but
+waiting for a machine does not. A run that never gets one is given up on after
+its timeout plus thirty minutes; nothing ran and nothing is billed. The
 timeout is at most sixty minutes, and sixty minutes unless you give one; omit
 --timeout and the job keeps the one its last run was given.
 Environment is replaced wholesale, as it is for a deploy; the connection
@@ -396,7 +398,8 @@ scheduled job runs nothing when you submit it, so gg does not wait, whatever
 --detach says; "gg status" shows the next run and how the last one ended.
 Runs never overlap: a firing while the last run is still going waits, and
 starts when that run ends; several missed that way start once.
-Each run is billed for the time it ran, and a waiting schedule costs nothing.
+Each run is billed for the time it ran, from when its container starts, and a
+waiting schedule costs nothing.
 On a job that is already scheduled, "gg run" with an image updates what the
 next firing runs; --schedule changes when, and --tz alone changes the zone.
 Giving --schedule to a one-shot job makes it a scheduled one.
