@@ -368,6 +368,7 @@ func newRunCmd() *cobra.Command {
   gg run shop/migrate migrate:v3
   gg run shop/migrate migrate:v3 --deps db --env-file .env
   gg run shop/migrate migrate:v3 --timeout 5m
+  gg run shop/import import:v1 --ttl 30m
   gg run shop/report report:v2 --schedule "0 3 * * *" --tz Europe/Berlin
 
 A job is a service that runs to completion instead of serving: a database
@@ -387,6 +388,11 @@ waiting for a machine does not. A run that never gets one is given up on after
 its timeout plus thirty minutes; nothing ran and nothing is billed. The
 timeout is at most sixty minutes, and sixty minutes unless you give one; omit
 --timeout and the job keeps the one its last run was given.
+A finished run is kept for --ttl, counted from when it ended, so its status
+and logs can still be read; at most eight hours, and eight hours unless you
+give one. Then a one-shot job is removed along with its run, and its name is
+free again; a scheduled job stays, and only that firing is removed. Omit --ttl
+and the job keeps the one it has.
 Environment is replaced wholesale, as it is for a deploy; the connection
 variables of any resource the job reaches are added by the platform each
 run and never stored against the revision.
