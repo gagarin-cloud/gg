@@ -33,6 +33,9 @@ type runFlags struct {
 	// timeout is the run's own limit, in whole seconds, when --timeout was
 	// given; zero means it was not, and the job keeps the one it has.
 	timeout int
+	// ttl is how long a finished run is kept, in whole seconds, when --ttl was
+	// given; zero means it was not, and the job keeps the one it has.
+	ttl int
 	// schedule is a cron expression, and timeZone the IANA zone it is read in.
 	// Empty means the flag was not given and the job keeps what it has.
 	schedule string
@@ -43,6 +46,7 @@ type runFlagVars struct {
 	f        *runFlags
 	fs       *pflag.FlagSet
 	timeout  string
+	ttl      string
 	schedule string
 	tz       string
 	*envFlagVars
@@ -71,6 +75,10 @@ func bindRunFlags(fs *pflag.FlagSet) *runFlagVars {
 		"run gets a machine, so pulling the image uses some of it\n"+
 		"but waiting for a machine does not.\n"+
 		"Omit to keep the job's current timeout")
+	fs.StringVar(&v.ttl, "ttl", "", "keep a finished run for `DURATION` after it ends, e.g. 30m,\n"+
+		"2h; 1m to 8h, the default. A one-shot job is removed\n"+
+		"with its run; a scheduled job keeps going and each firing\n"+
+		"is removed on its own. Omit to keep the job's current ttl")
 	fs.StringVar(&v.schedule, "schedule", "", "run it on a schedule: a 5-field cron expression such as\n"+
 		"\"0 3 * * *\", or @hourly, @daily, @weekly, @monthly,\n"+
 		"@yearly. Nothing runs now and gg does not wait. A schedule\n"+
@@ -102,6 +110,33 @@ func parseTimeout(s string) (int, error) {
 	}
 	if secs > maxRunTimeout {
 		return 0, fmt.Errorf("--timeout %s is over the 60m limit on a run", s)
+	}
+	return secs, nil
+}
+
+// The platform's bounds on how long a finished run is kept, in seconds.
+const (
+	minRunTTL = 60
+	maxRunTTL = 8 * 60 * 60
+)
+
+// parseTTL turns --ttl into whole seconds, refusing what the platform would:
+// under a minute, over eight hours, or a fraction of a second. The minute is
+// so a run cannot be removed between two of gg's reads of it while it waits.
+func parseTTL(s string) (int, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("--ttl %q is not a duration; write it like 30m, 2h or 8h", s)
+	}
+	if d%time.Second != 0 {
+		return 0, fmt.Errorf("--ttl %s is not a whole number of seconds", s)
+	}
+	secs := int(d / time.Second)
+	if secs < minRunTTL {
+		return 0, fmt.Errorf("--ttl %s is under the minute a finished run is kept at least", s)
+	}
+	if secs > maxRunTTL {
+		return 0, fmt.Errorf("--ttl %s is over the 8h a finished run may be kept", s)
 	}
 	return secs, nil
 }
@@ -161,8 +196,9 @@ func nextRun(expr, zone string, now time.Time) (time.Time, error) {
 	return sched.Next(now.In(loc)), nil
 }
 
-// runBody is the request that submits one run. timeout_seconds is sent only
-// when --timeout was given: absent, the server keeps the job's current one.
+// runBody is the request that submits one run. timeout_seconds and
+// ttl_seconds are sent only when --timeout and --ttl were given: absent, the
+// server keeps the job's current ones.
 func runBody(ref, digest string, f *runFlags) map[string]any {
 	body := map[string]any{
 		"kind":   "job",
@@ -178,6 +214,9 @@ func runBody(ref, digest string, f *runFlags) map[string]any {
 	}
 	if f.timeout > 0 {
 		body["timeout_seconds"] = f.timeout
+	}
+	if f.ttl > 0 {
+		body["ttl_seconds"] = f.ttl
 	}
 	if f.schedule != "" {
 		body["schedule"] = f.schedule
@@ -196,6 +235,11 @@ func (v *runFlagVars) finish() (*runFlags, error) {
 	v.f.env = env
 	if v.timeout != "" {
 		if v.f.timeout, err = parseTimeout(v.timeout); err != nil {
+			return nil, err
+		}
+	}
+	if v.ttl != "" {
+		if v.f.ttl, err = parseTTL(v.ttl); err != nil {
 			return nil, err
 		}
 	}
@@ -326,8 +370,10 @@ func waitForRun(project, name string, revision int) error {
 				s = &st.Services[i]
 			}
 		}
+		// Gone. Not for its time to live: that is at least a minute, four of
+		// gg's reads at the slowest, so a run that ended is seen to end first.
 		if s == nil {
-			return fmt.Errorf("%s is no longer in project %s; it was destroyed while it was running", name, project)
+			return fmt.Errorf("%s is no longer in project %s; it was destroyed while gg was waiting on it", name, project)
 		}
 		run, message = s.Actual.Run, s.Actual.Message
 		phase := "pending"

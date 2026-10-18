@@ -78,6 +78,37 @@ func TestRunBodyCarriesTimeoutOnlyWhenSet(t *testing.T) {
 	}
 }
 
+func TestParseTTL(t *testing.T) {
+	for in, want := range map[string]int{"1m": 60, "60s": 60, "30m": 1800, "2h": 7200, "8h": 28800, "479m60s": 28800} {
+		if got, err := parseTTL(in); err != nil || got != want {
+			t.Errorf("%q: got %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"1s", "59s", "1.5s", "0s", "-1m", "8h1s", "9h", "abc", "90"} {
+		if got, err := parseTTL(in); err == nil {
+			t.Errorf("accepted %q as %d seconds", in, got)
+		}
+	}
+}
+
+func TestRunBodyCarriesTTLOnlyWhenSet(t *testing.T) {
+	fs := pflag.NewFlagSet("run", pflag.ContinueOnError)
+	v := bindRunFlags(fs)
+	if err := fs.Parse([]string{"--ttl", "30m"}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := v.finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runBody("img", "sha256:x", f)["ttl_seconds"]; !reflect.DeepEqual(got, 1800) {
+		t.Errorf("ttl_seconds = %#v, want 1800", got)
+	}
+	if _, ok := runBody("img", "sha256:x", &runFlags{env: map[string]string{}})["ttl_seconds"]; ok {
+		t.Error("ttl_seconds sent when --ttl was not given")
+	}
+}
+
 func TestParseSchedule(t *testing.T) {
 	for _, tc := range []struct {
 		in      string

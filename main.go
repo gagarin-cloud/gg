@@ -676,6 +676,9 @@ type runState struct {
 	// where the run's bill starts, and so where its duration does.
 	ContainerStartedAt *time.Time `json:"container_started_at"`
 	FinishedAt         *time.Time `json:"finished_at"`
+	// Expired is a scheduled job's firing that its time to live has removed
+	// from the cluster; the rest is the platform's record of how it went.
+	Expired bool `json:"expired"`
 }
 
 func cmdStatus(ref string) error {
