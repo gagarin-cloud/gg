@@ -389,8 +389,8 @@ its timeout plus thirty minutes; nothing ran and nothing is billed. The
 timeout is at most sixty minutes, and sixty minutes unless you give one; omit
 --timeout and the job keeps the one its last run was given.
 A finished run is kept for --ttl, counted from when it ended, so its status
-and logs can still be read; at most eight hours, and eight hours unless you
-give one. Then a one-shot job is removed along with its run, and its name is
+and logs can still be read; at least a minute, at most eight hours, and eight
+hours unless you give one. Then a one-shot job is removed along with its run, and its name is
 free again; a scheduled job stays, and only that firing is removed. Omit --ttl
 and the job keeps the one it has.
 Environment is replaced wholesale, as it is for a deploy; the connection

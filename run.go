@@ -76,7 +76,7 @@ func bindRunFlags(fs *pflag.FlagSet) *runFlagVars {
 		"but waiting for a machine does not.\n"+
 		"Omit to keep the job's current timeout")
 	fs.StringVar(&v.ttl, "ttl", "", "keep a finished run for `DURATION` after it ends, e.g. 30m,\n"+
-		"2h; at most 8h, the default. A one-shot job is removed\n"+
+		"2h; 1m to 8h, the default. A one-shot job is removed\n"+
 		"with its run; a scheduled job keeps going and each firing\n"+
 		"is removed on its own. Omit to keep the job's current ttl")
 	fs.StringVar(&v.schedule, "schedule", "", "run it on a schedule: a 5-field cron expression such as\n"+
@@ -116,12 +116,13 @@ func parseTimeout(s string) (int, error) {
 
 // The platform's bounds on how long a finished run is kept, in seconds.
 const (
-	minRunTTL = 1
+	minRunTTL = 60
 	maxRunTTL = 8 * 60 * 60
 )
 
 // parseTTL turns --ttl into whole seconds, refusing what the platform would:
-// under a second, over eight hours, or a fraction of a second.
+// under a minute, over eight hours, or a fraction of a second. The minute is
+// so a run cannot be removed between two of gg's reads of it while it waits.
 func parseTTL(s string) (int, error) {
 	d, err := time.ParseDuration(s)
 	if err != nil {
@@ -132,7 +133,7 @@ func parseTTL(s string) (int, error) {
 	}
 	secs := int(d / time.Second)
 	if secs < minRunTTL {
-		return 0, fmt.Errorf("--ttl %s is under one second", s)
+		return 0, fmt.Errorf("--ttl %s is under the minute a finished run is kept at least", s)
 	}
 	if secs > maxRunTTL {
 		return 0, fmt.Errorf("--ttl %s is over the 8h a finished run may be kept", s)
@@ -369,12 +370,10 @@ func waitForRun(project, name string, revision int) error {
 				s = &st.Services[i]
 			}
 		}
-		// Gone: destroyed, or — with a --ttl shorter than gg's wait between
-		// reads — removed for having ended before gg saw it end. Either way
-		// the outcome is not knowable from here any more, so not a success.
+		// Gone. Not for its time to live: that is at least a minute, four of
+		// gg's reads at the slowest, so a run that ended is seen to end first.
 		if s == nil {
-			return fmt.Errorf("%s is no longer in project %s: it was destroyed, or its ttl ran out before gg saw how the run ended\n"+
-				"  hint: give it a --ttl of a few minutes or more when you wait on it", name, project)
+			return fmt.Errorf("%s is no longer in project %s; it was destroyed while gg was waiting on it", name, project)
 		}
 		run, message = s.Actual.Run, s.Actual.Message
 		phase := "pending"

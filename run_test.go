@@ -79,12 +79,12 @@ func TestRunBodyCarriesTimeoutOnlyWhenSet(t *testing.T) {
 }
 
 func TestParseTTL(t *testing.T) {
-	for in, want := range map[string]int{"1s": 1, "30m": 1800, "2h": 7200, "8h": 28800, "479m60s": 28800} {
+	for in, want := range map[string]int{"1m": 60, "60s": 60, "30m": 1800, "2h": 7200, "8h": 28800, "479m60s": 28800} {
 		if got, err := parseTTL(in); err != nil || got != want {
 			t.Errorf("%q: got %d, %v; want %d", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"1.5s", "0s", "-1m", "8h1s", "9h", "abc", "90"} {
+	for _, in := range []string{"1s", "59s", "1.5s", "0s", "-1m", "8h1s", "9h", "abc", "90"} {
 		if got, err := parseTTL(in); err == nil {
 			t.Errorf("accepted %q as %d seconds", in, got)
 		}
