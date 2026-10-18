@@ -369,8 +369,12 @@ func waitForRun(project, name string, revision int) error {
 				s = &st.Services[i]
 			}
 		}
+		// Gone: destroyed, or — with a --ttl shorter than gg's wait between
+		// reads — removed for having ended before gg saw it end. Either way
+		// the outcome is not knowable from here any more, so not a success.
 		if s == nil {
-			return fmt.Errorf("%s is no longer in project %s; it was destroyed while it was running", name, project)
+			return fmt.Errorf("%s is no longer in project %s: it was destroyed, or its ttl ran out before gg saw how the run ended\n"+
+				"  hint: give it a --ttl of a few minutes or more when you wait on it", name, project)
 		}
 		run, message = s.Actual.Run, s.Actual.Message
 		phase := "pending"

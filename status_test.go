@@ -797,3 +797,21 @@ func TestNoScheduledLegendWithoutAScheduledJob(t *testing.T) {
 		t.Errorf("legend mentions a state nothing is in:\n%s", out)
 	}
 }
+
+// A firing its ttl removed is reported from the platform's record: how it went
+// is unchanged by the cleanup, and the line says it is no longer in the cluster.
+func TestAnExpiredFiringReadsAsHowItEnded(t *testing.T) {
+	started := time.Now().Add(-3 * time.Hour)
+	finished := started.Add(41 * time.Second)
+	row := scheduledRow("0 3 * * *", &runState{Revision: 3, Phase: "done", StartedAt: &started, FinishedAt: &finished, Expired: true}, nil)
+	if got := state(row); got != "done" {
+		t.Errorf("state %q, want done", got)
+	}
+	if got := runLine(row); !strings.HasSuffix(got, "exit 0 (removed after its ttl)") {
+		t.Errorf("got %q", got)
+	}
+	row.Actual.Run.Phase = "failed"
+	if got := state(row); got != "failing" {
+		t.Errorf("an expired failure still reads as failing: %q", got)
+	}
+}

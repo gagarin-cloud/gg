@@ -550,6 +550,11 @@ func runLine(s serviceStatus) string {
 			text += ": " + s.Actual.Message
 		}
 	}
+	// Said, because `gg logs` still has what it wrote but nothing in the
+	// cluster does, and a reader looking for the pod should not go looking.
+	if r.Expired {
+		text += " (removed after its ttl)"
+	}
 	return mark + "  └ " + text + nextNote(s, time.Now(), false)
 }
 
