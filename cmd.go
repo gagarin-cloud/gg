@@ -97,7 +97,6 @@ Environment (overrides the file; meant for CI):
 		newResourceCmd(),
 		newConnectCmd(),
 		newDomainCmd(),
-		newAlertsCmd(),
 		newReferralCmd(),
 		newRegistryCmd(),
 		newVersionCmd(),
@@ -1371,71 +1370,6 @@ runs, and its values are "gg resource secrets".`,
 // newDomainCmd is its own verb rather than a flag on deploy, because a domain is
 // a claim on a name rather than part of the artifact a deploy produces — and a
 // flag could release one by being forgotten, which is the failure nobody sees.
-func newAlertsCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "alerts",
-		Short: "be told when a service goes down",
-		Long: `Alerts arrive as notifications from the console, on the devices you allow.
-
-Turn them on in the console: open the project's alerts at
-https://my.gagarin.cloud/projects/PROJECT/alerts on the phone that should buzz
-and flip the switch. That allows notifications on the device and opts you in,
-in one step; a terminal cannot do the first half. On an iPhone, add the console
-to the Home Screen first. Then ` + "`gg alerts test PROJECT`" + ` sends one.
-
-You will hear when a service is down for three minutes, when a deploy will not
-start, and when a container crashes and restarts — once when it starts, and
-once when it is over. It is yours alone: each member opts in for themselves.
-
-` + "`gg alerts on PROJECT`" + ` records the opt-in only, for a member who already has a
-device; ` + "`gg alerts PROJECT`" + ` shows how they stand.`,
-	}
-	cmd.AddCommand(newAlertsOnCmd(), newAlertsTestCmd(), newAlertsOffCmd())
-	// Bare `gg alerts shop` shows how they stand, the way a bare noun lists.
-	cmd.Args = usageArgs(0, 1, "usage: gg alerts PROJECT\n  turn them on in the console: https://my.gagarin.cloud/projects/PROJECT/alerts")
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return cmd.Help()
-		}
-		return cmdAlertsShow(args[0])
-	}
-	return cmd
-}
-
-func newAlertsOnCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "on PROJECT",
-		Short: "record your opt-in (devices are added in the console)",
-		Args: usageArgs(1, 1, "usage: gg alerts on PROJECT\n"+
-			"  e.g. gg alerts on shop"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdAlertsOn(args[0])
-		},
-	}
-}
-
-func newAlertsTestCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "test PROJECT",
-		Short: "send one now, to see it arrive",
-		Args:  usageArgs(1, 1, "usage: gg alerts test PROJECT"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdAlertsTest(args[0])
-		},
-	}
-}
-
-func newAlertsOffCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "off PROJECT",
-		Short: "stop sending alerts to you",
-		Args:  usageArgs(1, 1, "usage: gg alerts off PROJECT"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdAlertsOff(args[0])
-		},
-	}
-}
-
 func newDomainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
