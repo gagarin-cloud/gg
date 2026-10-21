@@ -40,6 +40,9 @@ func cmdRegistryCopy(dest, source string) error {
 	if tag == "" {
 		tag = srcTag
 	}
+	if err := dockerBuildxReady(); err != nil {
+		return err
+	}
 
 	target, err := resolveTarget(project, repo, tag)
 	if err != nil {
