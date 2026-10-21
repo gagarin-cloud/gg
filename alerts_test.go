@@ -90,7 +90,7 @@ func TestAlertsShowOffSaysHowToTurnThemOn(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	for _, want := range []string{"alerts are off for shop", "gg alerts on shop", "no recent notifications"} {
+	for _, want := range []string{"alerts are off for shop", "my.gagarin.cloud/projects/shop/alerts", "no recent notifications"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output is missing %q:\n%s", want, out)
 		}
@@ -178,7 +178,7 @@ func TestAlertsTestAndOffHitTheirRoutes(t *testing.T) {
 
 func TestAlertsTestRefusalsAreExplained(t *testing.T) {
 	for code, want := range map[string]string{
-		"alerts_off": "gg alerts on shop",
+		"alerts_off": "my.gagarin.cloud/projects/shop/alerts",
 		"no_devices": "https://my.gagarin.cloud/projects/shop/alerts",
 	} {
 		fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {

@@ -53,7 +53,7 @@ func cmdAlertsShow(ref string) error {
 	}
 	if !out.Enabled {
 		fmt.Printf("alerts are off for %s\n", project)
-		fmt.Printf("\n  gg alerts on %s     to be told when a service goes down\n", project)
+		printTurnOn(project)
 	} else {
 		fmt.Printf("alerts are on for %s\n", project)
 		fmt.Printf("  %d device(s) receiving them\n", out.Devices)
@@ -84,6 +84,14 @@ func notificationTime(s string) string {
 		return s
 	}
 	return t.Local().Format("2006-01-02 15:04")
+}
+
+// printTurnOn says where alerts are turned on: the console's switch, on the
+// device that should buzz, which allows notifications there and opts the member
+// in at once. `gg alerts on` records only the second half.
+func printTurnOn(project string) {
+	fmt.Printf("\n  Turn them on in the console, on the phone that should buzz:\n  %s\n", alertsPage(project))
+	fmt.Println("  (on an iPhone, add the console to the Home Screen first)")
 }
 
 func printNoDevices(project string) {
@@ -125,7 +133,7 @@ func cmdAlertsTest(ref string) error {
 		if errors.As(err, &ae) {
 			switch ae.Code {
 			case "alerts_off":
-				return fmt.Errorf("alerts are off for %s, so there is nobody to send a test to\n  gg alerts on %s     to turn them on", project, project)
+				return fmt.Errorf("alerts are off for %s, so there is nobody to send a test to\n  turn them on in the console, on the phone that should buzz: %s", project, alertsPage(project))
 			case "no_devices":
 				return fmt.Errorf("you have no device to send a test to\n  open %s in a browser and allow notifications", alertsPage(project))
 			}

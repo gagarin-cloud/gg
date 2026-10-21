@@ -1377,16 +1377,22 @@ func newAlertsCmd() *cobra.Command {
 		Short: "be told when a service goes down",
 		Long: `Alerts arrive as notifications from the console, on the devices you allow.
 
-` + "`gg alerts on PROJECT`" + ` opts you in. You will hear when a service is down for
-three minutes, when a deploy will not start, and when a container crashes and
-restarts — once when it starts, and once when it is over.
+Turn them on in the console: open the project's alerts at
+https://my.gagarin.cloud/projects/PROJECT/alerts on the phone that should buzz
+and flip the switch. That allows notifications on the device and opts you in,
+in one step; a terminal cannot do the first half. On an iPhone, add the console
+to the Home Screen first. Then ` + "`gg alerts test PROJECT`" + ` sends one.
 
-It is yours alone: each member of a project opts in for themselves. A device is
-added from a browser at my.gagarin.cloud, which is where you allow notifications.`,
+You will hear when a service is down for three minutes, when a deploy will not
+start, and when a container crashes and restarts — once when it starts, and
+once when it is over. It is yours alone: each member opts in for themselves.
+
+` + "`gg alerts on PROJECT`" + ` records the opt-in only, for a member who already has a
+device; ` + "`gg alerts PROJECT`" + ` shows how they stand.`,
 	}
 	cmd.AddCommand(newAlertsOnCmd(), newAlertsTestCmd(), newAlertsOffCmd())
 	// Bare `gg alerts shop` shows how they stand, the way a bare noun lists.
-	cmd.Args = usageArgs(0, 1, "usage: gg alerts PROJECT\n  gg alerts on PROJECT to turn them on")
+	cmd.Args = usageArgs(0, 1, "usage: gg alerts PROJECT\n  turn them on in the console: https://my.gagarin.cloud/projects/PROJECT/alerts")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return cmd.Help()
@@ -1399,7 +1405,7 @@ added from a browser at my.gagarin.cloud, which is where you allow notifications
 func newAlertsOnCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "on PROJECT",
-		Short: "turn alerts on for you",
+		Short: "record your opt-in (devices are added in the console)",
 		Args: usageArgs(1, 1, "usage: gg alerts on PROJECT\n"+
 			"  e.g. gg alerts on shop"),
 		RunE: func(cmd *cobra.Command, args []string) error {
