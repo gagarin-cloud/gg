@@ -251,14 +251,30 @@ func cmdLogin(fresh bool, ref string) error {
 	}
 	defer cancel()
 
-	tok, err := conf.DeviceAccessToken(waitCtx, &oauth2.DeviceAuthResponse{
+	da := &oauth2.DeviceAuthResponse{
 		DeviceCode: p.DeviceCode,
 		Interval:   p.Interval,
 		Expiry:     p.ExpiresAt,
-	})
+	}
+	tok, err := conf.DeviceAccessToken(waitCtx, da)
+	// A person at a terminal is on the page that refused their GitHub account
+	// and offers Google; the code is still good, so keep waiting for them. Said
+	// once. x/oauth2 waits an interval before every poll, so asking again is
+	// not a tight loop.
+	for told := false; tty && isGitHubTooNew(err); {
+		if !told {
+			fmt.Printf("\nthat GitHub account is too new for gagarin; the page offers Google instead.\nstill waiting for approval ...\n")
+			told = true
+		}
+		tok, err = conf.DeviceAccessToken(waitCtx, da)
+	}
 	if err != nil {
 		var re *oauth2.RetrieveError
 		switch {
+		case isGitHubTooNew(err):
+			// Not a ruling on the code: it is still pending, and an approval with
+			// Google answers it. Kept, so the next gg login picks it up.
+			return errGitHubTooNew
 		case errors.Is(err, context.DeadlineExceeded) && p.expired():
 			removePendingLogin()
 			return errCodeExpired
@@ -378,6 +394,21 @@ func expiresIn(expiry time.Time) string {
 var errCodeExpired = apiError{Code: "expired_token",
 	Message: "nobody approved this machine before the code expired, so it has been thrown away",
 	Hint:    "run gg login again for a fresh link and code, and pass them on straight away"}
+
+// codeGitHubTooNew is the control plane's answer while a code waits after its
+// human was refused for a GitHub account younger than the minimum. Not
+// RFC 8628's, and not final: the code still takes an approval.
+const codeGitHubTooNew = "github_account_too_new"
+
+var errGitHubTooNew = apiError{Code: codeGitHubTooNew,
+	Message: "your human's GitHub account is younger than gagarin accepts, so it did not sign them in; the code is still waiting",
+	Hint: "ask them to open the same link again and choose Continue with Google, then run gg login;\n" +
+		"  or to come back once the GitHub account is 30 days old"}
+
+func isGitHubTooNew(err error) bool {
+	var re *oauth2.RetrieveError
+	return errors.As(err, &re) && re.ErrorCode == codeGitHubTooNew
+}
 
 // loginError puts the flow's failures in gg's own shape — `[code] message`, and
 // a hint that says what to run — because the RFC's error codes are what an
