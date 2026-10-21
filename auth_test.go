@@ -522,3 +522,70 @@ func TestLoginRejectsAMalformedRef(t *testing.T) {
 		}
 	}
 }
+
+// github_account_too_new is the control plane saying the human's GitHub account
+// was refused and the code is still waiting. Not a ruling: the request is kept,
+// the agent is told what to say, and an approval with Google collects it.
+func TestLoginForAnAgentToldTheGitHubAccountIsTooNewKeepsTheRequest(t *testing.T) {
+	d := startLogin(t)
+	if out, err := runLogin(t); err != nil {
+		t.Fatalf("first run: %v\n%s", err, out)
+	}
+
+	d.reply("github_account_too_new")
+	out, err := runLogin(t)
+	if err == nil {
+		t.Fatalf("a refused sign-in returned no error, so gg exits 0 without a credential\n%s", out)
+	}
+	for _, want := range []string{"[github_account_too_new]", "hint: ", "Continue with Google", "still waiting"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not say %q: %v", want, err)
+		}
+	}
+	if !pendingExists(t) {
+		t.Fatal("the request was thrown away, though the code still takes an approval")
+	}
+	assertNoCredentialFile(t)
+
+	// They chose Google and approved: the same code, collected.
+	d.reply("", "")
+	if out, err := runLogin(t); err != nil {
+		t.Fatalf("after the approval: %v\n%s", err, out)
+	}
+	if asks, _ := d.counts(); asks != 1 {
+		t.Errorf("asked for %d codes, want the one", asks)
+	}
+	d.mu.Lock()
+	last := d.pollForms[len(d.pollForms)-1]["device_code"]
+	d.mu.Unlock()
+	if last != "ggd_1" {
+		t.Errorf("collected %q, want the code the human was refused on", last)
+	}
+	if _, err := loadCredentials(); err != nil {
+		t.Errorf("no credential file: %v", err)
+	}
+}
+
+// At a terminal, the person is on the page that offers Google: gg says why once
+// and keeps waiting for them, rather than exiting under their feet.
+func TestLoginAtATerminalToldTheGitHubAccountIsTooNewKeepsWaiting(t *testing.T) {
+	d := startLogin(t, "github_account_too_new", "github_account_too_new", "")
+	setTerminal(t, true)
+
+	out, err := runLogin(t)
+	if err != nil {
+		t.Fatalf("gg login failed: %v\n%s", err, out)
+	}
+	if n := strings.Count(out, "too new for gagarin"); n != 1 {
+		t.Errorf("said it %d times, want once:\n%s", n, out)
+	}
+	if !strings.Contains(out, "offers Google") {
+		t.Errorf("does not say what to do:\n%s", out)
+	}
+	if _, polls := d.counts(); polls != 3 {
+		t.Errorf("polled %d times, want 3", polls)
+	}
+	if _, err := loadCredentials(); err != nil {
+		t.Errorf("no credential file: %v", err)
+	}
+}
