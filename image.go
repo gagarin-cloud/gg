@@ -117,6 +117,9 @@ func cmdBuild(ref string, f buildFlags) error {
 	if err != nil {
 		return err
 	}
+	if err := dockerReady(true); err != nil {
+		return err
+	}
 	target, err := resolveTarget(project, repo, tag)
 	if err != nil {
 		return err
@@ -171,6 +174,9 @@ func cmdPush(ref string) error {
 	if tag == "" {
 		return fmt.Errorf("which tag? a push names one image, and gg will not guess\n  hint: gg push %s/%s:<tag>, or gg build --push to do both", project, repo)
 	}
+	if err := dockerReady(true); err != nil {
+		return err
+	}
 	target, err := resolveTarget(project, repo, tag)
 	if err != nil {
 		return err
@@ -186,7 +192,7 @@ func pushImage(t *registryTarget, next bool) (string, error) {
 	fmt.Printf("→ pushing %s\n", t.short())
 	out, err := runCapture("docker", "push", t.ref)
 	if err != nil {
-		return "", fmt.Errorf("docker push failed: %w\n  hint: run `gg registry login` first", err)
+		return "", pushFailure(out, err)
 	}
 	digest := validDigest(parseDigest(out))
 	fmt.Printf("\n  %s\n", t.short())
@@ -216,6 +222,11 @@ func cmdShip(ref string, b buildFlags, d *deployFlags) error {
 	}
 	if !repoRe.MatchString(service) {
 		return fmt.Errorf("%q cannot be a repository name, so gg cannot pick one for it\n  hint: gg build %s/<repo> and gg deploy %s/%s separately", service, project, project, service)
+	}
+	// Before resolveTarget, which is the first request: a machine that cannot
+	// build should hear so before anything is asked of the control plane.
+	if err := dockerReady(true); err != nil {
+		return err
 	}
 	target, err := resolveTarget(project, service, "")
 	if err != nil {

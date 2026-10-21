@@ -902,6 +902,10 @@ func kindOf(project, name string) (string, error) {
 }
 
 func cmdRegistryLogin() error {
+	// Only the client: a login writes a credential and does not need the daemon.
+	if err := dockerReady(false); err != nil {
+		return err
+	}
 	registry := os.Getenv("GAGARIN_REGISTRY")
 	if registry == "" {
 		var who struct {
