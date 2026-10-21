@@ -263,7 +263,7 @@ func cmdLogin(fresh bool, ref string) error {
 	// not a tight loop.
 	for told := false; tty && isGitHubTooNew(err); {
 		if !told {
-			fmt.Printf("\nthat GitHub account is too new for gagarin; the page offers Google instead.\nstill waiting for approval ...\n")
+			fmt.Printf("\nthat GitHub account is too new for Gagarin; the page offers Google instead.\nstill waiting for approval ...\n")
 			told = true
 		}
 		tok, err = conf.DeviceAccessToken(waitCtx, da)
@@ -304,7 +304,7 @@ func printApprovalRequest(p *pendingLogin) {
 		link = p.VerificationURI
 	}
 	link = withRef(link, p.Ref)
-	fmt.Printf(`this machine is asking for access to gagarin as "%s".
+	fmt.Printf(`this machine is asking for access to Gagarin as "%s".
 
 Tell your human to open this link, sign in with GitHub or Google, and approve:
 
@@ -401,7 +401,7 @@ var errCodeExpired = apiError{Code: "expired_token",
 const codeGitHubTooNew = "github_account_too_new"
 
 var errGitHubTooNew = apiError{Code: codeGitHubTooNew,
-	Message: "your human's GitHub account is younger than gagarin accepts, so it did not sign them in; the code is still waiting",
+	Message: "your human's GitHub account is younger than Gagarin accepts, so it did not sign them in; the code is still waiting",
 	Hint: "ask them to open the same link again and choose Continue with Google, then run gg login;\n" +
 		"  or to come back once the GitHub account is 30 days old"}
 

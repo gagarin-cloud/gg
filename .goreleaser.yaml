@@ -52,7 +52,7 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Casks
     homepage: "https://gagarin.cloud"
-    description: "The gagarin CLI — deploy and operate applications on gagarin"
+    description: "The Gagarin CLI — deploy and operate applications on Gagarin"
     license: "MIT"
     hooks:
       post:
@@ -75,7 +75,7 @@ scoops:
     # Scoop reads manifests from bucket/ when that directory exists.
     directory: bucket
     homepage: "https://gagarin.cloud"
-    description: "The gagarin CLI - deploy and operate applications on gagarin"
+    description: "The Gagarin CLI - deploy and operate applications on Gagarin"
     license: "MIT"
 
 # Opens a pull request against microsoft/winget-pkgs on every release. Unlike
@@ -91,8 +91,8 @@ winget:
     homepage: "https://gagarin.cloud"
     short_description: "Deploy and operate applications on gagarin"
     description: |
-      gg deploys and operates applications on gagarin, a cloud your coding
-      agent can drive and you can read. It is a thin wrapper over the gagarin
+      gg deploys and operates applications on Gagarin, a cloud your coding
+      agent can drive and you can read. It is a thin wrapper over the Gagarin
       API and holds no state of its own beyond a credential file.
     license: "MIT"
     license_url: "https://github.com/gagarin-cloud/gg/blob/main/LICENSE"

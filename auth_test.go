@@ -576,7 +576,7 @@ func TestLoginAtATerminalToldTheGitHubAccountIsTooNewKeepsWaiting(t *testing.T) 
 	if err != nil {
 		t.Fatalf("gg login failed: %v\n%s", err, out)
 	}
-	if n := strings.Count(out, "too new for gagarin"); n != 1 {
+	if n := strings.Count(out, "too new for Gagarin"); n != 1 {
 		t.Errorf("said it %d times, want once:\n%s", n, out)
 	}
 	if !strings.Contains(out, "offers Google") {

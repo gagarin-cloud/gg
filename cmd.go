@@ -45,8 +45,8 @@ func atLeastArgs(min int, usage string) cobra.PositionalArgs {
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "gg",
-		Short: "The gagarin CLI",
-		Long: `gg is a thin wrapper over the gagarin API. It holds no state of its own
+		Short: "The Gagarin CLI",
+		Long: `gg is a thin wrapper over the Gagarin API. It holds no state of its own
 beyond an access token: anything gg can do, the API can do — there is no
 second path.
 
@@ -116,7 +116,7 @@ func newLoginCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "get this machine access; a human approves it in a browser",
-		Long: `Get this machine access to gagarin. The same command every time: first
+		Long: `Get this machine access to Gagarin. The same command every time: first
 machine or fifth, new account or old.
 
   gg login          ask for access, or collect access already asked for
@@ -209,7 +209,7 @@ func newBuildCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "build PROJECT/IMAGE[:TAG]",
 		Short: "build an image into a project's registry space",
-		Long: `Build a container image and name it in a project's space in the gagarin
+		Long: `Build a container image and name it in a project's space in the Gagarin
 registry.
 
 The tag is optional: without one gg mints it from the clock, because most
@@ -217,7 +217,7 @@ of the time nobody cares what a particular build is called. Building does
 not run anything — "gg push" uploads it, "gg deploy" releases it, and
 "gg ship" is all three.
 
-The platform is not yours to choose. gagarin reports what its own nodes
+The platform is not yours to choose. Gagarin reports what its own nodes
 run and the build targets that, because an image built for the wrong
 architecture succeeds here and fails much later at pull time.`,
 		Args: usageArgs(1, 1, "usage: gg build PROJECT/IMAGE[:TAG]\n"+
@@ -235,7 +235,7 @@ func newPushCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "push PROJECT/IMAGE:TAG",
 		Short: "upload an image you have built",
-		Long: `Upload an image to the gagarin registry.
+		Long: `Upload an image to the Gagarin registry.
 
 The tag is required here, unlike on "gg build": a push moves something
 that already exists, and "whichever one I built last" is not a name.
@@ -259,7 +259,7 @@ func newDeployCmd() *cobra.Command {
   gg deploy shop/web:8080 api:v3
 
 The port is the one the container listens on, and defaults to 8080. The
-image is one in this project's own space — gagarin runs nothing from
+image is one in this project's own space — Gagarin runs nothing from
 anywhere else, so bring somebody else's in with "gg registry copy" first.
 
 A new service is private: reachable inside its own project, by name, by
@@ -448,7 +448,7 @@ func newLogsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs PROJECT/SERVICE",
 		Short: "what a service printed, for the last week",
-		Long: `What a service printed, oldest first. gagarin keeps a week of it, including
+		Long: `What a service printed, oldest first. Gagarin keeps a week of it, including
 the lines of containers that crashed, were redeployed or were evicted.
 
 With no flags it is the latest 200 lines. When there are older ones, the last
@@ -499,7 +499,7 @@ delete a project, a service or a database, and no flag turns that on. It
 expires. And it cannot mint another, so a leaked one cannot issue its
 own replacements while you are busy revoking it.
 
-The secret is shown once and gagarin keeps only a hash. Lose it and you
+The secret is shown once and Gagarin keeps only a hash. Lose it and you
 revoke it and mint another; there is no command that reads one back.`,
 	}
 	cmd.AddCommand(newCredentialsListCmd(), newCredentialsCreateCmd(), newCredentialsRevokeCmd())
@@ -807,7 +807,7 @@ rotated. To put those back, roll back the resource itself:
   gg rollback shop/config --to 4
 
 which works for an external, whose values are yours. It is refused for a
-postgres, qdrant, iggy, valkey or s3: gagarin mints those credentials, so
+postgres, qdrant, iggy, valkey or s3: Gagarin mints those credentials, so
 there is no earlier value of yours to go back to.
 
 Rolling back an external changes what every service declaring it holds,
@@ -839,13 +839,13 @@ func newEjectCmd() *cobra.Command {
 else. Owner only.
 
 Not a description of the deployment — the objects themselves, the ones
-gagarin converges toward. The file says what it does not carry and what
+Gagarin converges toward. The file says what it does not carry and what
 to do about each: images you built, the registry pull secret, and the
 data in your volumes.
 
 One more thing it holds back, and this one is a credential. Values that
 came from an external resource are third-party keys somebody else issued
-you: they stay live wherever this file ends up, they are not gagarin's to
+you: they stay live wherever this file ends up, they are not Gagarin's to
 mint or to hand over, and unlike a database password minted for this
 project they are worth something to anyone who reads them. They come out
 as a placeholder naming the resource, and the header lists exactly which
@@ -885,7 +885,7 @@ func newResourceAddCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add PROJECT/NAME TYPE",
 		Short: "provision a resource, e.g. `gg resource add shop/db postgres`",
-		Long: `Provision something gagarin runs for you, rather than something you built.
+		Long: `Provision something Gagarin runs for you, rather than something you built.
 
   postgres   PostgreSQL 17, on a volume. Survives restarts.
   qdrant     A vector database, on a volume. Survives restarts. What
@@ -906,14 +906,14 @@ func newResourceAddCmd() *cobra.Command {
              redis client and every redis:// URL work unchanged.
              --storage is refused, and a restart loses everything in
              it: this is a cache, not a database.
-  s3         An S3-compatible bucket for object storage. gagarin mints
+  s3         An S3-compatible bucket for object storage. Gagarin mints
              the credentials and endpoint, so you get <NAME>_ENDPOINT,
              <NAME>_REGION, <NAME>_BUCKET, <NAME>_ACCESS_KEY_ID and
              <NAME>_SECRET_ACCESS_KEY. Every S3 client library works. The
              bucket is private until ` + "`gg resource public`" + ` says
              otherwise, and reached over the internet; there is no
              container, so --size and --storage are refused.
-  external   Something gagarin does NOT run: an OpenAI account, a Stripe
+  external   Something Gagarin does NOT run: an OpenAI account, a Stripe
              key, a bucket elsewhere. It holds the values you give it and
              publishes them to whatever declares it needs them. No
              container, so --size and --storage are refused.
@@ -1079,7 +1079,7 @@ one call, and it grants the variables as well as the route:
 
 This command is for the cases where something else needs the values: a
 psql on your laptop, checking what an application is being handed, or a
-client running outside gagarin. It prints the same variables the platform
+client running outside Gagarin. It prints the same variables the platform
 injects — named after the resource, so a postgres called db gives DB_URL,
 DB_HOST, DB_PORT, DB_USER, DB_PASSWORD and DB_DATABASE.
 
@@ -1134,7 +1134,7 @@ resource is restarted with them.
   gg resource rotate shop/openai --env-file .env.openai.new  all of them
 
 Who supplies the new value is the only difference between the types. For
-a postgres, qdrant, iggy, valkey or s3, gagarin mints one and --env is refused —
+a postgres, qdrant, iggy, valkey or s3, Gagarin mints one and --env is refused —
 a password you chose is one the running server has never heard of. For an
 external the values are yours, so one of --set, --unset, --env-file or
 --env is required.
@@ -1433,14 +1433,14 @@ func newAlertsOffCmd() *cobra.Command {
 func newDomainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
-		Short: "put a service on the internet, at gagarin's name or your own",
+		Short: "put a service on the internet, at Gagarin's name or your own",
 		Long: `An address is declared, not deployed.
 
-` + "`gg domain add PROJECT/SERVICE`" + ` gives a service the address gagarin
+` + "`gg domain add PROJECT/SERVICE`" + ` gives a service the address Gagarin
 generates for it, and that is what makes it public. Add a name of your own after
 it and the service answers on both.
 
-A name you own is two steps, and only the first is gagarin's. Declaring it here
+A name you own is two steps, and only the first is Gagarin's. Declaring it here
 makes the service answer for that name; making the name resolve here is a record
 you create at your registrar. Neither alone does anything, and nothing can be
 issued over HTTPS until the record exists — Let's Encrypt has to reach the domain
@@ -1460,7 +1460,7 @@ func newDomainAddCmd() *cobra.Command {
 		Use:   "add PROJECT/SERVICE [DOMAIN]",
 		Short: "give it an address on the internet",
 		Args: usageArgs(1, 2, "usage: gg domain add PROJECT/SERVICE [DOMAIN]\n"+
-			"  e.g. gg domain add shop/web                     an address from gagarin\n"+
+			"  e.g. gg domain add shop/web                     an address from Gagarin\n"+
 			"       gg domain add shop/web shop.example.com    a name you own"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// No domain is not a missing argument — it is the request for the
@@ -1518,10 +1518,10 @@ func newRegistryCmd() *cobra.Command {
 func newRegistryLoginCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "login",
-		Short: "log docker in to the gagarin registry",
-		Long: "log docker in to the gagarin registry, using the credential this\n" +
+		Short: "log docker in to the Gagarin registry",
+		Long: "log docker in to the Gagarin registry, using the credential this\n" +
 			"machine already holds. `gg login` does this for you; this is here for\n" +
-			"CI, and for when docker was installed after gagarin was.",
+			"CI, and for when docker was installed after Gagarin was.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdRegistryLogin()
@@ -1534,11 +1534,11 @@ func newRegistryCopyCmd() *cobra.Command {
 		Use:   "copy PROJECT/IMAGE[:TAG] SOURCE",
 		Short: "copy an image from another registry into a project's space",
 		Long: `Copy an image somebody else published into a project's own space, so
-gagarin can run it.
+Gagarin can run it.
 
   gg registry copy shop/postgres postgres:17-alpine
 
-gagarin runs images only from its own registry, so this is how anything
+Gagarin runs images only from its own registry, so this is how anything
 you did not build gets in. Do not write a one-line Dockerfile that only
 says FROM; that is the same thing, worse.
 

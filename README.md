@@ -1,9 +1,9 @@
-# gg — the gagarin CLI
+# gg — the Gagarin CLI
 
-`gg` deploys and operates applications on [gagarin](https://gagarin.cloud), a
+`gg` deploys and operates applications on [Gagarin](https://gagarin.cloud), a
 cloud your coding agent can drive and you can read.
 
-It is a thin wrapper over the gagarin API and holds no state of its own beyond a
+It is a thin wrapper over the Gagarin API and holds no state of its own beyond a
 credential file. Anything `gg` can do, the API can do — there is no second path,
 and nothing about your deployment lives in your repository.
 
@@ -75,8 +75,8 @@ gg init shop                   # create a project
 gg ship shop/web:8080          # build the current directory, push it, run it
 gg run shop/migrate migrate:v3 # run an image to completion, wait, exit with its code
 gg run shop/report report:v2 --schedule "0 3 * * *" --tz Europe/Berlin  # or run it on a cron schedule
-gg domain add shop/web         # put it on the internet, at an address gagarin gives you
-gg status shop                 # what gagarin intends, and what the cluster is actually doing
+gg domain add shop/web         # put it on the internet, at an address Gagarin gives you
+gg status shop                 # what Gagarin intends, and what the cluster is actually doing
 gg logs shop/web               # the latest 200 lines; a week is kept, crashed containers included
 gg logs shop/web --since 2h --grep "panic:"
 
@@ -90,7 +90,7 @@ gg connect shop/db                  # that database on 127.0.0.1, for as long as
 gg resource add shop/openai external --env-file .env.openai   # a third-party key as a node on the graph
 gg deps add shop/bot openai         # bot now holds OPENAI_API_KEY
 gg resource rotate shop/openai --env-file .env.new   # new key, and every holder rolls
-gg resource rotate shop/db          # a database: gagarin mints it, no downtime
+gg resource rotate shop/db          # a database: Gagarin mints it, no downtime
 
 gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
 gg alerts on shop                         # opt in to notifications from the console when a service goes down

@@ -169,7 +169,7 @@ func cmdEject(ref, outPath string, withSecrets bool) error {
 	}
 	fmt.Printf("Wrote %s (mode 0600 — it contains your environments in the clear).\n", outPath)
 	fmt.Println("Apply it anywhere with: kubectl apply -f " + outPath)
-	fmt.Println("Read the header first: the images are still in gagarin's registry.")
+	fmt.Println("Read the header first: the images are still in Gagarin's registry.")
 	// Said here as well as in the file, because the two get separated: somebody
 	// pipes this to a colleague, or applies it a month later. Which variables
 	// were held back is in the header, where it can be a checklist; that there
