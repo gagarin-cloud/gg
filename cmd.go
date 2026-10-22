@@ -97,7 +97,6 @@ Environment (overrides the file; meant for CI):
 		newResourceCmd(),
 		newConnectCmd(),
 		newDomainCmd(),
-		newAlertsCmd(),
 		newReferralCmd(),
 		newRegistryCmd(),
 		newVersionCmd(),
@@ -1371,65 +1370,6 @@ runs, and its values are "gg resource secrets".`,
 // newDomainCmd is its own verb rather than a flag on deploy, because a domain is
 // a claim on a name rather than part of the artifact a deploy produces — and a
 // flag could release one by being forgotten, which is the failure nobody sees.
-func newAlertsCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "alerts",
-		Short: "be told when a service goes down",
-		Long: `Alerts arrive as notifications from the console, on the devices you allow.
-
-` + "`gg alerts on PROJECT`" + ` opts you in. You will hear when a service is down for
-three minutes, when a deploy will not start, and when a container crashes and
-restarts — once when it starts, and once when it is over.
-
-It is yours alone: each member of a project opts in for themselves. A device is
-added from a browser at my.gagarin.cloud, which is where you allow notifications.`,
-	}
-	cmd.AddCommand(newAlertsOnCmd(), newAlertsTestCmd(), newAlertsOffCmd())
-	// Bare `gg alerts shop` shows how they stand, the way a bare noun lists.
-	cmd.Args = usageArgs(0, 1, "usage: gg alerts PROJECT\n  gg alerts on PROJECT to turn them on")
-	cmd.RunE = func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return cmd.Help()
-		}
-		return cmdAlertsShow(args[0])
-	}
-	return cmd
-}
-
-func newAlertsOnCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "on PROJECT",
-		Short: "turn alerts on for you",
-		Args: usageArgs(1, 1, "usage: gg alerts on PROJECT\n"+
-			"  e.g. gg alerts on shop"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdAlertsOn(args[0])
-		},
-	}
-}
-
-func newAlertsTestCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "test PROJECT",
-		Short: "send one now, to see it arrive",
-		Args:  usageArgs(1, 1, "usage: gg alerts test PROJECT"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdAlertsTest(args[0])
-		},
-	}
-}
-
-func newAlertsOffCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "off PROJECT",
-		Short: "stop sending alerts to you",
-		Args:  usageArgs(1, 1, "usage: gg alerts off PROJECT"),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmdAlertsOff(args[0])
-		},
-	}
-}
-
 func newDomainCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "domain",
