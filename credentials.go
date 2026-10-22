@@ -146,7 +146,7 @@ func resolveAuth() (api string, secret string, err error) {
 type errNotAuthenticated struct{}
 
 func (errNotAuthenticated) Error() string {
-	return "this machine has no gagarin credentials\n" +
+	return "this machine has no Gagarin credentials\n" +
 		"  to get some: gg login\n" +
 		"  it prints a link and a code for your human, who signs in with GitHub or\n" +
 		"  Google and approves; then run gg login again to collect the credential"

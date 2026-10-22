@@ -151,7 +151,7 @@ func buildImage(t *registryTarget, f buildFlags) error {
 	// this names a path the caller did not type and does not explain that
 	// gagarin runs images and therefore needs one.
 	if _, err := os.Stat(dockerfile); err != nil {
-		return fmt.Errorf("no Dockerfile at %s\n  hint: gagarin runs images, so a service needs a Dockerfile to build one from; say where it is with --file", dockerfile)
+		return fmt.Errorf("no Dockerfile at %s\n  hint: Gagarin runs images, so a service needs a Dockerfile to build one from; say where it is with --file", dockerfile)
 	}
 
 	fmt.Printf("→ building %s for %s\n", t.short(), t.platform)

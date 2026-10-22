@@ -117,7 +117,7 @@ func cmdCredentialsCreate(name string, days int) error {
 	fmt.Println(out.Credential)
 
 	fmt.Fprintf(os.Stderr, `
-That is the only time it is shown, and gagarin stores no copy — it keeps a hash.
+That is the only time it is shown, and Gagarin stores no copy — it keeps a hash.
 If you lose it, revoke it and mint another.
 
 Give it to CI as GAGARIN_TOKEN. For GitHub Actions:

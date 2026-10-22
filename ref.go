@@ -189,7 +189,7 @@ func parseRepoTag(s, project string) (repo, tag string, err error) {
 		}
 		if named != project {
 			return "", "", fmt.Errorf(
-				"%q is an image in %s, and this deploys into %s\n  hint: gagarin runs an image only in the project that holds it",
+				"%q is an image in %s, and this deploys into %s\n  hint: Gagarin runs an image only in the project that holds it",
 				s, named, project)
 		}
 		return repo, tag, nil

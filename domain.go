@@ -173,7 +173,7 @@ func cmdDomainList(ref string) error {
 	}
 	if !found {
 		fmt.Printf("nothing in %s is on the internet\n\n", project)
-		fmt.Printf("  gg domain add %s/web                     an address from gagarin\n", project)
+		fmt.Printf("  gg domain add %s/web                     an address from Gagarin\n", project)
 		fmt.Printf("  gg domain add %s/web shop.example.com    a name you own\n", project)
 	}
 	return nil
