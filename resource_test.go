@@ -85,7 +85,7 @@ func TestExternalOutputTranslatesADashedName(t *testing.T) {
 // never heard of — the control plane refuses it too, but saying so here costs
 // no round trip and names the command that does what they wanted.
 func TestEnvIsRefusedOnAMintedType(t *testing.T) {
-	for _, typ := range []string{"postgres", "valkey", "qdrant", "iggy", "s3"} {
+	for _, typ := range []string{"postgres", "valkey", "qdrant", "iggy", "rabbitmq", "s3"} {
 		err := cmdResourceAdd("shop/db", typ, "", 0, map[string]string{"API_KEY": "x"})
 		if err == nil {
 			t.Fatalf("%s accepted --env", typ)
@@ -506,6 +506,46 @@ func TestRotatingAnIggyDoesNotClaimDataLoss(t *testing.T) {
 	}
 	if strings.Contains(out, "EVENTS_PASSWORD=") {
 		t.Errorf("a value was printed, not just names:\n%s", out)
+	}
+}
+
+// A rabbitmq is replaced on rotation and keeps its data on a volume, so the
+// platform's note is printed rather than a cache's warning.
+func TestRotatingARabbitmqDoesNotClaimDataLoss(t *testing.T) {
+	rotateServer(t, `{"resource":"jobs","type":"rabbitmq","rotated":["JOBS_URL","JOBS_PASSWORD"],"dependents":["worker"],
+	  "restarted":true,"restart_note":"jobs was restarted to read its new credential. Its data is on a volume, so nothing was lost.",
+	  "sentence":"jobs has new credentials, and worker is restarting to pick them up."}`)
+	out := capture(t, func() {
+		if err := cmdResourceRotate("shop/jobs", nil, nil, nil); err != nil {
+			t.Error(err)
+		}
+	})
+	if strings.Contains(out, "held in memory is gone") {
+		t.Errorf("a rabbitmq rotation claimed data loss that did not happen:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing was lost") {
+		t.Errorf("the platform's restart note was not printed:\n%s", out)
+	}
+	if strings.Contains(out, "JOBS_PASSWORD=") {
+		t.Errorf("a value was printed, not just names:\n%s", out)
+	}
+}
+
+// A rabbitmq is not backed up: the platform refuses `gg resource backup` with
+// backup_unsupported, and gg must pass that refusal on, not print "backed up".
+func TestBackupOfARabbitmqIsRefused(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":{"code":"backup_unsupported","message":"shop/jobs: a rabbitmq is not backed up","fix_hint":"publish persistent messages to durable queues"}}`))
+	})
+	var err error
+	out := capture(t, func() { err = cmdResourceBackup("shop/jobs") })
+	if err == nil || !strings.Contains(err.Error(), "backup_unsupported") {
+		t.Errorf("err = %v", err)
+	}
+	if strings.Contains(out, "backed up:") {
+		t.Errorf("a refused backup was reported as taken:\n%s", out)
 	}
 }
 

@@ -806,8 +806,8 @@ rotated. To put those back, roll back the resource itself:
   gg rollback shop/config --to 4
 
 which works for an external, whose values are yours. It is refused for a
-postgres, qdrant, iggy, valkey or s3: Gagarin mints those credentials, so
-there is no earlier value of yours to go back to.
+postgres, qdrant, iggy, rabbitmq, valkey or s3: Gagarin mints those
+credentials, so there is no earlier value of yours to go back to.
 
 Rolling back an external changes what every service declaring it holds,
 and they are restarted for it — so the answer names them. That is the
@@ -901,6 +901,17 @@ func newResourceAddCmd() *cobra.Command {
              <NAME>_HTTP_PORT — and <NAME>_URL is the iggy:// connection
              string the SDKs read, with the root user and its password
              in it. <NAME>_USER and <NAME>_PASSWORD are published too.
+  rabbitmq   RabbitMQ 4.4 with its management plugin, a message broker,
+             on a volume. Survives restarts. Producers publish to
+             exchanges, queues hold the messages until a consumer takes
+             them (AMQP 0-9-1, every RabbitMQ client speaks it). It
+             answers on two ports — AMQP on <NAME>_PORT and the
+             management UI and HTTP API on <NAME>_HTTP_PORT — and
+             <NAME>_URL is the amqp:// URL clients read, user and
+             password in it, on the default vhost (/, written %2F).
+             <NAME>_USER and <NAME>_PASSWORD are published too. Declare
+             queues durable and publish persistent messages for anything
+             that must survive a restart; transient ones do not.
   valkey     An in-memory store speaking the redis protocol — every
              redis client and every redis:// URL work unchanged.
              --storage is refused, and a restart loses everything in
@@ -930,7 +941,9 @@ and ` + "`gg resource restore`" + ` puts one back into a NEW resource. An iggy
 is backed up while it runs, so a backup holds every topic created with
 persisted durability (--durability persisted, in Iggy's own CLI and SDKs)
 completely, and may be missing the newest messages of the rest — the ones
-not yet flushed to disk. Valkey keeps nothing across a restart, by design. See
+not yet flushed to disk. Valkey keeps nothing across a restart, by design,
+and a rabbitmq is not backed up at all: ` + "`gg resource backup`" + ` on one is
+refused (backup_unsupported). See
 ` + "`gg deps add`" + ` for how to connect something to it — that one call opens
 the route and hands over the credentials — and the docs for what all this
 means before you put a client's data in one.
@@ -961,7 +974,7 @@ in a project can already reach the internet; what the declaration grants
 is the credentials and a line on the graph saying who uses them.`,
 		Args: usageArgs(2, 2, "usage: gg resource add PROJECT/NAME TYPE\n"+
 			"  e.g. gg resource add shop/db postgres\n"+
-			"  the types that exist are: postgres, qdrant, iggy, valkey, s3, external"),
+			"  the types that exist are: postgres, qdrant, iggy, rabbitmq, valkey, s3, external"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			e, err := v.finish()
 			if err != nil {
@@ -1133,8 +1146,8 @@ resource is restarted with them.
   gg resource rotate shop/openai --env-file .env.openai.new  all of them
 
 Who supplies the new value is the only difference between the types. For
-a postgres, qdrant, iggy, valkey or s3, Gagarin mints one and --env is refused —
-a password you chose is one the running server has never heard of. For an
+a postgres, qdrant, iggy, rabbitmq, valkey or s3, Gagarin mints one and --env
+is refused — a password you chose is one the running server has never heard of. For an
 external the values are yours, so one of --set, --unset, --env-file or
 --env is required.
 
@@ -1172,6 +1185,10 @@ What happens per type, because the costs are not the same:
              changed, not because the server needs it. Nothing stored is
              lost — a stopping iggy flushes to its volume — so the cost
              is the seconds it is away.
+  rabbitmq   The new password is set on the running server first, then
+             recorded; the pod is replaced because its environment
+             changed. Nothing on the volume is lost, so the cost is the
+             seconds it is away.
   valkey     The password is read when the server starts, so the pod is
              replaced — which empties the cache. That is what a restart
              of a valkey always does, but it is worth knowing before you
@@ -1224,6 +1241,7 @@ func newResourceBackupsCmd() *cobra.Command {
 		Short: "list its stored backups, newest last",
 		Long: `Every stored backup of this resource. Postgres, qdrant and iggy are
 backed up nightly and kept fourteen days; the newest is the last line.
+Valkey and rabbitmq are not backed up, so they have none.
 
 An iggy is backed up while it runs, so a backup holds every topic created
 with persisted durability (--durability persisted, in Iggy's own CLI and
@@ -1247,7 +1265,10 @@ func newResourceBackupCmd() *cobra.Command {
 
 Safe to run any time: it reads the database and writes an object, nothing
 else. Run it before a migration you are not sure about, and the nightly
-schedule keeps running regardless. Kept fourteen days like every backup.`,
+schedule keeps running regardless. Kept fourteen days like every backup.
+
+Refused for a valkey and a rabbitmq, which are not backed up
+(backup_unsupported).`,
 		Args: usageArgs(1, 1, "usage: gg resource backup PROJECT/NAME\n  e.g. gg resource backup shop/db"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmdResourceBackup(args[0])
@@ -1339,7 +1360,9 @@ prints the same connection variables a service in the project would hold —
 DB_URL and the parts — rewritten to point at 127.0.0.1, and then holds the
 path open. Point psql, redis-cli, an Iggy SDK or an ORM's migration tool
 at them; when you stop the command, the tunnel and everything through it
-closes.
+closes. A resource with two ports, like a rabbitmq, gets both: its management
+UI is then at http://127.0.0.1:<the local HTTP_PORT>, and you log in with
+the _USER and _PASSWORD it printed.
 
 Resources are deliberately not on the internet, and this does not put one
 there: nothing is exposed, nothing to undo afterwards, and nobody else can
