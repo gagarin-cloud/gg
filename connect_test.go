@@ -254,10 +254,52 @@ func TestLocalizeEnvForAnIggy(t *testing.T) {
 	}
 }
 
+// A rabbitmq answers on AMQP (primary) and HTTP. Its URL carries the
+// credentials in userinfo and ends in the default vhost, %2F — an escaped
+// slash that must come through the rewrite untouched, or the client asks for
+// a vhost that does not exist.
+func TestLocalizeEnvForARabbitmq(t *testing.T) {
+	env := map[string]string{
+		"JOBS_URL":       "amqp://app:pw@jobs:5672/%2F",
+		"JOBS_HOST":      "jobs",
+		"JOBS_PORT":      "5672",
+		"JOBS_HTTP_PORT": "15672",
+		"JOBS_USER":      "app",
+		"JOBS_PASSWORD":  "pw",
+	}
+	tuns := tunnelPortsOf("JOBS", env)
+	if len(tuns) != 2 {
+		t.Fatalf("want 2 ports, got %d: %+v", len(tuns), tuns)
+	}
+	if !tuns[0].primary || tuns[0].remote != 5672 {
+		t.Errorf("primary first: got %+v", tuns[0])
+	}
+	if tuns[1].key != "JOBS_HTTP_PORT" || tuns[1].remote != 15672 {
+		t.Errorf("extra port: got %+v", tuns[1])
+	}
+	tuns[0].local, tuns[1].local = 25672, 25673
+
+	got := localizeEnv(env, "JOBS", tuns)
+	want := map[string]string{
+		"JOBS_URL":       "amqp://app:pw@127.0.0.1:25672/%2F",
+		"JOBS_HOST":      "127.0.0.1",
+		"JOBS_PORT":      "25672",
+		"JOBS_HTTP_PORT": "25673",
+		"JOBS_USER":      "app",
+		"JOBS_PASSWORD":  "pw",
+	}
+	for k, w := range want {
+		if got[k] != w {
+			t.Errorf("%s = %q, want %q", k, got[k], w)
+		}
+	}
+}
+
 func TestArticle(t *testing.T) {
 	for typ, want := range map[string]string{
 		"iggy": "an iggy", "external": "an external", "s3": "an s3",
 		"postgres": "a postgres", "qdrant": "a qdrant", "valkey": "a valkey",
+		"rabbitmq": "a rabbitmq",
 	} {
 		if got := article(typ); got != want {
 			t.Errorf("article(%q) = %q, want %q", typ, got, want)
