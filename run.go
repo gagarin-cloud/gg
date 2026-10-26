@@ -65,9 +65,9 @@ func bindRunFlags(fs *pflag.FlagSet) *runFlagVars {
 	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
 		"m (1 vCPU / 2 GB, dedicated), l (2 vCPU / 4 GB,\n"+
 		"dedicated) or g (1 L4 GPU 24 GB, 6 vCPU / 40 GB,\n"+
-		"dedicated; $2.85/h plus a 15-minute start-up charge\n"+
-		"per run; the first run waits 3–6 minutes for the GPU\n"+
-		"machine). Omit to keep the current size")
+		"dedicated; $3/h, billed by the minute; the first run\n"+
+		"waits 3–6 minutes for the GPU machine). Omit to keep\n"+
+		"the current size")
 	fs.StringArrayVar(&v.f.deps, "deps", nil, "also let this job reach `NAME`, and hold its\n"+
 		"connection variables if NAME is a resource (repeatable).\n"+
 		"Adds to what it already reaches and never removes;\n"+

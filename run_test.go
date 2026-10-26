@@ -288,12 +288,16 @@ func TestRunHelpNamesTheGPUSizeAndItsBillingRule(t *testing.T) {
 	out := helpOf(t, "run")
 	for _, want := range []string{
 		"or g (1 L4 GPU 24 GB, 6 vCPU / 40 GB,",
-		"$2.85/h plus a 15-minute start-up charge",
-		"the first run waits 3–6 minutes for the GPU",
+		"$3/h, billed by the minute",
+		"waits 3–6 minutes for the GPU machine",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("gg run --help lost %q:\n%s", want, out)
 		}
+	}
+	// The price is flat: nothing in the run help may speak of a start-up charge.
+	if strings.Contains(out, "start-up") {
+		t.Errorf("gg run --help mentions a start-up charge; g is billed by the minute only:\n%s", out)
 	}
 	// The sizes a run could always take are still there.
 	for _, want := range []string{"s (0.5 vCPU / 1 GB, shared)", "m (1 vCPU / 2 GB, dedicated)", "l (2 vCPU / 4 GB,"} {
@@ -314,7 +318,7 @@ func TestOtherCommandsDoNotOfferTheGPUSize(t *testing.T) {
 		if !strings.Contains(out, "--size") {
 			t.Errorf("gg %s --help has no --size to check:\n%s", strings.Join(args, " "), out)
 		}
-		for _, bad := range []string{"GPU", "L4", "start-up charge", "--size g", " g (", "or g"} {
+		for _, bad := range []string{"GPU", "L4", "--size g", " g (", "or g"} {
 			if strings.Contains(out, bad) {
 				t.Errorf("gg %s --help offers the GPU size (%q); the engine refuses it there:\n%s",
 					strings.Join(args, " "), bad, out)

@@ -405,8 +405,8 @@ scheduled job runs nothing when you submit it, so gg does not wait, whatever
 --detach says; "gg status" shows the next run and how the last one ended.
 Runs never overlap: a firing while the last run is still going waits, and
 starts when that run ends; several missed that way start once.
-Each run is billed for the time it ran, from when its container starts (size
-g adds a start-up charge, see --size), and a waiting schedule costs nothing.
+Each run is billed for the time it ran, from when its container starts, and a
+waiting schedule costs nothing.
 On a job that is already scheduled, "gg run" with an image updates what the
 next firing runs; --schedule changes when, and --tz alone changes the zone.
 Giving --schedule to a one-shot job makes it a scheduled one.
