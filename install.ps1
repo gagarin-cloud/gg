@@ -67,12 +67,21 @@
             if ($fields.Count -ge 2 -and $fields[1] -eq $asset) { $expected = $fields[0].ToLowerInvariant() }
         }
         if (-not $expected) { throw "gg install: checksums.txt for $tag has no entry for $asset; refusing to install" }
-        $actual = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $tmp $asset)).Hash.ToLowerInvariant()
+        # .NET rather than Get-FileHash and Expand-Archive: those live in modules
+        # that Windows PowerShell fails to load when started from PowerShell 7.
+        $stream = [IO.File]::OpenRead((Join-Path $tmp $asset))
+        try {
+            $sha = [Security.Cryptography.SHA256]::Create()
+            $actual = ([BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant()
+        } finally {
+            $stream.Dispose()
+        }
         if ($expected -ne $actual) {
             throw "gg install: $asset does not match its checksum (expected $expected, got $actual); refusing to install"
         }
 
-        Expand-Archive -Path (Join-Path $tmp $asset) -DestinationPath (Join-Path $tmp 'x')
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $tmp $asset), (Join-Path $tmp 'x'))
         $new = Join-Path $tmp 'x\gg.exe'
         if (-not (Test-Path $new)) { throw "gg install: $asset has no gg.exe in it" }
 

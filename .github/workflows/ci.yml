@@ -33,6 +33,7 @@ jobs:
   # install.ps1 only ever runs here.
   install:
     strategy:
+      fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -44,7 +45,9 @@ jobs:
       - run: go test -run 'Install|Upgrade|Update' ./...
 
   # The release configuration is otherwise first exercised by a tag push, when
-  # a mistake means a half-published release. Snapshot skips publishing and
+  # a mistake means a half-published release. GoReleaser is pinned to the minor
+  # version whose config this is (install_steps needs 2.19), so a deprecation
+  # in a later release shows up as a red check here rather than a broken tag. Snapshot skips publishing and
   # signing, which need the release's tokens.
   goreleaser:
     runs-on: ubuntu-latest
@@ -57,9 +60,9 @@ jobs:
           go-version: stable
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: "~> v2"
+          version: "~> v2.19"
           args: check
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: "~> v2"
+          version: "~> v2.19"
           args: release --snapshot --clean --skip=sign

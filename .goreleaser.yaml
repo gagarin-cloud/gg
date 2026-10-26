@@ -92,9 +92,11 @@ homebrew_casks:
         # We do not sign or notarise the binaries, and homebrew quarantines
         # what a cask downloads. Without this, gatekeeper kills the first run
         # with "the developer cannot be verified" and the install looks broken.
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gg"]
+        # install_steps is homebrew's declarative DSL, which replaced the Ruby
+        # postflight GoReleaser 2.19 deprecated.
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/gg"]
           end
 
 # Publishes a manifest to gagarin-cloud/scoop-bucket on every release, so
