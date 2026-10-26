@@ -266,3 +266,59 @@ func TestRunOfAScheduledJobDoesNotWait(t *testing.T) {
 		}
 	}
 }
+
+// helpOf is what "gg ARGS... --help" prints, through the real command tree.
+func helpOf(t *testing.T, args ...string) string {
+	t.Helper()
+	cmd := rootCmd()
+	var out strings.Builder
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs(append(args, "--help"))
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("gg %s --help failed: %v", strings.Join(args, " "), err)
+	}
+	return out.String()
+}
+
+// The GPU size is a job's alone, and the help is where a person finds out what
+// it costs before the bill does. The engine refuses it everywhere else, so the
+// help for everywhere else must not offer it.
+func TestRunHelpNamesTheGPUSizeAndItsBillingRule(t *testing.T) {
+	out := helpOf(t, "run")
+	for _, want := range []string{
+		"or g (1 L4 GPU 24 GB, 6 vCPU / 40 GB,",
+		"$2.85/h plus a 15-minute start-up charge",
+		"the first run waits 3–6 minutes for the GPU",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("gg run --help lost %q:\n%s", want, out)
+		}
+	}
+	// The sizes a run could always take are still there.
+	for _, want := range []string{"s (0.5 vCPU / 1 GB, shared)", "m (1 vCPU / 2 GB, dedicated)", "l (2 vCPU / 4 GB,"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("gg run --help lost %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestOtherCommandsDoNotOfferTheGPUSize(t *testing.T) {
+	for _, args := range [][]string{
+		{"deploy"},
+		{"ship"},
+		{"resource", "add"},
+		{"resource", "restore"},
+	} {
+		out := helpOf(t, args...)
+		if !strings.Contains(out, "--size") {
+			t.Errorf("gg %s --help has no --size to check:\n%s", strings.Join(args, " "), out)
+		}
+		for _, bad := range []string{"GPU", "L4", "start-up charge", "--size g", " g (", "or g"} {
+			if strings.Contains(out, bad) {
+				t.Errorf("gg %s --help offers the GPU size (%q); the engine refuses it there:\n%s",
+					strings.Join(args, " "), bad, out)
+			}
+		}
+	}
+}
