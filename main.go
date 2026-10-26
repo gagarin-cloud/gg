@@ -22,8 +22,14 @@ import (
 )
 
 func main() {
-	if err := rootCmd().Execute(); err != nil {
+	removeReplacedBinary()
+	notice := startUpdateNotice(os.Args[1:])
+	err := rootCmd().Execute()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "gg: %v\n", err)
+	}
+	notice(os.Stderr)
+	if err != nil {
 		// A job's exit code is gg's, so a pipeline that ran `gg run` can
 		// branch on it the way it would on the script itself. Everything else
 		// that fails is a 1.

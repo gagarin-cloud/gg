@@ -27,10 +27,43 @@ archives:
         formats: [zip]
     name_template: "gg_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
-# Checksums are not decoration. The install instructions tell agents to verify
-# them rather than trust a download, so they have to exist for every release.
+# Checksums are not decoration. install.sh, install.ps1 and gg upgrade all
+# refuse an archive that does not match, so they have to exist for every release.
 checksum:
   name_template: "checksums.txt"
+
+# checksums.txt is signed keylessly with the release workflow's GitHub identity,
+# so the checksums themselves can be checked against this repository:
+#
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
+#     --certificate-identity-regexp '^https://github.com/gagarin-cloud/gg/.github/workflows/release.yml@refs/tags/v' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+
+# Linux packages, attached to each release. Homebrew casks are macOS-only, so
+# these and install.sh are the Linux routes that need neither Go nor brew.
+nfpms:
+  - package_name: gg
+    file_name_template: "gg_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    vendor: Gagarin
+    homepage: "https://gagarin.cloud"
+    maintainer: "Gagarin <security@gagarin.cloud>"
+    description: "The Gagarin CLI - deploy and operate applications on Gagarin"
+    license: "MIT"
+
+# The install scripts ship with the release they install, so
+# releases/latest/download/install.sh is always the script that matches the
+# newest binaries. gagarin.cloud/install.sh points there.
+release:
+  extra_files:
+    - glob: ./install.sh
+    - glob: ./install.ps1
 
 # Publishes a cask to gagarin-cloud/homebrew-tap on every release, so
 # `brew install --cask gagarin-cloud/tap/gg` always resolves to the latest tag.
@@ -59,9 +92,11 @@ homebrew_casks:
         # We do not sign or notarise the binaries, and homebrew quarantines
         # what a cask downloads. Without this, gatekeeper kills the first run
         # with "the developer cannot be verified" and the install looks broken.
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/gg"]
+        # install_steps is homebrew's declarative DSL, which replaced the Ruby
+        # postflight GoReleaser 2.19 deprecated.
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/gg"]
           end
 
 # Publishes a manifest to gagarin-cloud/scoop-bucket on every release, so

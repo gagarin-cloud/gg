@@ -9,33 +9,80 @@ and nothing about your deployment lives in your repository.
 
 ## Install
 
-```
-brew install --cask gagarin-cloud/tap/gg
-```
-
-If you installed `gg` as a formula, before casks, run `brew uninstall gg` once
-first — homebrew will not replace one with the other on its own.
-
-On Windows, with either package manager:
+macOS and Linux:
 
 ```
+curl -fsSL https://gagarin.cloud/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```
+irm https://gagarin.cloud/install.ps1 | iex
+```
+
+The script downloads the release for your machine and checks it against the
+release's `checksums.txt`. It refuses anything that does not match. It needs no
+sudo or administrator rights: `gg` goes to `~/.local/bin`, or
+`%LOCALAPPDATA%\Programs\gg` on Windows. `GAGARIN_INSTALL_DIR` changes that,
+and `GAGARIN_INSTALL_VERSION=v0.54.0` pins a release. On macOS and Linux it
+never edits your shell profile; if the directory is not on `PATH`, it prints
+the line to add. Read it first if you like:
+[install.sh](install.sh), [install.ps1](install.ps1).
+
+### With a package manager
+
+```
+brew install --cask gagarin-cloud/tap/gg        # macOS
 scoop bucket add gagarin https://github.com/gagarin-cloud/scoop-bucket
-scoop install gagarin/gg
+scoop install gagarin/gg                        # Windows
+winget install Gagarin.gg                       # Windows
+go install github.com/gagarin-cloud/gg@latest   # anywhere with Go
 ```
 
+If you installed `gg` as a Homebrew formula, before casks, run `brew uninstall gg`
+once first. Homebrew will not replace one with the other on its own.
+
+Every [release](https://github.com/gagarin-cloud/gg/releases) also carries
+`.deb`, `.rpm` and `.apk` packages for Linux, and archives for every platform:
+
 ```
-winget install Gagarin.gg
+sudo dpkg -i gg_<version>_linux_amd64.deb
+sudo rpm -i  gg_<version>_linux_amd64.rpm
+sudo apk add --allow-untrusted gg_<version>_linux_amd64.apk
 ```
 
-Or, with a Go toolchain:
+`checksums.txt` is signed with [cosign](https://docs.sigstore.dev/), using the
+identity of this repository's release workflow:
 
 ```
-go install github.com/gagarin-cloud/gg@latest
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/gagarin-cloud/gg/.github/workflows/release.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+sha256sum --ignore-missing -c checksums.txt
 ```
 
-Or take a binary for your platform from
-[releases](https://github.com/gagarin-cloud/gg/releases). Every release publishes
-checksums; verify them. There is deliberately no `curl | bash` one-liner.
+### Upgrade
+
+```
+gg upgrade
+```
+
+It upgrades the way you installed. Brew, scoop, winget and `go install` installs
+are handed to that tool. A `gg` from the install script or an archive downloads
+the new release and checks it against `checksums.txt` before replacing itself.
+For a `.deb`, `.rpm` or `.apk`, which need root, it prints the command to run.
+`gg upgrade --dry-run` says what it would do.
+
+At a terminal, `gg` mentions a newer release on stderr, at most once a day.
+`gg version` always checks. `GAGARIN_NO_UPDATE_CHECK=1` turns both off; the
+notice is already off in CI.
+
+### Uninstall
+
+Delete the binary: `rm ~/.local/bin/gg`, or remove it with the package manager
+that installed it. This machine's credential lives in `~/.config/gagarin/`.
+Deleting that directory does not revoke it; `gg creds revoke` does.
 
 ## Teach your agent
 
