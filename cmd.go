@@ -65,7 +65,8 @@ There is nothing to export.
 Environment (overrides the file; meant for CI):
   GAGARIN_API      control plane URL (default ` + defaultAPI + `)
   GAGARIN_TOKEN    a credential, for CI where no human can approve one
-  GAGARIN_REGISTRY registry host, e.g. registry.gagarin.cloud`,
+  GAGARIN_REGISTRY registry host, e.g. registry.gagarin.cloud
+  GAGARIN_NO_UPDATE_CHECK  set to anything: never look for a newer gg`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       versionString(),
@@ -100,6 +101,7 @@ Environment (overrides the file; meant for CI):
 		newReferralCmd(),
 		newRegistryCmd(),
 		newVersionCmd(),
+		newUpgradeCmd(),
 	)
 	return root
 }
@@ -1526,4 +1528,34 @@ func newVersionCmd() *cobra.Command {
 			return cmdVersion()
 		},
 	}
+}
+
+func newUpgradeCmd() *cobra.Command {
+	var dryRun bool
+	cmd := &cobra.Command{
+		Use:   "upgrade",
+		Short: "upgrade gg to the latest release, the way it was installed",
+		Long: `Upgrade gg to the latest release.
+
+gg upgrades itself the way it was installed: with brew, scoop, winget or
+go install when one of those put it there, and by downloading the release
+when the install script or an archive did. A download is checked against the
+release's checksums.txt, and nothing is replaced unless it matches.
+
+A gg installed from a .deb, .rpm or .apk package needs root to replace, so
+gg upgrade prints the command for you to run instead.
+
+  gg upgrade             upgrade now
+  gg upgrade --dry-run   say what it would do, and do nothing
+
+Once a day, at a terminal, gg also mentions a newer release on stderr after
+whatever command you ran. GAGARIN_NO_UPDATE_CHECK turns that off; it is off
+in CI already.`,
+		Args: usageArgs(0, 0, "usage: gg upgrade [--dry-run]"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdUpgrade(dryRun)
+		},
+	}
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "say what would happen, and change nothing")
+	return cmd
 }
