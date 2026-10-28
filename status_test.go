@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -843,8 +844,9 @@ func TestProjectsListsThePlace(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(out, "9v3juxz0") || !strings.Contains(out, "fr-par-1") {
-		t.Errorf("projects omits the place:\n%s", out)
+	want := fmt.Sprintf("%-30s  %-10s  %-10s  %s\n", "shop", "9v3juxz0", "fr-par-1", "owner (pays for it)")
+	if !strings.Contains(out, want) {
+		t.Errorf("projects row = %q, want %q", out, want)
 	}
 }
 
