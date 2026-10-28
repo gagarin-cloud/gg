@@ -147,7 +147,11 @@ type line struct {
 }
 
 func printStatusTable(st statusResp) {
-	fmt.Printf("\nproject %s  (id %s)\n\n", st.Project, st.ProjectID)
+	fmt.Printf("\nproject %s  (id %s)", st.Project, st.ProjectID)
+	if st.Cluster != "" {
+		fmt.Printf("  %s", st.Cluster)
+	}
+	fmt.Printf("\n\n")
 
 	// Before the table, not after it. These are statements about whether the
 	// table means what it appears to mean — a suspended project, a reconciler
