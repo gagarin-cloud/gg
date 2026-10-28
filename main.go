@@ -196,7 +196,11 @@ func cmdInit(name string) error {
 	// The id is printed because it is not cosmetic: image paths and hostnames are
 	// built from it, so a human reading this output has seen the thing they will
 	// meet again in a URL.
-	fmt.Printf("project %s created (id %s)\n", p.Name, p.ID)
+	fmt.Printf("project %s created (id %s)", p.Name, p.ID)
+	if p.Cluster != "" {
+		fmt.Printf(", runs in %s", p.Cluster)
+	}
+	fmt.Println()
 	return nil
 }
 
@@ -207,6 +211,9 @@ type project struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Role string `json:"role"`
+	// Cluster is where the project runs, e.g. fr-par-1. It is part of every
+	// generated address, and it never changes. Empty from a server that predates it.
+	Cluster string `json:"cluster"`
 }
 
 func cmdProjects() error {
@@ -228,7 +235,7 @@ func cmdProjects() error {
 		if role == "owner" {
 			role = "owner (pays for it)"
 		}
-		fmt.Printf("%-30s  %-10s  %s\n", p.Name, p.ID, role)
+		fmt.Printf("%-30s  %-10s  %-10s  %s\n", p.Name, p.ID, p.Cluster, role)
 	}
 	return nil
 }
@@ -537,6 +544,7 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 type statusResp struct {
 	Project   string          `json:"project"`
 	ProjectID string          `json:"project_id"`
+	Cluster   string          `json:"cluster"`
 	Services  []serviceStatus `json:"services"`
 	Platform  platformState   `json:"platform"`
 	// Notices is everything the reader is meant to be told before they read the

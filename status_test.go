@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -80,7 +81,7 @@ func TestAddressesHangUnderTheirServiceInOrder(t *testing.T) {
 				svc("api"),
 				svc("web",
 					domainStatus{URL: "https://feed.gagarin.cloud", Domain: "feed.gagarin.cloud", State: "ok"},
-					generated("https://web-9v3juxz0.apps.gagarin.cloud"),
+					generated("https://web-9v3juxz0.fr-par-1.apps.gagarin.cloud"),
 				),
 			}})
 	})
@@ -118,7 +119,7 @@ func TestAddressesHangUnderTheirServiceInOrder(t *testing.T) {
 func TestAFinishedAddressCarriesNoStateText(t *testing.T) {
 	out := capture(t, func() {
 		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
-			Services: []serviceStatus{svc("web", generated("https://web-9v3juxz0.apps.gagarin.cloud"))}})
+			Services: []serviceStatus{svc("web", generated("https://web-9v3juxz0.fr-par-1.apps.gagarin.cloud"))}})
 	})
 	for _, l := range strings.Split(out, "\n") {
 		if !strings.Contains(l, "└") {
@@ -813,5 +814,55 @@ func TestAnExpiredFiringReadsAsHowItEnded(t *testing.T) {
 	row.Actual.Run.Phase = "failed"
 	if got := state(row); got != "failing" {
 		t.Errorf("an expired failure still reads as failing: %q", got)
+	}
+}
+
+// The place rides on the header line, so the one-line shape survives, and a
+// server that predates the field leaves the header exactly as it was.
+func TestStatusHeaderShowsThePlace(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0", Cluster: "fr-par-1"})
+	})
+	if !strings.Contains(out, "project shop  (id 9v3juxz0)  fr-par-1\n") {
+		t.Errorf("header does not show the place:\n%s", out)
+	}
+	out = capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0"})
+	})
+	if !strings.Contains(out, "project shop  (id 9v3juxz0)\n") {
+		t.Errorf("an empty place changed the header:\n%s", out)
+	}
+}
+
+func TestProjectsListsThePlace(t *testing.T) {
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"projects":[{"id":"9v3juxz0","name":"shop","role":"owner","cluster":"fr-par-1"}]}`))
+	})
+	out := capture(t, func() {
+		if err := cmdProjects(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(out, "9v3juxz0") || !strings.Contains(out, "fr-par-1") {
+		t.Errorf("projects omits the place:\n%s", out)
+	}
+}
+
+func TestInitPrintsThePlaceWhenKnown(t *testing.T) {
+	for cluster, want := range map[string]string{
+		"fr-par-1": "project shop created (id 9v3juxz0), runs in fr-par-1\n",
+		"":         "project shop created (id 9v3juxz0)\n",
+	} {
+		fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"id":"9v3juxz0","name":"shop","role":"owner","cluster":"` + cluster + `"}`))
+		})
+		out := capture(t, func() {
+			if err := cmdInit("shop"); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if out != want {
+			t.Errorf("cluster %q: got %q, want %q", cluster, out, want)
+		}
 	}
 }
