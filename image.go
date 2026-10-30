@@ -25,8 +25,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -67,7 +69,8 @@ type registryTarget struct {
 
 // resolveTarget turns a project name, a repository and a tag into a full
 // registry reference. An empty tag is minted from the clock, which is what a
-// build does when the caller does not care what this one is called.
+// build falls back to when the caller does not care what this one is called
+// and there is no clean commit to name it after.
 func resolveTarget(project, repo, tag string) (*registryTarget, error) {
 	var who struct {
 		Platform string `json:"platform"`
@@ -106,6 +109,47 @@ func resolveTarget(project, repo, tag string) (*registryTarget, error) {
 	}, nil
 }
 
+// commitTag is the tag a build gets when the caller gives none: the short hash
+// of the commit being built, so an image can be traced back to its source and a
+// rollback says which code it puts back.
+//
+// Only when the work tree is clean. A hash names what was committed, and an
+// image built from uncommitted changes is not that — tagging it so would be a
+// label that lies. Untracked files count, since the build context may COPY
+// them. The whole repository is checked rather than the context alone: a
+// Dockerfile named with --file can sit outside it, and "clean" should not need
+// explaining.
+//
+// An empty tag means "use the clock", as gg always has. That is said out loud
+// only when there is a commit and the tree is dirty — the case where somebody
+// would expect a hash and get a number. No git, or no repository, is an
+// ordinary way to build and stays quiet.
+func commitTag(dir string) string {
+	if dir == "" {
+		dir = "."
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		return ""
+	}
+	hash, err := exec.Command("git", "-C", dir, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return "" // not a repository, or one with no commits yet
+	}
+	status, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		return ""
+	}
+	if len(strings.TrimSpace(string(status))) > 0 {
+		fmt.Fprintln(os.Stderr, "→ the work tree has uncommitted changes, so the tag is the clock rather than the commit")
+		return ""
+	}
+	tag := strings.TrimSpace(string(hash))
+	if !tagRe.MatchString(tag) {
+		return ""
+	}
+	return tag
+}
+
 // short is how a caller refers to this image on the command line: `repo:tag`,
 // without the registry host and project id gg fills in. Printed rather than the
 // full ref wherever the next command is being suggested, so what is shown is
@@ -119,6 +163,9 @@ func cmdBuild(ref string, f buildFlags) error {
 	}
 	if err := dockerReady(true); err != nil {
 		return err
+	}
+	if tag == "" {
+		tag = commitTag(f.context)
 	}
 	target, err := resolveTarget(project, repo, tag)
 	if err != nil {
@@ -211,7 +258,10 @@ func pushImage(t *registryTarget, next bool) (string, error) {
 // person: three commands and an invented tag, to do the thing that used to be
 // `gg deploy`. The tag is minted and never asked for, since somebody shipping
 // does not have a name in mind for this particular image — and it is still
-// printed, so what just happened is recoverable from the scrollback.
+// printed, so what just happened is recoverable from the scrollback. It is the
+// commit's short hash when the work tree is clean, the clock otherwise; see
+// commitTag. There is no flag for it: wanting a particular name is the point
+// at which build, push and deploy are worth running apart.
 //
 // The repository is the service's own name. One service, one repository, and its
 // history of images is where you would look for it.
@@ -228,7 +278,7 @@ func cmdShip(ref string, b buildFlags, d *deployFlags) error {
 	if err := dockerReady(true); err != nil {
 		return err
 	}
-	target, err := resolveTarget(project, service, "")
+	target, err := resolveTarget(project, service, commitTag(b.context))
 	if err != nil {
 		return err
 	}
