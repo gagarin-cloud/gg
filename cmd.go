@@ -213,10 +213,14 @@ func newBuildCmd() *cobra.Command {
 		Long: `Build a container image and name it in a project's space in the Gagarin
 registry.
 
-The tag is optional: without one gg mints it from the clock, because most
-of the time nobody cares what a particular build is called. Building does
-not run anything — "gg push" uploads it, "gg deploy" releases it, and
-"gg ship" is all three.
+The tag is optional. Without one gg names the build after the commit it
+came from — the short hash, when the work tree is clean — and otherwise
+mints a tag from the clock, because most of the time nobody cares what a
+particular build is called. Uncommitted changes, untracked files
+included, mean the clock: the hash would name code the image is not.
+
+Building does not run anything — "gg push" uploads it, "gg deploy"
+releases it, and "gg ship" is all three.
 
 The platform is not yours to choose. Gagarin reports what its own nodes
 run and the build targets that, because an image built for the wrong
@@ -333,7 +337,8 @@ push, deploy — are there for when you want the steps apart: publishing
 without releasing, releasing an image you already have, or rolling
 forward to a tag somebody else built.
 
-The image is named after the service and tagged from the clock, since
+The image is named after the service and tagged with the commit's short
+hash when the work tree is clean, or from the clock when it is not, since
 somebody shipping does not have a name in mind for this particular build.
 It is printed, so it can be deployed again later.
 
