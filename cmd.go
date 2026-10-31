@@ -893,7 +893,8 @@ func newResourceAddCmd() *cobra.Command {
 		Short: "provision a resource, e.g. `gg resource add shop/db postgres`",
 		Long: `Provision something Gagarin runs for you, rather than something you built.
 
-  postgres   PostgreSQL 17, on a volume. Survives restarts.
+  postgres   PostgreSQL 17, on a volume. Survives restarts. pgvector
+             is installed: CREATE EXTENSION vector; to use it.
   qdrant     A vector database, on a volume. Survives restarts. What
              an application does retrieval against: embeddings in,
              nearest neighbours out. It answers on two ports — HTTP
