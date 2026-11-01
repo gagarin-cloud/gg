@@ -154,8 +154,12 @@ func TestExtFlagReachesTheBody(t *testing.T) {
 		{"absent", []string{"shop/db", "postgres", "--size", "m"}, nil},
 		{"empty", []string{"shop/db", "postgres", "--ext", ""}, []string{}},
 		{"empty with equals", []string{"shop/db", "postgres", "--ext="}, []string{}},
-		{"a list", []string{"shop/db", "postgres", "--ext", "vector,postgis"}, []string{"vector", "postgis"}},
-		{"spaces and repeats", []string{"shop/db", "postgres", "--ext", " vector, postgis,,vector "}, []string{"vector", "postgis"}},
+		{"one", []string{"shop/db", "postgres", "--ext", "vector"}, []string{"vector"}},
+		{"repeated", []string{"shop/db", "postgres", "--ext", "vector", "--ext", "postgis"}, []string{"vector", "postgis"}},
+		{"spaces, empties and repeats", []string{"shop/db", "postgres", "--ext", " vector ", "--ext", "", "--ext=postgis", "--ext", "vector"}, []string{"vector", "postgis"}},
+		// A comma is not a separator, as it is not for --env: the name goes to
+		// the platform as typed, and its unknown_extension answer says so.
+		{"a comma is part of the name", []string{"shop/db", "postgres", "--ext", "vector,postgis"}, []string{"vector,postgis"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body, _, err := addAnswering(t, http.StatusOK, addOK, tc.args...)
@@ -207,13 +211,12 @@ func TestExtOnAnotherTypeIsThePlatformsRefusal(t *testing.T) {
 	}
 }
 
-// A drop is a removal, and a removal asks a human: the answer has to reach the
-// caller as the platform said it — code, the email and the instruction to run
-// it again — the way `gg destroy` passes it through. And nothing after the
-// call may print, because a line about provisioning or a list of extensions
-// under an approval_required would read as though the change had happened.
-// extensions_failed is the same shape: postgres refused, nothing changed, and
-// its own reason is the sentence the caller needs.
+// A refused change reaches the caller as the platform said it — code, postgres's
+// own reason, the hint — the way `gg destroy` passes errors through. And nothing
+// after the call may print, because a list of extensions under a refusal would
+// read as though the change had happened. A drop that would lose data is the
+// one to get right: it asks nobody, so this refusal is the only thing that
+// stands between the caller and their pg_cron jobs.
 func TestExtRefusalsPassThrough(t *testing.T) {
 	for _, tc := range []struct {
 		code   string
@@ -221,9 +224,9 @@ func TestExtRefusalsPassThrough(t *testing.T) {
 		reply  string
 		says   []string
 	}{
-		{"approval_required", http.StatusForbidden,
-			`{"error":{"code":"approval_required","message":"dropping the vector extension from postgres db in project shop needs human approval","fix_hint":"we emailed owner@example.com — ask them to open it, sign in, and approve (code K7Q2). Then run the same command again. Expires in 15 minutes."}}`,
-			[]string{"needs human approval", "run the same command again", "K7Q2"}},
+		{"extensions_failed", http.StatusConflict,
+			`{"error":{"code":"extensions_failed","message":"could not change the extensions of db: ERROR: extension pg_cron holds 1 row(s) of your data in cron.job; remove them first if losing them is what you mean","fix_hint":"nothing changed, so this is safe to run again once the reason is dealt with"}}`,
+			[]string{"holds 1 row(s) of your data in cron.job", "nothing changed"}},
 		{"extensions_failed", http.StatusConflict,
 			`{"error":{"code":"extensions_failed","message":"could not change the extensions of db: ERROR: cannot drop extension vector because other objects depend on it: column e of table items depends on type vector","fix_hint":"nothing changed, so this is safe to run again once the reason is dealt with"}}`,
 			[]string{"column e of table items depends on type vector", "nothing changed"}},
@@ -281,13 +284,14 @@ func TestAddPrintsTheExtensionsThePlatformHolds(t *testing.T) {
 
 // The help is where a caller learns the semantics before typing them, so the
 // claims that change what they type are checked: the set is the whole set,
-// absence leaves it, a drop asks a human and is never CASCADE, pgvector is
+// absence leaves it, the flag repeats, a drop asks nobody because it refuses
+// rather than loses, and is never CASCADE, pgvector is
 // spelled vector, and when qdrant is the better answer.
 func TestAddHelpExplainsExtensions(t *testing.T) {
 	long := newResourceAddCmd().Long
 	for _, want := range []string{
-		"--ext vector,postgis", "WHOLE set", "leaves them as they are", `--ext "" asks for none`,
-		"needs no restart", "approval_required", "never CASCADE", "extensions_failed",
+		"--ext vector --ext postgis", "repeated for more", "WHOLE set", "leaves them as they are", `--ext "" asks for none`,
+		"needs no restart", "asks nobody", "never CASCADE", "your data", "pg_cron's jobs", "extensions_failed",
 		"pgvector", "postgis", "pg_cron", "pg_partman", "pgaudit", "pg_stat_statements",
 		"earthdistance (adds cube)", "timescaledb", "qdrant when the vectors are\nthe product",
 	} {

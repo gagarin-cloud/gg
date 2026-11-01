@@ -168,7 +168,7 @@ them:
 	return nil
 }
 
-// parseExtFlag turns --ext's value into the set to send: split on commas,
+// extSet turns the --ext values into the set to send: one name each,
 // spaces trimmed, empties dropped, duplicates kept to one.
 //
 // Always non-nil, because it is only called when the flag was given — and a
@@ -177,10 +177,10 @@ them:
 // against a catalogue here: the platform owns the catalogue, and its
 // unknown_extension answer lists every name it offers, which a copy in gg
 // would one day stop doing.
-func parseExtFlag(v string) []string {
+func extSet(vals []string) []string {
 	out := []string{}
 	seen := map[string]bool{}
-	for _, n := range strings.Split(v, ",") {
+	for _, n := range vals {
 		n = strings.TrimSpace(n)
 		if n == "" || seen[n] {
 			continue
