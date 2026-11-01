@@ -460,6 +460,34 @@ func TestAnEdgeToAnExternalIsMarked(t *testing.T) {
 	}
 }
 
+// A postgres's extensions are under its row, and nothing is under a row that
+// has none — a line reading "extensions:" with nothing after it on every
+// database would be noise that trains the eye to skip the line that matters.
+func TestStatusShowsAPostgresExtensions(t *testing.T) {
+	pg := serviceStatus{Name: "pg", Kind: "resource:postgres", Image: "postgres:17.11-1",
+		Port: 5432, Size: "m", InSync: true, Extensions: []string{"postgis", "vector"}}
+	pg.Actual.Exists, pg.Actual.Ready, pg.Actual.Desired = true, 1, 1
+	bare := pg
+	bare.Name, bare.Extensions = "plain", nil
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "p1",
+			Services: []serviceStatus{pg, bare}})
+	})
+	if !strings.Contains(out, "└ extensions: postgis, vector") {
+		t.Errorf("the extensions are not under the postgres:\n%s", out)
+	}
+	if strings.Count(out, "extensions") != 1 {
+		t.Errorf("a postgres with none got an extensions line too:\n%s", out)
+	}
+	// Under its own row, not somewhere in the table.
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "extensions:") && (i == 0 || !strings.Contains(lines[i-1], " pg ")) {
+			t.Errorf("the line is not directly under pg's row:\n%s", out)
+		}
+	}
+}
+
 // --- jobs ---------------------------------------------------------------------
 
 func jobRow(name, phase string, rev int) serviceStatus {

@@ -887,13 +887,15 @@ func newResourceCmd() *cobra.Command {
 
 func newResourceAddCmd() *cobra.Command {
 	var storage, size = 0, ""
+	var ext string
 	var v *envFlagVars
 	cmd := &cobra.Command{
 		Use:   "add PROJECT/NAME TYPE",
 		Short: "provision a resource, e.g. `gg resource add shop/db postgres`",
 		Long: `Provision something Gagarin runs for you, rather than something you built.
 
-  postgres   PostgreSQL 17, on a volume. Survives restarts.
+  postgres   PostgreSQL 17, on a volume. Survives restarts. Takes
+             postgres extensions with --ext — see "Extensions" below.
   qdrant     A vector database, on a volume. Survives restarts. What
              an application does retrieval against: embeddings in,
              nearest neighbours out. It answers on two ports — HTTP
@@ -955,6 +957,50 @@ refused (backup_unsupported). See
 the route and hands over the credentials — and the docs for what all this
 means before you put a client's data in one.
 
+Extensions (postgres only):
+
+  gg resource add shop/db postgres --ext vector,postgis
+
+--ext is the WHOLE set the database should have, named as CREATE
+EXTENSION names them — not a list to add. Leave the flag off and a
+restatement leaves them as they are; --ext "" asks for none. Only a
+postgres takes it: any other type is refused (no_extensions), and a name
+not listed below is refused too (unknown_extension), with every name
+that is offered in the hint.
+
+Adding one to a running postgres is immediate and needs no restart.
+Dropping one is a removal, so it asks a human, like every other removal:
+we email the account owner (approval_required), and you run the same
+command again once they have clicked. A drop is never CASCADE — if a
+column uses the extension, a vector column say, postgres refuses, the
+answer is extensions_failed with postgres's own reason, and nothing in
+the restatement changed. Requirements come with what needs them:
+earthdistance also gives cube.
+
+Built into the image:
+  vector         pgvector: vector columns with HNSW and IVFFlat
+                 indexes, for embeddings
+  postgis        PostGIS: geometry and geography types, spatial indexes
+                 and functions (no raster)
+  pg_cron        scheduled SQL, run by the database itself (jobs run in
+                 database app)
+  pg_partman     partition management, created in schema partman
+  pgaudit        audit logging to the resource's log (set pgaudit.log to
+                 turn it on)
+Shipped with postgres:
+  pg_stat_statements, pg_trgm, pgcrypto, uuid-ossp, citext, hstore,
+  ltree, unaccent, fuzzystrmatch, btree_gin, btree_gist, cube,
+  earthdistance (adds cube), intarray, tablefunc, amcheck,
+  pg_buffercache
+Not offered: timescaledb (its licence forbids exactly a hosted service),
+raster, dblink, postgres_fdw, file_fdw, untrusted languages. pgvector
+is spelled vector.
+
+vector on a postgres or a qdrant? vector, when an application already
+needs postgres and adds retrieval: relational tables and embeddings in
+one database, joined and in one transaction. qdrant when the vectors are
+the product.
+
 An external is the exception to most of the above. It runs nothing, so
 there is no size, no storage, no backup and nothing to be ready. You give
 it the values instead, and it publishes them under its own name:
@@ -987,7 +1033,13 @@ is the credentials and a line on the graph saying who uses them.`,
 			if err != nil {
 				return err
 			}
-			return cmdResourceAdd(args[0], args[1], size, storage, e)
+			// Changed, not the value: an absent flag and an empty one are
+			// different requests, and only cobra knows which this was.
+			var exts []string
+			if cmd.Flags().Changed("ext") {
+				exts = parseExtFlag(ext)
+			}
+			return cmdResourceAdd(args[0], args[1], size, storage, e, exts)
 		},
 	}
 	// The only knob, and it is honoured rather than negotiated. Anything else
@@ -998,6 +1050,12 @@ is the credentials and a line on the graph saying who uses them.`,
 	// reversible where a volume is neither.
 	cmd.Flags().StringVar(&size, "size", "",
 		"how much CPU and memory: s, m or l (default s).\nCan be changed later by restating the resource")
+	// A plain string, split by parseExtFlag, so that what --ext "" and
+	// --ext "vector, postgis" mean is written down in this repository rather
+	// than left to pflag's CSV reader. Whether it was given at all is
+	// cmd.Flags().Changed, above.
+	cmd.Flags().StringVar(&ext, "ext", "",
+		"postgres extensions, comma-separated: the whole set, e.g.\nvector,postgis. Absent leaves them as they are;\n--ext \"\" asks for none. Dropping one asks a human")
 	// Only an external takes these, and cmdResourceAdd refuses them for every
 	// other type before it makes a request. Registered unconditionally because a
 	// flag that exists for one value of a positional argument cannot be hidden
