@@ -128,6 +128,7 @@ gg logs shop/web               # the latest 200 lines; a week is kept, crashed c
 gg logs shop/web --since 2h --grep "panic:"
 
 gg resource add shop/db postgres    # a database; you choose the name and the size, nothing else
+gg resource add shop/db postgres --ext vector --ext postgis   # and the postgres extensions it has: the whole set
 gg resource add shop/cache valkey   # postgres, qdrant, iggy, rabbitmq, valkey and s3 — valkey is in-memory and loses data on restart
 gg deps add shop/web db             # let web reach it, and hand it DB_URL and the rest
 gg resource add shop/jobs rabbitmq  # a message broker; durable queues and persistent messages survive restarts, and it is not backed up
@@ -209,6 +210,49 @@ derives them from the graph every time it starts the pod rather than copying the
 into the service's stored environment, so they cannot go stale and no redeploy
 can forget them. `gg resource secrets` prints the values for anything outside the
 project that needs them.
+
+## Postgres extensions
+
+A postgres's extensions are a set you restate, not a type you add. `--ext` on
+`gg resource add` names one extension, spelled as `CREATE EXTENSION` spells it, and
+is repeated for more, like `--deps` and `--env`; together they are every extension
+the database should have. It works on a create and on a restatement alike:
+
+```
+gg resource add shop/db postgres --ext vector --ext postgis   # these two
+gg resource add shop/db postgres --ext vector                 # drop postgis
+gg resource add shop/db postgres --ext ""                     # none
+gg resource add shop/db postgres --size m                     # no --ext: extensions left as they are
+```
+
+Adding one to a running postgres is immediate, with no restart. Dropping one is
+immediate too, and asks nobody, because a drop refuses rather than loses anything.
+It is never `CASCADE`, so a column, index or view that uses the extension — a
+`vector` column, say — stops it; and it is refused while the extension's own
+tables hold your data: pg_cron's jobs, pg_partman's partition config, a spatial
+reference system you added to PostGIS. The answer is then `extensions_failed`
+carrying postgres's own reason, and nothing in the restatement changed. A requirement comes with what needs it: `earthdistance` also
+gives `cube`. Only a postgres takes `--ext` (anything else is `no_extensions`),
+and `gg status` lists each one's extensions under its row.
+
+| built in | |
+|---|---|
+| `vector` | pgvector: vector columns with HNSW and IVFFlat indexes, for embeddings |
+| `postgis` | PostGIS: geometry and geography types, spatial indexes and functions (no raster) |
+| `pg_cron` | scheduled SQL, run by the database itself (jobs run in database `app`) |
+| `pg_partman` | partition management, created in schema `partman` |
+| `pgaudit` | audit logging to the resource's log (set `pgaudit.log` to turn it on) |
+
+Shipped with postgres: `pg_stat_statements`, `pg_trgm`, `pgcrypto`, `uuid-ossp`,
+`citext`, `hstore`, `ltree`, `unaccent`, `fuzzystrmatch`, `btree_gin`,
+`btree_gist`, `cube`, `earthdistance` (adds `cube`), `intarray`, `tablefunc`,
+`amcheck`, `pg_buffercache`. Not offered: `timescaledb` (its licence forbids
+exactly a hosted service), raster, `dblink`/`postgres_fdw`/`file_fdw`, and
+untrusted languages. pgvector is `vector`, the name postgres knows it by.
+
+`vector` on a postgres or a `qdrant`? `vector`, when an application already needs
+postgres and adds retrieval: relational tables and embeddings in one database,
+joined and in one transaction. `qdrant` when the vectors are the product.
 
 ## Building from source
 

@@ -656,6 +656,10 @@ type serviceStatus struct {
 	// anything made another way. The platform carries a restore out after
 	// answering the request for it, so this is where its outcome is read.
 	Restore *restoreState `json:"restore"`
+	// Extensions are a postgres's extensions, sorted, as the platform created
+	// them — not what app made by hand with its own CREATE EXTENSION, which
+	// is its own business. Omitted for anything that has none.
+	Extensions []string `json:"extensions"`
 }
 
 // restoreState is one resource's restore as status reports it.

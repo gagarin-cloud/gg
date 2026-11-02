@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -23,7 +24,7 @@ func TestExternalSendsItsEnv(t *testing.T) {
 		var e error
 		out = capture(t, func() {
 			e = cmdResourceAdd("shop/openai", "external", "", 0,
-				map[string]string{"API_KEY": "sk-secret", "BASE_URL": "https://api.openai.com/"})
+				map[string]string{"API_KEY": "sk-secret", "BASE_URL": "https://api.openai.com/"}, nil)
 		})
 		return e
 	})
@@ -69,7 +70,7 @@ func TestExternalOutputTranslatesADashedName(t *testing.T) {
 	if _, err := captureBody(t, func() error {
 		var e error
 		out = capture(t, func() {
-			e = cmdResourceAdd("shop/openai-eu", "external", "", 0, map[string]string{"API_KEY": "x"})
+			e = cmdResourceAdd("shop/openai-eu", "external", "", 0, map[string]string{"API_KEY": "x"}, nil)
 		})
 		return e
 	}); err != nil {
@@ -86,7 +87,7 @@ func TestExternalOutputTranslatesADashedName(t *testing.T) {
 // no round trip and names the command that does what they wanted.
 func TestEnvIsRefusedOnAMintedType(t *testing.T) {
 	for _, typ := range []string{"postgres", "valkey", "qdrant", "iggy", "rabbitmq", "s3"} {
-		err := cmdResourceAdd("shop/db", typ, "", 0, map[string]string{"API_KEY": "x"})
+		err := cmdResourceAdd("shop/db", typ, "", 0, map[string]string{"API_KEY": "x"}, nil)
 		if err == nil {
 			t.Fatalf("%s accepted --env", typ)
 		}
@@ -99,12 +100,204 @@ func TestEnvIsRefusedOnAMintedType(t *testing.T) {
 // An external with nothing in it publishes nothing, which is a row somebody
 // created by mistake rather than a thing they wanted.
 func TestExternalWithNoValuesIsRefused(t *testing.T) {
-	err := cmdResourceAdd("shop/openai", "external", "", 0, nil)
+	err := cmdResourceAdd("shop/openai", "external", "", 0, nil, nil)
 	if err == nil {
 		t.Fatal("an external with no values was accepted")
 	}
 	if !strings.Contains(err.Error(), "--env-file") {
 		t.Errorf("the hint does not point at the flag to use: %v", err)
+	}
+}
+
+// --- postgres extensions ---------------------------------------------------
+//
+// --ext is the whole set, and the field's absence is a request of its own:
+// leave them as they are. So the three things a caller can type — nothing,
+// --ext "", and a list — are three different bodies, and a test that only
+// checked the list would let the first two collapse into each other, which is
+// the bug where restating a database's size drops its extensions.
+
+// addAnswering runs `gg resource add` through cobra, as a caller types it,
+// against a server that answers every PUT with status and reply. It reports
+// the body that reached the platform — nil if nothing did — what was printed
+// and the error.
+func addAnswering(t *testing.T, status int, reply string, args ...string) (body map[string]any, printed string, err error) {
+	t.Helper()
+	fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if b, e := io.ReadAll(r.Body); e == nil && len(b) > 0 {
+			_ = json.Unmarshal(b, &body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(reply))
+	})
+	cmd := newResourceAddCmd()
+	cmd.SetArgs(args)
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	printed = capture(t, func() { err = cmd.Execute() })
+	return body, printed, err
+}
+
+const addOK = `{"resource":{"name":"db"},"type":"postgres","sentence":"db is a postgres resource on port 5432."}`
+
+func TestExtFlagReachesTheBody(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		// want is nil when the field must be absent, so that a restatement
+		// leaves the extensions as they are.
+		want []string
+	}{
+		{"absent", []string{"shop/db", "postgres", "--size", "m"}, nil},
+		{"empty", []string{"shop/db", "postgres", "--ext", ""}, []string{}},
+		{"empty with equals", []string{"shop/db", "postgres", "--ext="}, []string{}},
+		{"one", []string{"shop/db", "postgres", "--ext", "vector"}, []string{"vector"}},
+		{"repeated", []string{"shop/db", "postgres", "--ext", "vector", "--ext", "postgis"}, []string{"vector", "postgis"}},
+		{"spaces, empties and repeats", []string{"shop/db", "postgres", "--ext", " vector ", "--ext", "", "--ext=postgis", "--ext", "vector"}, []string{"vector", "postgis"}},
+		// A comma is not a separator, as it is not for --env: the name goes to
+		// the platform as typed, and its unknown_extension answer says so.
+		{"a comma is part of the name", []string{"shop/db", "postgres", "--ext", "vector,postgis"}, []string{"vector,postgis"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _, err := addAnswering(t, http.StatusOK, addOK, tc.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, present := body["extensions"]
+			if tc.want == nil {
+				if present {
+					t.Fatalf("extensions = %#v sent with no --ext: a restatement would replace the set", got)
+				}
+				return
+			}
+			if !present {
+				t.Fatalf("no extensions field in %#v: --ext %q would leave the set as it is", body, tc.args[len(tc.args)-1])
+			}
+			list, ok := got.([]any)
+			if !ok {
+				t.Fatalf("extensions = %#v, want a JSON list", got)
+			}
+			if len(list) != len(tc.want) {
+				t.Fatalf("extensions = %v, want %v", list, tc.want)
+			}
+			for i := range list {
+				if list[i] != tc.want[i] {
+					t.Errorf("extensions = %v, want %v", list, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// Not refused locally for a type that is not a postgres: gg knows external by
+// name and nothing else, so the platform's own refusal is what the caller sees,
+// code and hint intact.
+func TestExtOnAnotherTypeIsThePlatformsRefusal(t *testing.T) {
+	body, _, err := addAnswering(t, http.StatusBadRequest,
+		`{"error":{"code":"no_extensions","message":"extensions cannot be set on a valkey resource","fix_hint":"drop extensions; they are postgres extensions, and only a postgres takes them"}}`,
+		"shop/cache", "valkey", "--ext", "vector")
+	if body == nil {
+		t.Fatal("refused before the platform was asked")
+	}
+	var ae apiError
+	if !errors.As(err, &ae) || ae.Code != "no_extensions" {
+		t.Fatalf("err = %v, want the platform's no_extensions", err)
+	}
+	if !strings.Contains(err.Error(), "only a postgres") {
+		t.Errorf("the hint was lost: %v", err)
+	}
+}
+
+// A refused change reaches the caller as the platform said it — code, postgres's
+// own reason, the hint — the way `gg destroy` passes errors through. And nothing
+// after the call may print, because a list of extensions under a refusal would
+// read as though the change had happened. A drop that would lose data is the
+// one to get right: it asks nobody, so this refusal is the only thing that
+// stands between the caller and their pg_cron jobs.
+func TestExtRefusalsPassThrough(t *testing.T) {
+	for _, tc := range []struct {
+		code   string
+		status int
+		reply  string
+		says   []string
+	}{
+		{"extensions_failed", http.StatusConflict,
+			`{"error":{"code":"extensions_failed","message":"could not change the extensions of db: ERROR: extension pg_cron holds 1 row(s) of your data in cron.job; remove them first if losing them is what you mean","fix_hint":"nothing changed, so this is safe to run again once the reason is dealt with"}}`,
+			[]string{"holds 1 row(s) of your data in cron.job", "nothing changed"}},
+		{"extensions_failed", http.StatusConflict,
+			`{"error":{"code":"extensions_failed","message":"could not change the extensions of db: ERROR: cannot drop extension vector because other objects depend on it: column e of table items depends on type vector","fix_hint":"nothing changed, so this is safe to run again once the reason is dealt with"}}`,
+			[]string{"column e of table items depends on type vector", "nothing changed"}},
+	} {
+		t.Run(tc.code, func(t *testing.T) {
+			_, printed, err := addAnswering(t, tc.status, tc.reply, "shop/db", "postgres", "--ext", "")
+			var ae apiError
+			if !errors.As(err, &ae) || ae.Code != tc.code {
+				t.Fatalf("err = %v, want [%s]", err, tc.code)
+			}
+			for _, want := range tc.says {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("%q missing from the error:\n%v", want, err)
+				}
+			}
+			if printed != "" {
+				t.Errorf("printed as though the change went through:\n%s", printed)
+			}
+		})
+	}
+}
+
+// What the database now holds is printed from the answer, not from the flag:
+// a requirement is added for the caller, so asking for earthdistance gets cube
+// too, and the line has to say so.
+func TestAddPrintsTheExtensionsThePlatformHolds(t *testing.T) {
+	_, printed, err := addAnswering(t, http.StatusOK,
+		`{"resource":{"name":"db","extensions":["cube","earthdistance"]},"sentence":"db is a postgres resource on port 5432."}`,
+		"shop/db", "postgres", "--ext", "earthdistance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(printed, "Extensions: cube, earthdistance") {
+		t.Errorf("the extensions are not in the answer:\n%s", printed)
+	}
+
+	// Asked for none: said, so the flag does not look ignored.
+	_, printed, err = addAnswering(t, http.StatusOK, addOK, "shop/db", "postgres", "--ext", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(printed, "Extensions: none") {
+		t.Errorf("--ext \"\" printed nothing about extensions:\n%s", printed)
+	}
+
+	// And not given, none held: nothing to say about them.
+	_, printed, err = addAnswering(t, http.StatusOK, addOK, "shop/db", "postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(printed, "Extensions") {
+		t.Errorf("a line about extensions nobody asked about and none held:\n%s", printed)
+	}
+}
+
+// The help is where a caller learns the semantics before typing them, so the
+// claims that change what they type are checked: the set is the whole set,
+// absence leaves it, the flag repeats, a drop asks nobody because it refuses
+// rather than loses, and is never CASCADE, pgvector is
+// spelled vector, and when qdrant is the better answer.
+func TestAddHelpExplainsExtensions(t *testing.T) {
+	long := newResourceAddCmd().Long
+	for _, want := range []string{
+		"--ext vector --ext postgis", "repeated for more", "WHOLE set", "leaves them as they are", `--ext "" asks for none`,
+		"needs no restart", "asks nobody", "never CASCADE", "your data", "pg_cron's jobs", "extensions_failed",
+		"pgvector", "postgis", "pg_cron", "pg_partman", "pgaudit", "pg_stat_statements",
+		"earthdistance (adds cube)", "timescaledb", "qdrant when the vectors are\nthe product",
+	} {
+		if !strings.Contains(long, want) {
+			t.Errorf("the help does not say %q", want)
+		}
 	}
 }
 

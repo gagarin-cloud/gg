@@ -36,7 +36,10 @@ import (
 // which would be a wait for a pod that does not exist.
 const typeExternal = "external"
 
-func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string) error {
+// exts is the --ext set, and nil and empty are different requests: nil is a
+// flag that was not given, which leaves a postgres's extensions as they are,
+// and an empty, non-nil slice is `--ext ""`, which asks for none.
+func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string, exts []string) error {
 	project, name, _, err := parseService(ref)
 	if err != nil {
 		return err
@@ -68,9 +71,28 @@ func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string)
 	if size != "" {
 		body["size"] = size
 	}
+	// The whole set, not a delta, and absent unless --ext was given — the same
+	// absent-means-unchanged rule as size, for the same reason: restating a
+	// database from an old command line must not drop an extension by
+	// forgetting to mention it. Dropping one is a removal, and it answers
+	// approval_required like every other.
+	//
+	// Not refused here for a type that is not a postgres. gg knows one type by
+	// name, and that is external; the platform says no_extensions, with a
+	// hint, the way it refuses --size on a bucket.
+	if exts != nil {
+		body["extensions"] = exts
+	}
 
 	var out struct {
 		Sentence string `json:"sentence"`
+		// Resource is the row as the platform now holds it. Only the
+		// extensions are read from it: they are the one part of the answer
+		// that can differ from what was typed, because a requirement is added
+		// for the caller — earthdistance brings cube.
+		Resource struct {
+			Extensions []string `json:"extensions"`
+		} `json:"resource"`
 	}
 	path := fmt.Sprintf("/v1/projects/%s/resources/%s", project, name)
 	if err := call("PUT", path, body, &out); err != nil {
@@ -79,6 +101,16 @@ func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string)
 
 	if out.Sentence != "" {
 		fmt.Printf("%s\n", out.Sentence)
+	}
+	// Said whenever there are any, not only when --ext was given: a
+	// restatement that changed only the size is still a fine moment to see
+	// what the database holds, and it costs one line.
+	if len(out.Resource.Extensions) > 0 {
+		fmt.Printf("\nExtensions: %s\n", strings.Join(out.Resource.Extensions, ", "))
+	} else if exts != nil && len(exts) == 0 {
+		// Asked for none and got none. Silence would read as the flag being
+		// ignored.
+		fmt.Printf("\nExtensions: none\n")
 	}
 	// An external is ready when this call returns — there is no pod to pull an
 	// image, so the "gagarin is provisioning it" line below would be a wait for
@@ -134,6 +166,29 @@ them:
   gg deploy %s/api:8080 api --deps %s
 `, project, name, envPrefix(name), project, name)
 	return nil
+}
+
+// extSet turns the --ext values into the set to send: one name each,
+// spaces trimmed, empties dropped, duplicates kept to one.
+//
+// Always non-nil, because it is only called when the flag was given — and a
+// flag given empty is a request for no extensions, which has to reach the
+// platform as [] rather than vanish as an absent field. Names are not checked
+// against a catalogue here: the platform owns the catalogue, and its
+// unknown_extension answer lists every name it offers, which a copy in gg
+// would one day stop doing.
+func extSet(vals []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, n := range vals {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
 }
 
 // envPrefix is the prefix a resource's variables are published under: its own

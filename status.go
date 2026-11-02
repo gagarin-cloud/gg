@@ -296,6 +296,15 @@ func printStatusTable(st statusResp) {
 			lines = append(lines, line{text: runLine(s)})
 		}
 
+		// A postgres's extensions, under it, where an address would go. Not a
+		// column: most rows have none, and a list of five names would set the
+		// width of every row above and below it. Read off the row rather than
+		// off its type, so the line appears for whatever the platform says
+		// has some.
+		if l := extensionsLine(s); l != "" {
+			lines = append(lines, line{text: l})
+		}
+
 		// A restore still under way, or one that failed, under the resource it
 		// was for — where `gg resource restore --no-wait` sends the reader. A
 		// finished one says nothing: the resource simply holds its data now.
@@ -690,4 +699,14 @@ func restoreLine(s serviceStatus) string {
 		out += fmt.Sprintf(" (try %d; the last one hit: %s)", r.Attempts+1, r.Error)
 	}
 	return out
+}
+
+// extensionsLine is a resource's extensions as a line under its row, and
+// empty when it has none. No mark of its own: an extension has no state to be
+// in — it is there, or the platform would not report it.
+func extensionsLine(s serviceStatus) string {
+	if len(s.Extensions) == 0 {
+		return ""
+	}
+	return "   └ extensions: " + strings.Join(s.Extensions, ", ")
 }
