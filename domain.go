@@ -183,7 +183,8 @@ func cmdDomainList(ref string) error {
 //
 // The two are printed together because separately they mislead: "waiting" alone
 // implies the platform is working on it, and for two of the four states the
-// platform can do nothing at all until somebody edits a DNS record.
+// platform can do nothing at all until somebody edits a DNS record — and for
+// one, a resolver's cache catching up, nobody can do anything but wait.
 func describeDomainState(state, blockedOn string) string {
 	switch state {
 	case "ok":
@@ -194,6 +195,11 @@ func describeDomainState(state, blockedOn string) string {
 		return "DNS points elsewhere (you)"
 	case "waiting_dns":
 		return "waiting for DNS (you)"
+	case "dns_cached":
+		// Nobody's: the record is right at the domain's own nameservers, and a
+		// public resolver is still holding what it heard before. No "(you)",
+		// because the one thing not to do is go and change the record.
+		return "waiting for cache revalidation"
 	default:
 		if blockedOn != "" {
 			return state + " (" + blockedOn + ")"

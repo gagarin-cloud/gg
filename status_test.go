@@ -159,6 +159,31 @@ func TestADriftingAddressSaysWhoIsHoldingItUp(t *testing.T) {
 	}
 }
 
+// A record that is right while a resolver catches up is nobody's to act on, and
+// the line must not tell the owner it is theirs: the tempting reaction to a
+// domain that still does not work is to go and change a correct record.
+func TestACachedAddressBlamesNobody(t *testing.T) {
+	out := capture(t, func() {
+		printStatusTable(statusResp{Project: "shop", ProjectID: "9v3juxz0",
+			Services: []serviceStatus{svc("web",
+				domainStatus{URL: "https://shop.example.com", Domain: "shop.example.com",
+					State: "dns_cached"},
+			)}})
+	})
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "└") {
+			line = l
+		}
+	}
+	if !strings.Contains(line, "waiting for cache revalidation") {
+		t.Errorf("the line does not say a cache is being waited on: %q", line)
+	}
+	if strings.Contains(line, "(you)") {
+		t.Errorf("a cached address is blamed on its owner: %q", line)
+	}
+}
+
 // The regression the sub-row shape exists to prevent: an address is not a cell,
 // so a long hostname must not stretch the columns the services line up in.
 func TestALongAddressDoesNotStretchTheTable(t *testing.T) {
