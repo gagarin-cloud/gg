@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"sort"
@@ -36,8 +37,13 @@ import (
 )
 
 // deployLinkBase is where a recipe's deploy page lives. The id is the whole
-// address: a name is unique only within one account.
-const deployLinkBase = "https://my.gagarin.cloud/deploy/"
+// address: a name is unique only within one account. deployLinkPath is the
+// same without the scheme, which is how a link comes back after a chat client
+// or a human has had it.
+const (
+	deployLinkPath = "my.gagarin.cloud/deploy/"
+	deployLinkBase = "https://" + deployLinkPath
+)
 
 func deployLink(id string) string { return deployLinkBase + id }
 
@@ -165,9 +171,10 @@ type projectRecipe struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"recipe"`
-	Op    string `json:"op"`
-	State string `json:"state"`
-	Error string `json:"error"`
+	Op      string `json:"op"`
+	State   string `json:"state"`
+	Version string `json:"version"`
+	Error   string `json:"error"`
 }
 
 // ---- finding one -------------------------------------------------------
@@ -649,25 +656,34 @@ func readInputs(given map[string]string) (map[string]map[string]string, error) {
 	return out, nil
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
+// copyPollFailures is how many polls in a row may fail to reach the platform
+// before the wait gives up. A copy takes a minute, and a laptop's network
+// drops for a second; one lost GET is not a reason to abandon an install that
+// is still going on the other side.
+const copyPollFailures = 3
 
 // waitForRecipeCopy follows a project's install or update until its images are
 // copied, or the copy failed. No deadline of its own: the copy job retries and
 // then gives up, and says so in the row this reads, so the wait ends when the
 // copy does.
+//
+// An answer from the platform that refuses — a credential revoked meanwhile,
+// a project gone — ends the wait at once; only not getting an answer is
+// retried, and only copyPollFailures times in a row.
 func waitForRecipeCopy(project string) error {
+	failures := 0
 	for {
 		var st projectRecipe
 		if err := call("GET", "/v1/projects/"+project+"/recipe", nil, &st); err != nil {
-			return err
+			var ae apiError
+			failures++
+			if errors.As(err, &ae) || failures >= copyPollFailures {
+				return err
+			}
+			time.Sleep(recipePoll)
+			continue
 		}
+		failures = 0
 		switch st.State {
 		case "copied", "installed":
 			return nil
@@ -698,6 +714,55 @@ type installResp struct {
 	Monthly recipeMoney       `json:"monthly_micro_usd"`
 	Next    string            `json:"next"`
 	URLs    map[string]string `json:"urls"`
+}
+
+// finishWithInputs runs one of the platform's two-step verbs — install, or
+// update — to its end, and returns the answer that ended it.
+//
+// The first POST carries body and no inputs: it asks. The platform answers 200
+// when it did the whole thing there and then, 202 when it has images to copy
+// first, and inputs_missing when the images are already in place and the only
+// thing it lacks is what the files hold. The last two are the same moment from
+// here: the input files are read now, not before, and sent in one more POST
+// with the same body. inputs_missing in answer to *that* POST is a refusal
+// like any other, because the files were sent and found wanting.
+//
+// copied says the caller already knows the images are there — a run carrying
+// on in a project an earlier run left copied — and the ask is skipped: the
+// platform would only answer it inputs_missing.
+func finishWithInputs[T any](project, path string, body map[string]any, given map[string]string, copied bool) (T, error) {
+	var out T
+	if !copied {
+		code, err := callStatus("POST", path, body, &out)
+		var ae apiError
+		switch {
+		case err == nil && code != http.StatusAccepted:
+			return out, nil
+		case err == nil:
+			fmt.Println("copying images…")
+			if err := waitForRecipeCopy(project); err != nil {
+				return out, err
+			}
+		case errors.As(err, &ae) && ae.Code == "inputs_missing" && len(given) > 0:
+		default:
+			return out, err
+		}
+	}
+	inputs, err := readInputs(given)
+	if err != nil {
+		return out, fmt.Errorf("%w\n  %s holds the copied images; run the same command again once the file is fixed", err, project)
+	}
+	finish := maps.Clone(body)
+	if len(inputs) > 0 {
+		finish["inputs"] = inputs
+	}
+	// A fresh value: the ask's 202 body has fields the final answer need not
+	// repeat, and decoding on top of it would keep them.
+	out = *new(T)
+	if err := call("POST", path, finish, &out); err != nil {
+		return out, fmt.Errorf("%w\n  %s holds the copied images; run the same command again once that is fixed", err, project)
+	}
+	return out, nil
 }
 
 // cmdRecipeInstall creates a project and installs a recipe into it, in the
@@ -741,6 +806,7 @@ func cmdRecipeInstall(recipeArg, projectArg string, inputFlags []string) error {
 	}
 
 	fmt.Printf("→ installing %s %s into a new project, %s\n", r.Name, version, name)
+	copied := false
 	p, err := createProject(name)
 	if err != nil {
 		// Run again after a failed copy or a refused input, the project is
@@ -750,49 +816,33 @@ func cmdRecipeInstall(recipeArg, projectArg string, inputFlags []string) error {
 		if call("GET", "/v1/projects/"+name+"/recipe", nil, &st) != nil || st.Recipe.ID != r.ID {
 			return err
 		}
-		fmt.Printf("project %s exists, and is installing %s; carrying on\n", name, r.Name)
+		// Pinned to the version in flight, not the one just fetched: the
+		// platform holds one install at a time, and asking for a version
+		// published since the first run would be refused as a second one. The
+		// inputs are checked again when that changes what is being installed.
+		if st.Version != "" && st.Version != version {
+			version = st.Version
+			if r, _, err = fetchRecipe(id, version); err != nil {
+				return err
+			}
+			if err := checkInputs(r.Name, r.inputs(), given); err != nil {
+				return err
+			}
+		}
+		copied = st.State == "copied"
+		fmt.Printf("project %s exists, and is installing %s %s; carrying on\n", name, r.Name, version)
 	} else {
 		printCreated(p)
 	}
+	fmt.Printf("  about %s once it runs\n", r.Monthly.line())
 
-	path := "/v1/projects/" + name + "/recipe"
 	ask := map[string]any{"recipe": r.ID}
 	if version != "" {
 		ask["version"] = version
 	}
-	var started installResp
-	if err := call("POST", path, ask, &started); err != nil {
+	done, err := finishWithInputs[installResp](name, "/v1/projects/"+name+"/recipe", ask, given, copied)
+	if err != nil {
 		return err
-	}
-	if started.Recipe.Version != "" {
-		version = started.Recipe.Version
-	}
-	fmt.Printf("  about %s once it runs\n", started.Monthly.line())
-
-	state := started.Install.State
-	if state != "copied" && state != "installed" {
-		fmt.Println("copying images…")
-		if err := waitForRecipeCopy(name); err != nil {
-			return err
-		}
-	}
-
-	// Already installed is a run of this command that got as far as the end
-	// before something else failed; the platform answers it as done.
-	done := started
-	if state != "installed" {
-		inputs, err := readInputs(given)
-		if err != nil {
-			return fmt.Errorf("%w\n  %s holds the copied images; run the same command again once the file is fixed", err, name)
-		}
-		finish := map[string]any{"recipe": r.ID, "version": version}
-		if len(inputs) > 0 {
-			finish["inputs"] = inputs
-		}
-		done = installResp{}
-		if err := call("POST", path, finish, &done); err != nil {
-			return fmt.Errorf("%w\n  %s holds the copied images; run the same command again once that is fixed", err, name)
-		}
 	}
 	if done.Install.Version != "" {
 		version = done.Install.Version
@@ -961,11 +1011,11 @@ func opText(raw json.RawMessage) string {
 // says one. The update is then pinned to the version the diff showed, so what
 // was read is what is applied.
 //
-// Then the same two steps install has. Ask; if the platform has images to
-// copy it answers 202, and gg waits for the copy and asks again with the
-// inputs. If it had nothing to copy it applies at once — unless the version
-// needs an input, which it refuses as inputs_missing, and that is the moment
-// the files are read and sent.
+// Then the same two steps install has, in finishWithInputs. Ask; if the
+// platform has images to copy it answers 202, and gg waits for the copy and
+// asks again with the inputs. If it had nothing to copy it applies at once —
+// unless the version needs an input, which it refuses as inputs_missing, and
+// that is the moment the files are read and sent.
 func cmdRecipeUpdate(ref, to string, inputFlags []string, force bool) error {
 	project, err := parseProject(ref)
 	if err != nil {
@@ -997,47 +1047,16 @@ func cmdRecipeUpdate(ref, to string, inputFlags []string, force bool) error {
 	}
 	fmt.Printf("→ updating %s from %s to %s\n", project, d.From, d.To)
 
-	path := "/v1/projects/" + project + "/recipe/update"
-	body := func() map[string]any {
-		b := map[string]any{}
-		if d.To != "" {
-			b["version"] = d.To
-		}
-		if force {
-			b["force"] = true
-		}
-		return b
+	body := map[string]any{}
+	if d.To != "" {
+		body["version"] = d.To
 	}
-	var out updateResp
-	code, err := callStatus("POST", path, body(), &out)
-	again := false
-	switch {
-	case err != nil:
-		var ae apiError
-		if !errors.As(err, &ae) || ae.Code != "inputs_missing" || len(given) == 0 {
-			return err
-		}
-		again = true
-	case code == http.StatusAccepted:
-		fmt.Println("copying images…")
-		if err := waitForRecipeCopy(project); err != nil {
-			return err
-		}
-		again = true
+	if force {
+		body["force"] = true
 	}
-	if again {
-		inputs, err := readInputs(given)
-		if err != nil {
-			return err
-		}
-		finish := body()
-		if len(inputs) > 0 {
-			finish["inputs"] = inputs
-		}
-		out = updateResp{}
-		if err := call("POST", path, finish, &out); err != nil {
-			return err
-		}
+	out, err := finishWithInputs[updateResp](project, "/v1/projects/"+project+"/recipe/update", body, given, false)
+	if err != nil {
+		return err
 	}
 
 	fmt.Printf("%s is on %s, from %s\n", project, out.To, out.From)

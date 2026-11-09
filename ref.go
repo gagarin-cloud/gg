@@ -231,7 +231,7 @@ func parseRecipeRef(s string) (ref, version string, err error) {
 	if s == "" {
 		return "", "", fmt.Errorf("which recipe?\n  hint: a name from gg recipe ls, or the 8-character id at the end of a deploy link")
 	}
-	s = strings.TrimPrefix(s, deployLinkBase)
+	s = stripDeployLink(s)
 	ref, version, hadAt := strings.Cut(s, "@")
 	if strings.Contains(ref, "/") {
 		return "", "", fmt.Errorf(
@@ -247,6 +247,22 @@ func parseRecipeRef(s string) (ref, version string, err error) {
 		}
 	}
 	return ref, version, nil
+}
+
+// stripDeployLink reduces a pasted deploy link to what follows /deploy/, and
+// leaves anything else alone. A link arrives in whatever shape the last thing
+// that touched it left: without its scheme, as http, with a trailing slash,
+// with a tracking query or a fragment. None of that is the recipe.
+func stripDeployLink(s string) string {
+	rest := strings.TrimPrefix(strings.TrimPrefix(s, "https://"), "http://")
+	id, ok := strings.CutPrefix(rest, deployLinkPath)
+	if !ok {
+		return s
+	}
+	if i := strings.IndexAny(id, "?#"); i >= 0 {
+		id = id[:i]
+	}
+	return strings.TrimSuffix(id, "/")
 }
 
 // checkVersion refuses a version that is not three numbers.

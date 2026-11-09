@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -127,13 +129,24 @@ func callStatus(method, path string, body any, out any) (int, error) {
 // callPublic is call for an endpoint that answers anybody: reading a recipe.
 // It sends the credential when there is one, so a signed-in caller is the same
 // caller everywhere, and sends none rather than refusing when there is not —
-// a deploy link is meant to be read before anybody has an account.
+// a deploy link is meant to be read before anybody has an account. Not being
+// signed in is the only thing it forgives: a credential file that cannot be
+// read is a problem to say, not a reason to quietly become somebody else.
 func callPublic(method, path string, out any) error {
 	base, token, err := resolveAuth()
-	if err != nil {
+	var signedOut errNotAuthenticated
+	switch {
+	case errors.As(err, &signedOut):
 		base, token = apiBase(), ""
+	case err != nil:
+		return err
 	}
 	return callTo(base, token, method, path, nil, out)
+}
+
+// sortedKeys is a map's keys in order, for output that reads the same twice.
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(maps.Keys(m))
 }
 
 func callStatusTo(base, token, method, path string, body any, out any, timeout time.Duration) (int, error) {

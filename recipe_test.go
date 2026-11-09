@@ -10,6 +10,8 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -632,34 +634,237 @@ func TestInstallRefusesAMissingInputBeforeCreatingAProject(t *testing.T) {
 
 // Run again after a refused input, the command carries on in the project the
 // first run created rather than refusing because the name is taken.
+//
+// The fake answers as the platform does: a project whose images are copied
+// refuses a POST without inputs as inputs_missing, and never says "copied"
+// to one. So the run that carries on must send the inputs in its first POST,
+// and a run that finds the copy still going must ask, wait, and then send.
 func TestInstallCarriesOnInTheProjectItCreated(t *testing.T) {
-	routes := installRoutes()
-	routes["POST /v1/projects"] = []reply{{http.StatusConflict,
+	nameTaken := []reply{{http.StatusConflict,
 		`{"error":{"code":"name_taken","message":"you already have a project called myshop"}}`}}
-	routes["GET /v1/projects/myshop/recipe"] = ok(`{"recipe":{"id":"4bcd2fgh","name":"chit-chat"},"op":"install","state":"copied"}`)
-	routes["POST /v1/projects/myshop/recipe"] = []reply{
-		{http.StatusAccepted, `{"recipe":{"id":"4bcd2fgh","name":"chit-chat","version":"1.2.0"},"install":{"state":"copied"}}`},
-		{http.StatusOK, `{"install":{"state":"installed","version":"1.2.0"},"urls":{}}`},
-	}
-	scriptedAPI(t, routes)
+	inputsMissing := reply{http.StatusBadRequest,
+		`{"error":{"code":"inputs_missing","message":"this recipe needs values for openai"}}`}
+	installed := reply{http.StatusOK, `{"install":{"state":"installed","version":"1.2.0"},"urls":{}}`}
 	file := openaiEnv(t)
-	out, err := runCaptured(t, func() error {
-		return cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file})
+
+	t.Run("copied: the inputs go in the first POST", func(t *testing.T) {
+		routes := installRoutes()
+		routes["POST /v1/projects"] = nameTaken
+		routes["GET /v1/projects/myshop/recipe"] = ok(`{"recipe":{"id":"4bcd2fgh","name":"chit-chat"},"op":"install","state":"copied","version":"1.2.0"}`)
+		routes["POST /v1/projects/myshop/recipe"] = []reply{inputsMissing}
+		hits := scriptedAPI(t, routes)
+		out, err := runCaptured(t, func() error {
+			return cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file})
+		})
+		// The fake answers every POST without inputs as inputs_missing, so
+		// the only way through is one POST that carries them.
+		posts := hitsTo(*hits, "POST /v1/projects/myshop/recipe")
+		if len(posts) != 1 || posts[0].body["inputs"] == nil {
+			t.Fatalf("err = %v, posts = %v", err, posts)
+		}
+		if !strings.Contains(out, "carrying on") || strings.Contains(out, "copying images") {
+			t.Errorf("out:\n%s", out)
+		}
+		// The fake's inputs_missing is the only reply queued, so the run ends
+		// in it; that it carried the inputs, above, is the property.
+		if err == nil || !strings.Contains(err.Error(), "[inputs_missing]") {
+			t.Errorf("err = %v", err)
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "carrying on") || strings.Contains(out, "copying images") {
-		t.Errorf("out:\n%s", out)
-	}
+
+	t.Run("copied: the run finishes", func(t *testing.T) {
+		routes := installRoutes()
+		routes["POST /v1/projects"] = nameTaken
+		routes["GET /v1/projects/myshop/recipe"] = ok(`{"recipe":{"id":"4bcd2fgh","name":"chit-chat"},"op":"install","state":"copied","version":"1.2.0"}`)
+		routes["POST /v1/projects/myshop/recipe"] = []reply{installed}
+		hits := scriptedAPI(t, routes)
+		out, err := runCaptured(t, func() error {
+			return cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		posts := hitsTo(*hits, "POST /v1/projects/myshop/recipe")
+		if len(posts) != 1 || posts[0].body["inputs"] == nil || posts[0].body["version"] != "1.2.0" {
+			t.Errorf("posts = %v", posts)
+		}
+		if !strings.Contains(out, "carrying on") || !strings.Contains(out, "installed chit-chat 1.2.0 into myshop") {
+			t.Errorf("out:\n%s", out)
+		}
+	})
+
+	t.Run("still copying: ask, wait, then send", func(t *testing.T) {
+		routes := installRoutes()
+		routes["POST /v1/projects"] = nameTaken
+		routes["GET /v1/projects/myshop/recipe"] = []reply{
+			{http.StatusOK, `{"recipe":{"id":"4bcd2fgh","name":"chit-chat"},"op":"install","state":"copying","version":"1.2.0"}`},
+			{http.StatusOK, `{"recipe":{"id":"4bcd2fgh","name":"chit-chat"},"op":"install","state":"copied","version":"1.2.0"}`},
+		}
+		routes["POST /v1/projects/myshop/recipe"] = []reply{routes["POST /v1/projects/myshop/recipe"][0], installed}
+		hits := scriptedAPI(t, routes)
+		out, err := runCaptured(t, func() error {
+			return cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		posts := hitsTo(*hits, "POST /v1/projects/myshop/recipe")
+		if len(posts) != 2 || posts[0].body["inputs"] != nil || posts[1].body["inputs"] == nil {
+			t.Errorf("posts = %v", posts)
+		}
+		if !strings.Contains(out, "carrying on") || !strings.Contains(out, "copying images") {
+			t.Errorf("out:\n%s", out)
+		}
+	})
+
+	// The copy finished between the GET and the POST: the platform answers
+	// the ask inputs_missing, which means "copied, send them".
+	t.Run("copied meanwhile: inputs_missing on the ask is not the end", func(t *testing.T) {
+		routes := installRoutes()
+		routes["POST /v1/projects"] = nameTaken
+		routes["GET /v1/projects/myshop/recipe"] = ok(`{"recipe":{"id":"4bcd2fgh","name":"chit-chat"},"op":"install","state":"copying","version":"1.2.0"}`)
+		routes["POST /v1/projects/myshop/recipe"] = []reply{inputsMissing, installed}
+		hits := scriptedAPI(t, routes)
+		out, err := runCaptured(t, func() error {
+			return cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		posts := hitsTo(*hits, "POST /v1/projects/myshop/recipe")
+		if len(posts) != 2 || posts[0].body["inputs"] != nil || posts[1].body["inputs"] == nil {
+			t.Errorf("posts = %v", posts)
+		}
+		if strings.Contains(out, "copying images") {
+			t.Errorf("out:\n%s", out)
+		}
+	})
+
+	// A newer version was published between the runs. The install in flight
+	// is 1.2.0, and that is what the run finishes, whatever is latest now.
+	t.Run("pinned to the version in flight", func(t *testing.T) {
+		routes := installRoutes()
+		routes["POST /v1/projects"] = nameTaken
+		routes["GET /v1/recipes/4bcd2fgh"] = ok(strings.Replace(testRecipe, `"version":"1.2.0"`, `"version":"1.3.0"`, 1))
+		routes["GET /v1/recipes/4bcd2fgh/versions/1.2.0"] = ok(testRecipe)
+		routes["GET /v1/projects/myshop/recipe"] = ok(`{"recipe":{"id":"4bcd2fgh","name":"chit-chat"},"op":"install","state":"copied","version":"1.2.0"}`)
+		routes["POST /v1/projects/myshop/recipe"] = []reply{installed}
+		hits := scriptedAPI(t, routes)
+		out, err := runCaptured(t, func() error {
+			return cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		posts := hitsTo(*hits, "POST /v1/projects/myshop/recipe")
+		if len(posts) != 1 || posts[0].body["version"] != "1.2.0" {
+			t.Errorf("posts = %v", posts)
+		}
+		if !strings.Contains(out, "carrying on") || !strings.Contains(out, "installing chit-chat 1.2.0; carrying on") {
+			t.Errorf("out:\n%s", out)
+		}
+	})
 
 	// A project of the same name that holds anything else is refused as the
 	// platform refused it.
-	routes["GET /v1/projects/myshop/recipe"] = []reply{{http.StatusNotFound, `{"error":{"code":"no_recipe","message":"no recipe"}}`}}
-	scriptedAPI(t, routes)
-	if err := cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file}); err == nil || !strings.Contains(err.Error(), "[name_taken]") {
-		t.Errorf("err = %v", err)
+	t.Run("another project of that name", func(t *testing.T) {
+		routes := installRoutes()
+		routes["POST /v1/projects"] = nameTaken
+		routes["GET /v1/projects/myshop/recipe"] = []reply{{http.StatusNotFound, `{"error":{"code":"no_recipe","message":"no recipe"}}`}}
+		scriptedAPI(t, routes)
+		if err := cmdRecipeInstall(testRecipeID, "myshop", []string{"openai=" + file}); err == nil || !strings.Contains(err.Error(), "[name_taken]") {
+			t.Errorf("err = %v", err)
+		}
+	})
+}
+
+// A poll that does not reach the platform is retried; a poll the platform
+// refuses is not. The fake drops the connection, which is what a network
+// that blinked looks like from here.
+func TestWaitForRecipeCopyToleratesABlinkingNetwork(t *testing.T) {
+	recipePoll = time.Millisecond
+	t.Cleanup(func() { recipePoll = 3 * time.Second })
+	drop := func(w http.ResponseWriter) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			panic(err)
+		}
+		conn.Close()
 	}
+	for name, tc := range map[string]struct {
+		drops   int
+		refuse  bool
+		wantErr string
+	}{
+		"two drops, then copied": {drops: 2},
+		"every poll dropped":     {drops: 100, wantErr: "cannot reach control plane"},
+		"refused at once":        {refuse: true, wantErr: "[forbidden]"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			fakeAPI(t, func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				switch {
+				case tc.refuse:
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"error":{"code":"forbidden","message":"no"}}`))
+				case calls <= tc.drops:
+					drop(w)
+				default:
+					_, _ = w.Write([]byte(`{"state":"copied"}`))
+				}
+			})
+			err := waitForRecipeCopy("myshop")
+			if tc.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			}
+			switch {
+			case tc.refuse && calls != 1:
+				t.Errorf("a refusal was retried: %d calls", calls)
+			case tc.drops == 100 && calls != copyPollFailures:
+				t.Errorf("gave up after %d calls, want %d", calls, copyPollFailures)
+			case tc.drops == 2 && calls != 3:
+				t.Errorf("%d calls, want 3", calls)
+			}
+		})
+	}
+}
+
+// Reading a recipe needs no account, so no credential file is forgiven; a
+// credential file that cannot be read is not, because the alternative is to
+// act as nobody without saying so.
+func TestReadingARecipeSignedOut(t *testing.T) {
+	t.Run("no credentials at all", func(t *testing.T) {
+		hits := scriptedAPI(t, map[string][]reply{"GET /v1/recipes/" + testRecipeID: ok(testRecipe)})
+		t.Setenv("GAGARIN_TOKEN", "")
+		if _, _, err := fetchRecipe(testRecipeID, ""); err != nil {
+			t.Fatal(err)
+		}
+		if len(*hits) != 1 {
+			t.Errorf("requests = %v", paths(*hits))
+		}
+	})
+	t.Run("a credential file that cannot be read", func(t *testing.T) {
+		hits := scriptedAPI(t, map[string][]reply{"GET /v1/recipes/" + testRecipeID: ok(testRecipe)})
+		t.Setenv("GAGARIN_TOKEN", "")
+		dir := filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "gagarin")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "credentials.json"), []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := fetchRecipe(testRecipeID, "")
+		if err == nil || !strings.Contains(err.Error(), "not readable as credentials") {
+			t.Fatalf("err = %v", err)
+		}
+		if len(*hits) != 0 {
+			t.Errorf("a request went out as nobody: %v", paths(*hits))
+		}
+	})
 }
 
 // --- refs ------------------------------------------------------------------
@@ -674,6 +879,15 @@ func TestParseRecipeRef(t *testing.T) {
 		{in: "chit-chat@1.2.0", ref: "chit-chat", version: "1.2.0"},
 		{in: "4bcd2fgh@10.0.12", ref: "4bcd2fgh", version: "10.0.12"},
 		{in: "https://my.gagarin.cloud/deploy/4bcd2fgh", ref: "4bcd2fgh"},
+		{in: "http://my.gagarin.cloud/deploy/4bcd2fgh", ref: "4bcd2fgh"},
+		{in: "my.gagarin.cloud/deploy/4bcd2fgh", ref: "4bcd2fgh"},
+		{in: "https://my.gagarin.cloud/deploy/4bcd2fgh/", ref: "4bcd2fgh"},
+		{in: "https://my.gagarin.cloud/deploy/4bcd2fgh?utm_source=x", ref: "4bcd2fgh"},
+		{in: "https://my.gagarin.cloud/deploy/4bcd2fgh#install", ref: "4bcd2fgh"},
+		{in: "https://my.gagarin.cloud/deploy/4bcd2fgh/?ref=1#top", ref: "4bcd2fgh"},
+		{in: "https://my.gagarin.cloud/deploy/4bcd2fgh@1.2.0", ref: "4bcd2fgh", version: "1.2.0"},
+		{in: "https://my.gagarin.cloud/deploy/", err: "not a recipe name or id"},
+		{in: "https://my.gagarin.cloud/projects/4bcd2fgh", err: "not inside a project"},
 		{in: "", err: "which recipe?"},
 		{in: "shop/web", err: "not inside a project"},
 		{in: "Chit-Chat", err: "not a recipe name or id"},
@@ -795,6 +1009,63 @@ func TestDiffAndUpdate(t *testing.T) {
 			t.Errorf("updates = %v", updates)
 		}
 		if strings.Contains(out, "copying images") || !strings.Contains(out, "deployed web") {
+			t.Errorf("out:\n%s", out)
+		}
+	})
+
+	// SAFETY. An update that removes something is gated on the account owner,
+	// and the gate has to reach the caller as itself: not swallowed, not
+	// printed over with a line that says the update went through. The
+	// platform asks for the inputs before it asks for approval, so the
+	// refusal comes in answer to the POST that carried them.
+	t.Run("a removal's approval_required reaches the caller", func(t *testing.T) {
+		approval := reply{http.StatusForbidden,
+			`{"error":{"code":"approval_required","message":"we emailed the account owner","fix_hint":"run it again once they click"}}`}
+		hits := scriptedAPI(t, map[string][]reply{
+			"POST /v1/projects/myshop/recipe/diff": ok(testDiff),
+			"POST /v1/projects/myshop/recipe/update": {
+				{http.StatusBadRequest, `{"error":{"code":"inputs_missing","message":"stripe"}}`},
+				approval,
+			},
+		})
+		file := writeTemp(t, ".env.stripe", "API_KEY="+testSecret+"\n")
+		out, err := runCaptured(t, func() error {
+			return cmdRecipeUpdate("myshop", "", []string{"stripe=" + file}, false)
+		})
+		if err == nil || !strings.HasPrefix(err.Error(), "[approval_required]") {
+			t.Fatalf("err = %v; approval_required has to reach the caller as itself", err)
+		}
+		for _, s := range []string{"removes worker", "This needs a human"} {
+			if !strings.Contains(out, s) {
+				t.Errorf("%q missing from the warning:\n%s", s, out)
+			}
+		}
+		if strings.Contains(out, "myshop is on") || strings.Contains(out, "rolling out") {
+			t.Errorf("a gated call printed as done:\n%s", out)
+		}
+		updates := hitsTo(*hits, "POST /v1/projects/myshop/recipe/update")
+		if len(updates) != 2 || strings.Contains(updates[0].raw, testSecret) || !strings.Contains(updates[1].raw, testSecret) {
+			t.Errorf("updates = %v", updates)
+		}
+		if strings.Contains(out, testSecret) || strings.Contains(err.Error(), testSecret) {
+			t.Errorf("an input value was printed:\n%s\n%v", out, err)
+		}
+
+		// Once the owner has clicked, the same command goes through.
+		scriptedAPI(t, map[string][]reply{
+			"POST /v1/projects/myshop/recipe/diff": ok(testDiff),
+			"POST /v1/projects/myshop/recipe/update": {
+				{http.StatusBadRequest, `{"error":{"code":"inputs_missing","message":"stripe"}}`},
+				{http.StatusOK, `{"from":"1.2.0","to":"1.3.0","applied":["removed worker"]}`},
+			},
+		})
+		out, err = runCaptured(t, func() error {
+			return cmdRecipeUpdate("myshop", "", []string{"stripe=" + file}, false)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out, "myshop is on 1.3.0, from 1.2.0") || !strings.Contains(out, "removed worker") {
 			t.Errorf("out:\n%s", out)
 		}
 	})

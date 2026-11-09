@@ -126,12 +126,7 @@ func cmdConnect(ref string, localPort int) error {
 
 	fmt.Printf("%s is %s. The tunnel is up:\n\n", name, article(sec.Type))
 	local := localizeEnv(sec.Env, envPrefix(name), tuns)
-	keys := make([]string, 0, len(local))
-	for k := range local {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range sortedKeys(local) {
 		fmt.Printf("  %s=%s\n", k, local[k])
 	}
 	fmt.Printf(`
