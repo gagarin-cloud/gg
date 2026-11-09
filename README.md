@@ -87,22 +87,29 @@ Deleting that directory does not revoke it; `gg creds revoke` does.
 ## Teach your agent
 
 `gg` drives the API; a separate **agent skill** teaches an agent how. It lives in
-[gagarin-cloud/claude-plugin](https://github.com/gagarin-cloud/claude-plugin),
-not in this binary.
+[gagarin-cloud/plugin](https://github.com/gagarin-cloud/plugin), not in this
+binary.
 
-In Claude Code, the plugin brings the skill, the MCP server, commands and two
-deploy agents at once:
+In Claude Code, the plugin brings the skill, the MCP server, and the `setup`,
+`ship`, `status` and `ci` skills at once:
 
 ```
-/plugin marketplace add gagarin-cloud/claude-plugin
+/plugin marketplace add gagarin-cloud/plugin
 /plugin install gagarin@gagarin-cloud
 ```
 
-For any other agent — Cursor, Codex, Copilot, Cline, Windsurf, Goose, opencode,
-Zed and about seventy others:
+The same plugin is in the Plugins Directory that ChatGPT and Codex share
+(search for Gagarin Cloud), or from the Codex CLI:
 
 ```
-npx skills add gagarin-cloud/claude-plugin -g
+codex plugin marketplace add gagarin-cloud/plugin
+```
+
+For any other agent — Cursor, Copilot, Cline, Windsurf, Goose, opencode, Zed
+and about seventy others:
+
+```
+npx skills add gagarin-cloud/plugin -g
 ```
 
 `-g` installs for your user rather than the current repository; drop it to add
