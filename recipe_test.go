@@ -152,6 +152,7 @@ func TestSnapSendsTheBodyAndPrintsTheURL(t *testing.T) {
 		t.Errorf("a real snap sent dry_run: %#v", body)
 	}
 	for _, s := range []string{"shop-starter 1.0.0, its first version", "https://my.gagarin.cloud/deploy/k3f9x2ma",
+		"[![Deploy to Gagarin Cloud](https://my.gagarin.cloud/deploy/k3f9x2ma/badge.svg)](https://my.gagarin.cloud/deploy/k3f9x2ma)",
 		"copying its images", "gg recipe ls shows when", "domain is not part of a recipe", "$5/month"} {
 		if !strings.Contains(out, s) {
 			t.Errorf("%q missing from the output:\n%s", s, out)
