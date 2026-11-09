@@ -192,9 +192,17 @@ func cmdDepsRemove(ref string, drop []string) error {
 	fmt.Printf("Stopping %s from reaching %s.\n", service, strings.Join(drop, " and "))
 	fmt.Printf("\n  Its calls are dropped, not refused — they hang until whatever made them\n")
 	fmt.Printf("  gives up. Any connection variables they carried come away too.\n")
+	printApprovalNote()
+	return setNeeds(project, service, mergeNames(current, nil, drop))
+}
+
+// printApprovalNote is the paragraph every gated verb prints before it calls:
+// `gg deps rm`, `gg recipe rm`, and a `gg recipe update` that removes
+// something. One copy, because a human gate described two ways is a gate
+// somebody will expect to behave two ways.
+func printApprovalNote() {
 	fmt.Printf("\n  This needs a human: we email the account owner, and you run the same\n")
 	fmt.Printf("  command again once they have clicked.\n\n")
-	return setNeeds(project, service, mergeNames(current, nil, drop))
 }
 
 // checkNames refuses a dependency spelled as a reference. Cross-project edges do

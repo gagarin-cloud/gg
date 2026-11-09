@@ -96,6 +96,7 @@ Environment (overrides the file; meant for CI):
 		newRollbackCmd(),
 		newEjectCmd(),
 		newResourceCmd(),
+		newRecipeCmd(),
 		newConnectCmd(),
 		newDomainCmd(),
 		newReferralCmd(),
@@ -1533,6 +1534,236 @@ func newDomainListCmd() *cobra.Command {
 			return cmdDomainList(args[0])
 		},
 	}
+}
+
+// --- recipes ---------------------------------------------------------------
+
+// newRecipeCmd is publishing a project and deploying one somebody published.
+// The logic, and why install is two steps, is in recipe.go.
+func newRecipeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "recipe",
+		Short: "publish a project so anybody can deploy it, and deploy one",
+		Long: `A recipe is a project published as a link: what it runs, every image pinned
+to its digest, that anybody holding the link deploys into a new project of
+their own with one click or one command.
+
+  gg recipe snap shop --dry-run      what publishing shop would mint
+  gg recipe snap shop                publish it, and print its deploy link
+  gg recipe show k3f9x2ma            what a recipe runs, and what it costs
+  gg recipe install k3f9x2ma myshop --input openai=.env.openai
+  gg recipe diff myshop              what updating to its latest would change
+  gg recipe update myshop            and do it
+
+The platform copies a recipe's images into its own space when it is
+published, and into the new project when it is installed. What a recipe
+installs never changes under it, whatever the project it came from does
+next.
+
+Installing always creates a project; nothing installs into one you have.
+Secrets are never part of a recipe. Each external resource it needs is an
+input, published by its variable names, and whoever installs it names an
+env file per input with --input. gg reads the file when the platform is
+ready for it and never prints a value from it.
+
+Your own recipes are named by their name; anybody's, by the id at the end
+of its deploy link. Add @VERSION to mean one version: k3f9x2ma@1.2.0.`,
+	}
+	cmd.AddCommand(newRecipeSnapCmd(), newRecipeShowCmd(), newRecipeListCmd(),
+		newRecipeRemoveCmd(), newRecipeInstallCmd(), newRecipeDiffCmd(), newRecipeUpdateCmd())
+	return cmd
+}
+
+func newRecipeSnapCmd() *cobra.Command {
+	var f snapFlags
+	cmd := &cobra.Command{
+		Use:   "snap PROJECT",
+		Short: "publish a project as a recipe (owner only)",
+		Long: `Publish what a project runs as a new version of a recipe.
+
+Only the project's owner can snap it. The snapshot is its services, jobs
+and resources, the edges between them and each image's digest; the
+platform copies the images into the recipe's own space, and the deploy
+link installs them once that copy is done. Resources come up empty in
+every install: a recipe carries the shape, never the data. A domain you
+own is not carried either; the notes say what was left out.
+
+Env must never hold a secret. A service's and a job's env is published as
+it is, for anybody holding the link to read, and a value that looks like a
+credential refuses the snap (env_looks_secret). Secrets go in external
+resources: each one becomes an input, published by its variable names and
+never its values, and whoever installs the recipe supplies their own.
+
+Versions have a floor, and the platform sets it. The first is 1.0.0.
+Removing or renaming anything, or changing what cannot change in place,
+is a major; adding anything, or anything that raises what an installer
+pays, is at least a minor; the rest is a patch. --version below the floor
+is refused (version_below_floor), and without --version you get the floor.
+
+Run it with --dry-run first. It prints the version, the floor and every
+change that set it, and what an install would cost, and mints nothing.
+
+  gg recipe snap shop --dry-run
+  gg recipe snap shop --as shop-starter --notes "adds the worker"`,
+		Args: usageArgs(1, 1, "usage: gg recipe snap PROJECT [--dry-run]\n  e.g. gg recipe snap shop --dry-run"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRecipeSnap(args[0], f)
+		},
+	}
+	cmd.Flags().StringVar(&f.version, "version", "", "the version to publish, X.Y.Z; at least the floor, which is the default")
+	cmd.Flags().StringVar(&f.as, "as", "", "the recipe's name, unique among yours; the project's name by default")
+	cmd.Flags().StringVar(&f.source, "source", "", "where the source lives, shown to whoever installs it")
+	cmd.Flags().StringVar(&f.notes, "notes", "", "what this version changes, shown to whoever installs it")
+	cmd.Flags().BoolVar(&f.dryRun, "dry-run", false, "print what would be published, and publish nothing")
+	return cmd
+}
+
+func newRecipeShowCmd() *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "show RECIPE[@VERSION]",
+		Short: "what a recipe runs, what it needs from you, and what it costs",
+		Long: `Print a recipe: who published it, what an install costs a month, what it
+runs and what each thing reaches, the inputs an install needs, and its
+deploy link.
+
+Anybody can read a recipe whose id they hold; it says nothing about the
+account that published it beyond a GitHub login. --format json prints the
+answer as the platform sent it, manifest and all.
+
+  gg recipe show k3f9x2ma
+  gg recipe show shop-starter@1.2.0 --format json`,
+		Args: usageArgs(1, 1, "usage: gg recipe show RECIPE[@VERSION]\n  e.g. gg recipe show k3f9x2ma"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRecipeShow(args[0], format)
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "text", "text, or json for the platform's answer as it is")
+	return cmd
+}
+
+func newRecipeListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "ls",
+		Aliases: []string{"list"},
+		Short:   "the recipes you have published",
+		Args:    usageArgs(0, 0, "usage: gg recipe ls"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRecipeList()
+		},
+	}
+}
+
+func newRecipeRemoveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:     "rm RECIPE[@VERSION]",
+		Aliases: []string{"remove"},
+		Short:   "withdraw a version, or the whole recipe (needs a human's approval)",
+		Long: `Withdraw one version of a recipe, or with no @VERSION all of them.
+
+Nobody can install what is withdrawn. Projects already installed from it
+keep what they have. Like every removal it needs a human: we email the
+account owner, and the same command goes through once they have clicked.
+
+  gg recipe rm shop-starter@1.2.0
+  gg recipe rm shop-starter`,
+		Args: usageArgs(1, 1, "usage: gg recipe rm RECIPE[@VERSION]\n  e.g. gg recipe rm shop-starter@1.2.0"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRecipeRemove(args[0])
+		},
+	}
+}
+
+func newRecipeInstallCmd() *cobra.Command {
+	var inputs []string
+	cmd := &cobra.Command{
+		Use:   "install RECIPE[@VERSION] NEW_PROJECT [--input NAME=FILE]...",
+		Short: "deploy a recipe into a new project",
+		Long: `Create a project and install a recipe into it.
+
+The project is always new; nothing installs into one you have. The platform
+copies the recipe's images into it, then creates its resources, services
+and jobs, and gg prints the project's status and its addresses.
+
+Every input the recipe declares needs an env file of KEY=VALUE lines, one
+--input per input. "gg recipe show" lists them and the variables each
+holds. A missing or unknown input is refused before anything is created,
+and the files are read only once the images are copied. No value from
+them is ever printed.
+
+  gg recipe install k3f9x2ma myshop --input openai=.env.openai
+
+Running the same command again after a failed copy or a refused input
+carries on in the project it created.`,
+		Args: usageArgs(2, 2, "usage: gg recipe install RECIPE[@VERSION] NEW_PROJECT [--input NAME=FILE]...\n"+
+			"  e.g. gg recipe install k3f9x2ma myshop --input openai=.env.openai"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRecipeInstall(args[0], args[1], inputs)
+		},
+	}
+	cmd.Flags().StringArrayVar(&inputs, "input", nil,
+		"NAME=FILE: the env file for one input the recipe declares.\nRepeated, one per input")
+	return cmd
+}
+
+func newRecipeDiffCmd() *cobra.Command {
+	var to string
+	cmd := &cobra.Command{
+		Use:   "diff PROJECT",
+		Short: "what updating a project to a newer version of its recipe would change",
+		Long: `Print what "gg recipe update" would do, and do nothing.
+
+The platform compares three things: the version the project was installed
+from, the version it would move to, and the project as it is now. What
+you changed yourself is kept; where you and the recipe changed the same
+thing it is a conflict; what an update cannot change in place is listed
+as work by hand; what it would remove is listed, because removing needs a
+human's approval.
+
+  gg recipe diff myshop
+  gg recipe diff myshop --to 1.3.0`,
+		Args: usageArgs(1, 1, "usage: gg recipe diff PROJECT [--to VERSION]\n  e.g. gg recipe diff myshop"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRecipeDiff(args[0], to)
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "the version to compare with, X.Y.Z; the latest by default")
+	return cmd
+}
+
+func newRecipeUpdateCmd() *cobra.Command {
+	var to string
+	var inputs []string
+	var force bool
+	cmd := &cobra.Command{
+		Use:   "update PROJECT",
+		Short: "move a project to a newer version of its recipe",
+		Long: `Apply a newer version of the recipe a project was installed from.
+
+A new image is a deploy and an addition is free; what you changed yourself
+is kept. A conflict — you and the recipe changed the same thing — refuses
+the update unless --force takes the recipe's side. What cannot change in
+place refuses it outright. A removal needs a human's approval: gg says
+what goes before it asks, we email the account owner, and the same command
+goes through once they have clicked.
+
+A version that declares a new input needs an env file for it, given as
+--input NAME=FILE, read only when the platform is ready for it and never
+printed. "gg recipe diff" shows all of this first.
+
+  gg recipe update myshop
+  gg recipe update myshop --to 1.3.0 --input stripe=.env.stripe`,
+		Args: usageArgs(1, 1, "usage: gg recipe update PROJECT [--to VERSION] [--input NAME=FILE]... [--force]\n"+
+			"  e.g. gg recipe update myshop"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdRecipeUpdate(args[0], to, inputs, force)
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "the version to move to, X.Y.Z; the latest by default")
+	cmd.Flags().StringArrayVar(&inputs, "input", nil,
+		"NAME=FILE: the env file for an input the new version declares.\nRepeated, one per input")
+	cmd.Flags().BoolVar(&force, "force", false, "where you and the recipe changed the same thing, take the recipe's")
+	return cmd
 }
 
 // --- registry --------------------------------------------------------------

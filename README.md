@@ -148,6 +148,15 @@ gg deps add shop/bot openai         # bot now holds OPENAI_API_KEY
 gg resource rotate shop/openai --env-file .env.new   # new key, and every holder rolls
 gg resource rotate shop/db          # a database: Gagarin mints it, no downtime
 
+gg recipe snap shop --dry-run       # what publishing shop as a recipe would mint: version, floor, cost
+gg recipe snap shop                 # publish it; prints its deploy link, my.gagarin.cloud/deploy/<id>
+gg recipe show k3f9x2ma             # what a recipe runs, what it costs, the inputs it needs
+gg recipe install k3f9x2ma myshop --input openai=.env.openai   # into a new project; secrets come from your file
+gg recipe ls                        # the recipes you have published
+gg recipe diff myshop               # what updating to its recipe's latest would change
+gg recipe update myshop             # do it; a removal asks your human first
+gg recipe rm shop@1.0.0             # withdraw a version, or with no @ the whole recipe (asks your human)
+
 gg domain add shop/web shop.example.com   # also answer on a name you own; prints the DNS record to create
 gg share shop teammate@example.com        # editors deploy and manage; viewers read
 gg transfer shop teammate@example.com     # offer them the project, and its bill; they accept by email
