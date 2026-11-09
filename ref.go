@@ -208,3 +208,67 @@ func parseRepoTag(s, project string) (repo, tag string, err error) {
 	}
 	return repo, tag, nil
 }
+
+// recipeIDRe is a recipe's id: eight lowercase letters and digits, generated,
+// unique everywhere, and the last part of its deploy link. A name is unique only
+// within the account that published it, so somebody else's recipe is always
+// named by its id.
+var recipeIDRe = regexp.MustCompile(`^[0-9a-z]{8}$`)
+
+// recipeVersionRe is a version as gg checks it: three numbers. Loosely on
+// purpose — the platform owns the grammar and the floor, and this exists only
+// so that `@latest` or `@v1.2` is answered here rather than after a round trip.
+var recipeVersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// parseRecipeRef reads `RECIPE[@VERSION]`, where RECIPE is the name of one of
+// your own recipes or the id of anybody's. A deploy link pasted whole is read
+// as the id at the end of it, because that is what somebody holding one will
+// paste.
+//
+// The version is empty when none was given, and the platform then means the
+// latest.
+func parseRecipeRef(s string) (ref, version string, err error) {
+	if s == "" {
+		return "", "", fmt.Errorf("which recipe?\n  hint: a name from gg recipe ls, or the 8-character id at the end of a deploy link")
+	}
+	s = stripDeployLink(s)
+	ref, version, hadAt := strings.Cut(s, "@")
+	if strings.Contains(ref, "/") {
+		return "", "", fmt.Errorf(
+			"%q is not a recipe: a recipe is named by itself, not inside a project\n  hint: gg recipe ls lists yours", s)
+	}
+	if !nameRe.MatchString(ref) && !recipeIDRe.MatchString(ref) {
+		return "", "", fmt.Errorf(
+			"%q is not a recipe name or id: a name is %s; an id is the 8 lowercase letters and digits at the end of its deploy link", ref, nameShape)
+	}
+	if hadAt {
+		if err := checkVersion(version); err != nil {
+			return "", "", err
+		}
+	}
+	return ref, version, nil
+}
+
+// stripDeployLink reduces a pasted deploy link to what follows /deploy/, and
+// leaves anything else alone. A link arrives in whatever shape the last thing
+// that touched it left: without its scheme, as http, with a trailing slash,
+// with a tracking query or a fragment. None of that is the recipe.
+func stripDeployLink(s string) string {
+	rest := strings.TrimPrefix(strings.TrimPrefix(s, "https://"), "http://")
+	id, ok := strings.CutPrefix(rest, deployLinkPath)
+	if !ok {
+		return s
+	}
+	if i := strings.IndexAny(id, "?#"); i >= 0 {
+		id = id[:i]
+	}
+	return strings.TrimSuffix(id, "/")
+}
+
+// checkVersion refuses a version that is not three numbers.
+func checkVersion(v string) error {
+	if !recipeVersionRe.MatchString(v) {
+		return fmt.Errorf("%q is not a version: three numbers with dots between them\n  hint: 1.2.0", v)
+	}
+	return nil
+}

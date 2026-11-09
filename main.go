@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,17 +110,57 @@ func callTo(base, token, method, path string, body any, out any) error {
 }
 
 func callToTimeout(base, token, method, path string, body any, out any, timeout time.Duration) error {
+	_, err := callStatusTo(base, token, method, path, body, out, timeout)
+	return err
+}
+
+// callStatus is call for the one kind of endpoint whose answer depends on the
+// status code rather than the body: `gg recipe update` is told 202 when the
+// platform has images to copy first and 200 when it applied the update there
+// and then, and the two bodies share no field that could say which.
+func callStatus(method, path string, body any, out any) (int, error) {
+	base, token, err := resolveAuth()
+	if err != nil {
+		return 0, err
+	}
+	return callStatusTo(base, token, method, path, body, out, 2*time.Minute)
+}
+
+// callPublic is call for an endpoint that answers anybody: reading a recipe.
+// It sends the credential when there is one, so a signed-in caller is the same
+// caller everywhere, and sends none rather than refusing when there is not —
+// a deploy link is meant to be read before anybody has an account. Not being
+// signed in is the only thing it forgives: a credential file that cannot be
+// read is a problem to say, not a reason to quietly become somebody else.
+func callPublic(method, path string, out any) error {
+	base, token, err := resolveAuth()
+	var signedOut errNotAuthenticated
+	switch {
+	case errors.As(err, &signedOut):
+		base, token = apiBase(), ""
+	case err != nil:
+		return err
+	}
+	return callTo(base, token, method, path, nil, out)
+}
+
+// sortedKeys is a map's keys in order, for output that reads the same twice.
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(maps.Keys(m))
+}
+
+func callStatusTo(base, token, method, path string, body any, out any, timeout time.Duration) (int, error) {
 	var rdr io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		rdr = bytes.NewReader(b)
 	}
 	req, err := http.NewRequest(method, base+path, rdr)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -131,7 +173,7 @@ func callToTimeout(base, token, method, path string, body any, out any, timeout 
 
 	resp, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
-		return fmt.Errorf("cannot reach control plane at %s: %w", base, err)
+		return 0, fmt.Errorf("cannot reach control plane at %s: %w", base, err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -139,14 +181,14 @@ func callToTimeout(base, token, method, path string, body any, out any, timeout 
 	if resp.StatusCode >= 400 {
 		var wrap struct{ Error apiError }
 		if json.Unmarshal(raw, &wrap) == nil && wrap.Error.Code != "" {
-			return wrap.Error
+			return resp.StatusCode, wrap.Error
 		}
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(raw)))
+		return resp.StatusCode, fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(raw)))
 	}
 	if out != nil && len(raw) > 0 {
-		return json.Unmarshal(raw, out)
+		return resp.StatusCode, json.Unmarshal(raw, out)
 	}
-	return nil
+	return resp.StatusCode, nil
 }
 
 // callYAML fetches something that is a file rather than a response — `gg eject`
@@ -189,19 +231,31 @@ func cmdInit(name string) error {
 	if err != nil {
 		return err
 	}
-	var p project
-	if err := call("POST", "/v1/projects", map[string]string{"name": name}, &p); err != nil {
+	p, err := createProject(name)
+	if err != nil {
 		return err
 	}
-	// The id is printed because it is not cosmetic: image paths and hostnames are
-	// built from it, so a human reading this output has seen the thing they will
-	// meet again in a URL.
+	printCreated(p)
+	return nil
+}
+
+// createProject is the one request that makes a project, shared by `gg init`
+// and `gg recipe install`, which always installs into a project of its own.
+func createProject(name string) (project, error) {
+	var p project
+	err := call("POST", "/v1/projects", map[string]string{"name": name}, &p)
+	return p, err
+}
+
+// printCreated says what was made. The id is printed because it is not
+// cosmetic: image paths and hostnames are built from it, so a human reading
+// this output has seen the thing they will meet again in a URL.
+func printCreated(p project) {
 	fmt.Printf("project %s created (id %s)", p.Name, p.ID)
 	if p.Cluster != "" {
 		fmt.Printf(", runs in %s", p.Cluster)
 	}
 	fmt.Println()
-	return nil
 }
 
 // project is what the control plane calls a project. The name is the label a
@@ -994,6 +1048,12 @@ func runCapture(name string, args ...string) (string, error) {
 // is public, so it cannot describe a deployment — only supply data to one. There
 // is no variable interpolation, because substitution syntax is a mechanism and
 // gagarin rations mechanisms.
+//
+// Its errors name the file and the line and never what is on it. These files
+// hold credentials — an external's key, a recipe's inputs — and the line a
+// parser cannot read is as likely as any other to be the key itself, pasted
+// without its name. An error is printed into a terminal, a CI log and an
+// agent's transcript; the line number is enough to find it.
 func parseEnvFile(path string) (map[string]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -1008,14 +1068,14 @@ func parseEnvFile(path string) (map[string]string, error) {
 		line = strings.TrimPrefix(line, "export ")
 		key, val, ok := strings.Cut(line, "=")
 		if !ok {
-			return nil, fmt.Errorf("%s line %d: expected KEY=VALUE, got %q", path, n+1, line)
+			return nil, fmt.Errorf("%s line %d: expected KEY=VALUE, and the line has no =", path, n+1)
 		}
 		key = strings.TrimSpace(key)
 		if key == "" {
 			return nil, fmt.Errorf("%s line %d: empty key", path, n+1)
 		}
 		if !validEnvKey(key) {
-			return nil, fmt.Errorf("%s line %d: %q is not a valid environment variable name", path, n+1, key)
+			return nil, fmt.Errorf("%s line %d: what comes before = is not a valid environment variable name: letters, digits and _, not starting with a digit", path, n+1)
 		}
 		out[key] = unquote(strings.TrimSpace(val))
 	}

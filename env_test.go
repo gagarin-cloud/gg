@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -78,6 +79,29 @@ func TestParseEnvFileRejectsBadInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseEnvFile(writeTemp(t, ".env", content)); err == nil {
 				t.Errorf("expected an error for %q", content)
+			}
+		})
+	}
+}
+
+// An env file holds credentials, and the line a parser cannot read is as likely
+// as any to be a key pasted without its name. The error says where, never what.
+func TestParseEnvFileErrorsNeverQuoteTheLine(t *testing.T) {
+	const secret = "sk-live-NOTPRINTED"
+	for name, content := range map[string]string{
+		"no equals":    "A=1\n" + secret + "\n",
+		"invalid name": secret + "=1\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseEnvFile(writeTemp(t, ".env", content))
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "sk-live") {
+				t.Errorf("the error quotes the file: %v", err)
+			}
+			if !strings.Contains(err.Error(), "line ") {
+				t.Errorf("the error does not say which line: %v", err)
 			}
 		})
 	}

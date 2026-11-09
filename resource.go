@@ -122,11 +122,10 @@ func cmdResourceAdd(ref, typ, size string, storageGB int, env map[string]string,
 	// values are what they just supplied, and echoing a live key back into a
 	// terminal is how it reaches a scrollback.
 	if external {
-		keys := make([]string, 0, len(env))
-		for k := range env {
+		var keys []string
+		for _, k := range sortedKeys(env) {
 			keys = append(keys, envPrefix(name)+"_"+k)
 		}
-		sort.Strings(keys)
 		fmt.Printf("\nIt publishes %s\n", strings.Join(keys, ", "))
 		// The egress caveat is here as one clause rather than the paragraph the
 		// control plane's sentence already carries, and it is here at all on
@@ -228,13 +227,8 @@ func cmdResourceSecrets(ref, format string) error {
 	case "env", "":
 		// Sorted, so two runs of the same command produce the same bytes and a
 		// diff of two env files means something.
-		keys := make([]string, 0, len(out.Env))
-		for k := range out.Env {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
 		var b strings.Builder
-		for _, k := range keys {
+		for _, k := range sortedKeys(out.Env) {
 			fmt.Fprintf(&b, "%s=%s\n", k, out.Env[k])
 		}
 		fmt.Print(b.String())
