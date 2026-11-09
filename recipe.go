@@ -47,6 +47,14 @@ const (
 
 func deployLink(id string) string { return deployLinkBase + id }
 
+// deployBadge is the README line a publisher pastes: the "Deploy to Gagarin
+// Cloud" button, served by gagarin.cloud, linking to the recipe's deploy page.
+const deployBadge = "https://gagarin.cloud/deploy-button.svg"
+
+func deployMarkdown(link string) string {
+	return "[![Deploy to Gagarin Cloud](" + deployBadge + ")](" + link + ")"
+}
+
 // recipePoll is how often install and update look at the copy. A variable so
 // tests do not spend seconds of wall clock on it.
 var recipePoll = 3 * time.Second
@@ -346,6 +354,7 @@ func cmdRecipeSnap(ref string, f snapFlags) error {
 	}
 	if link != "" {
 		fmt.Printf("\n  %s\n", link)
+		fmt.Printf("\nFor its README, a button that opens that page:\n  %s\n", deployMarkdown(link))
 	}
 	return nil
 }
