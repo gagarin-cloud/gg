@@ -913,13 +913,18 @@ func TestParseRecipeRef(t *testing.T) {
 
 // --- diff and update -------------------------------------------------------
 
-const testDiff = `{"from":"1.2.0","to":"1.3.0",
-"ops":[{"kind":"deploy","name":"web","detail":"new image"},{"kind":"add","name":"stripe","detail":"external"}],
+// testDiff is the engine's answer, shape for shape: the plan under "plan",
+// its new inputs as new_inputs, the bill either side beside it. A fixture
+// that matched gg's reader rather than the engine once hid that they had
+// drifted apart, and `gg recipe diff` printed an update that changed nothing.
+const testDiff = `{"plan":{"from":"1.2.0","to":"1.3.0",
+"ops":[{"kind":"deploy","name":"web","detail":"new image"},{"kind":"create","name":"stripe","detail":"input"}],
 "skipped":["services.api.env.LOG_LEVEL"],
 "conflicts":[{"path":"services.api.size","base":"s","yours":"m","theirs":"l"}],
 "manual":[],
 "removals":["worker"],
-"inputs_required":[{"name":"stripe","vars":["API_KEY"]}],
+"new_inputs":[{"name":"stripe","vars":["API_KEY"]}]},
+"needs_copy":true,
 "monthly_micro_usd":{"before":{"total":12500000},"after":{"total":15000000}}}`
 
 func TestDiffAndUpdate(t *testing.T) {
@@ -932,7 +937,7 @@ func TestDiffAndUpdate(t *testing.T) {
 		if got := (*hits)[0].body; !reflect.DeepEqual(got, map[string]any{"version": "1.3.0"}) {
 			t.Errorf("body = %#v", got)
 		}
-		for _, s := range []string{"myshop: 1.2.0 → 1.3.0", "deploy   web  new image", "services.api.env.LOG_LEVEL",
+		for _, s := range []string{"myshop: 1.2.0 → 1.3.0", "deploy    web  new image", "services.api.env.LOG_LEVEL",
 			"services.api.size  was s, yours m, the recipe's l", "removed, which needs a human's approval\n  worker",
 			"stripe  API_KEY", "$12.50/month now, $15/month after"} {
 			if !strings.Contains(out, s) {

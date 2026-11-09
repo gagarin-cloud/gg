@@ -123,6 +123,7 @@ type recipeResp struct {
 	Manifest  recipeManifest `json:"manifest"`
 	Inputs    []recipeInput  `json:"inputs"`
 	Monthly   recipeMoney    `json:"monthly_micro_usd"`
+	DeployURL string         `json:"deploy_url"`
 }
 
 // inputs is what an installer must supply. The top-level list is the one the
@@ -493,7 +494,11 @@ func printRecipe(r recipeResp) {
 			row(in.Name, []string{strings.Join(in.Vars, ", ")}, nil)
 		}
 	}
-	fmt.Printf("\ndeploy  %s\n", deployLink(r.ID))
+	link := r.DeployURL
+	if link == "" {
+		link = deployLink(r.ID)
+	}
+	fmt.Printf("\ndeploy  %s\n", link)
 }
 
 func cmdRecipeList() error {
@@ -865,7 +870,10 @@ func cmdRecipeInstall(recipeArg, projectArg string, inputFlags []string) error {
 
 // ---- diff and update ---------------------------------------------------
 
-type diffResp struct {
+// planResp is the platform's three-way plan: what an update would do to a
+// project, given what the recipe installed, what the project runs now and
+// what the new version says. recipe.Plan in the engine, field for field.
+type planResp struct {
 	From string `json:"from"`
 	To   string `json:"to"`
 	Ops  []struct {
@@ -885,9 +893,16 @@ type diffResp struct {
 		Why  string `json:"why"`
 		How  string `json:"how"`
 	} `json:"manual"`
-	Removals       []string      `json:"removals"`
-	InputsRequired []recipeInput `json:"inputs_required"`
-	Monthly        struct {
+	Removals  []string      `json:"removals"`
+	NewInputs []recipeInput `json:"new_inputs"`
+}
+
+// diffResp is what POST .../recipe/diff answers: the plan, the bill either
+// side of it, and whether the update has images to copy first.
+type diffResp struct {
+	Plan      planResp `json:"plan"`
+	NeedsCopy bool     `json:"needs_copy"`
+	Monthly   struct {
 		Before recipeMoney `json:"before"`
 		After  recipeMoney `json:"after"`
 	} `json:"monthly_micro_usd"`
@@ -939,47 +954,48 @@ func cmdRecipeDiff(ref, to string) error {
 }
 
 func printDiff(project string, d diffResp) {
-	fmt.Printf("%s: %s → %s\n", project, d.From, d.To)
-	if len(d.Ops) == 0 && len(d.Conflicts) == 0 && len(d.Manual) == 0 && len(d.Removals) == 0 {
+	p := d.Plan
+	fmt.Printf("%s: %s → %s\n", project, p.From, p.To)
+	if len(p.Ops) == 0 && len(p.Conflicts) == 0 && len(p.Manual) == 0 && len(p.Removals) == 0 && len(p.NewInputs) == 0 {
 		fmt.Println("  nothing the update would change")
 	}
-	if len(d.Ops) > 0 {
+	if len(p.Ops) > 0 {
 		fmt.Printf("\nchanges\n")
-		for _, op := range d.Ops {
-			fmt.Printf("  %-8s %s  %s\n", op.Kind, op.Name, op.Detail)
+		for _, op := range p.Ops {
+			fmt.Printf("  %-9s %s  %s\n", op.Kind, op.Name, op.Detail)
 		}
 	}
-	if len(d.Skipped) > 0 {
+	if len(p.Skipped) > 0 {
 		fmt.Printf("\nkept as you changed them\n")
-		for _, s := range d.Skipped {
+		for _, s := range p.Skipped {
 			fmt.Printf("  %s\n", s)
 		}
 	}
-	if len(d.Conflicts) > 0 {
+	if len(p.Conflicts) > 0 {
 		fmt.Printf("\nconflicts: you and the recipe both changed these; update refuses them, --force takes the recipe's\n")
-		for _, c := range d.Conflicts {
+		for _, c := range p.Conflicts {
 			fmt.Printf("  %s  was %s, yours %s, the recipe's %s\n",
 				c.Path, plainJSON(c.Base), plainJSON(c.Yours), plainJSON(c.Theirs))
 		}
 	}
-	if len(d.Manual) > 0 {
+	if len(p.Manual) > 0 {
 		fmt.Printf("\nby hand: an update cannot do these, and refuses until they are done\n")
-		for _, m := range d.Manual {
+		for _, m := range p.Manual {
 			fmt.Printf("  %s  %s\n", m.Path, m.Why)
 			if m.How != "" {
 				fmt.Printf("    %s\n", m.How)
 			}
 		}
 	}
-	if len(d.Removals) > 0 {
+	if len(p.Removals) > 0 {
 		fmt.Printf("\nremoved, which needs a human's approval\n")
-		for _, r := range d.Removals {
+		for _, r := range p.Removals {
 			fmt.Printf("  %s\n", r)
 		}
 	}
-	if len(d.InputsRequired) > 0 {
+	if len(p.NewInputs) > 0 {
 		fmt.Printf("\nnew inputs, given to update as --input NAME=FILE\n")
-		for _, in := range d.InputsRequired {
+		for _, in := range p.NewInputs {
 			fmt.Printf("  %s  %s\n", in.Name, strings.Join(in.Vars, ", "))
 		}
 	}
@@ -1034,22 +1050,22 @@ func cmdRecipeUpdate(ref, to string, inputFlags []string, force bool) error {
 	if err != nil {
 		return err
 	}
-	if err := checkInputs("the update to "+d.To, d.InputsRequired, given); err != nil {
+	if err := checkInputs("the update to "+d.Plan.To, d.Plan.NewInputs, given); err != nil {
 		return err
 	}
 	if err := statInputs(given); err != nil {
 		return err
 	}
-	if len(d.Removals) > 0 {
-		fmt.Printf("Updating %s to %s removes %s.\n", project, d.To, strings.Join(d.Removals, ", "))
+	if len(d.Plan.Removals) > 0 {
+		fmt.Printf("Updating %s to %s removes %s.\n", project, d.Plan.To, strings.Join(d.Plan.Removals, ", "))
 		fmt.Printf("\n  What they ran stops, and whatever still calls them breaks with it.\n")
 		printApprovalNote()
 	}
-	fmt.Printf("→ updating %s from %s to %s\n", project, d.From, d.To)
+	fmt.Printf("→ updating %s from %s to %s\n", project, d.Plan.From, d.Plan.To)
 
 	body := map[string]any{}
-	if d.To != "" {
-		body["version"] = d.To
+	if d.Plan.To != "" {
+		body["version"] = d.Plan.To
 	}
 	if force {
 		body["force"] = true
