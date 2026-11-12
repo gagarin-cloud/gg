@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -201,5 +202,27 @@ func TestDetectInstall(t *testing.T) {
 		if c.want == "" && m.name != selfManaged {
 			t.Errorf("%s: method %q, want self-managed", c.exe, m.name)
 		}
+	}
+}
+
+// A rename refused for a moment, as Windows does while a scanner holds a new
+// file open, is tried again; one refused for good still fails.
+func TestRenamePatientlyOutlastsABriefLock(t *testing.T) {
+	calls := 0
+	rename = func(string, string) error {
+		calls++
+		if calls < 3 {
+			return errors.New("being used by another process")
+		}
+		return nil
+	}
+	t.Cleanup(func() { rename = os.Rename })
+	if err := renamePatiently("a", "b"); err != nil || calls != 3 {
+		t.Fatalf("err %v after %d calls", err, calls)
+	}
+
+	rename = func(string, string) error { return errors.New("locked") }
+	if err := renamePatiently("a", "b"); err == nil {
+		t.Fatal("a lock that never lifts must still fail")
 	}
 }

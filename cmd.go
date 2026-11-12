@@ -54,6 +54,7 @@ Everything lives in a project, and everything is named for it:
 
   gg status shop                        a project
   gg logs shop/web                      a service in one
+  gg metrics shop/web                   how hard it is working
   gg deploy shop/web:8080 api:v3        that service, on that port, running
                                         that image
 
@@ -86,6 +87,7 @@ Environment (overrides the file; meant for CI):
 		newCredentialsCmd(),
 		newStatusCmd(),
 		newLogsCmd(),
+		newMetricsCmd(),
 		newDepsCmd(),
 		newShareCmd(),
 		newUnshareCmd(),
@@ -477,6 +479,34 @@ time. --grep keeps the lines containing a string, exactly as written.`,
 	cmd.Flags().IntVarP(&f.limit, "limit", "n", 0, "how many lines, at most (default 200)")
 	cmd.Flags().StringVar(&f.grep, "grep", "", "only lines containing this")
 	cmd.Flags().BoolVar(&f.previous, "previous", false, "the container before the latest restart, from the node")
+	return cmd
+}
+
+func newMetricsCmd() *cobra.Command {
+	var window string
+	cmd := &cobra.Command{
+		Use:   "metrics PROJECT[/SERVICE]",
+		Short: "CPU, memory, disk and traffic for a project's services",
+		Long: `What Gagarin measures about the services of a project.
+
+With a project it is one row per service: CPU, memory and disk against their
+limits, and for services with a public address requests per second, the share
+of them that were 5xx, and the 95th percentile latency.
+
+With a service it is the window summarised: for each figure the latest value,
+the average and the peak, and the peak as a share of the limit where there is
+one. A "-" is a figure that was not measured, which is not the same as zero.
+
+--window is 1h, 24h (the default), 7d or 30d.`,
+		Example: `  gg metrics shop
+  gg metrics shop/web
+  gg metrics shop/web --window 7d`,
+		Args: usageArgs(1, 1, "usage: gg metrics PROJECT[/SERVICE]\n  e.g. gg metrics shop/web"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmdMetrics(args[0], window)
+		},
+	}
+	cmd.Flags().StringVar(&window, "window", "", "how far back, for one service: 1h, 24h, 7d or 30d (default 24h)")
 	return cmd
 }
 
