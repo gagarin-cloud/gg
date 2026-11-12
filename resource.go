@@ -558,16 +558,19 @@ func waitForRestore(project, name string, poll time.Duration) error {
 	}
 }
 
+// sizeHuman counts in powers of 1024, so it says KiB, MiB and GiB: a 1Gi
+// memory limit reads "1.00 GiB", the figure the alerts and the console give,
+// rather than a "1.00 GB" that is 7% more than a gigabyte.
 func sizeHuman(b int64) string {
 	switch {
 	case b < 1024:
 		return fmt.Sprintf("%d B", b)
 	case b < 1024*1024:
-		return fmt.Sprintf("%.1f KB", float64(b)/1024)
+		return fmt.Sprintf("%.1f KiB", float64(b)/1024)
 	case b < 1024*1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(b)/(1024*1024))
+		return fmt.Sprintf("%.1f MiB", float64(b)/(1024*1024))
 	default:
-		return fmt.Sprintf("%.2f GB", float64(b)/(1024*1024*1024))
+		return fmt.Sprintf("%.2f GiB", float64(b)/(1024*1024*1024))
 	}
 }
 
