@@ -39,7 +39,8 @@ func TestMetricsTableRendersNullsAsDashes(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	for _, want := range []string{"SERVICE", "REQ/S", "5XX", "P95", "0.12/0.5 (24%)", "512 MiB/1 GiB (50%)", "1 GiB/4 GiB (25%)", "3.2/s", "142 ms"} {
+	for _, want := range []string{"SERVICE", "REQ/S", "5XX", "P95", "0.12/0.5 (24%)", "512.0 MB/1.00 GB (50%)", "1.00 GB/4.00 GB (25%)", "3.2/s", "142 ms",
+		"KIND", "resource:postgres", "THROTTLED", "1%", "NET IN/OUT", "1.2 KB/s / 99 B/s"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
@@ -92,13 +93,53 @@ func TestMetricsWindowNeedsAService(t *testing.T) {
 	}
 }
 
+func points(t *testing.T, raw string) []metricsPoint {
+	t.Helper()
+	var ps []metricsPoint
+	if err := json.Unmarshal([]byte(raw), &ps); err != nil {
+		t.Fatal(err)
+	}
+	return ps
+}
+
 func TestSummarize(t *testing.T) {
-	s, ok := summarize([][2]float64{{1, 0.1}, {2, 0.5}, {3, 0.3}})
-	if !ok || s.Last != 0.3 || s.Peak != 0.5 || s.Avg < 0.299 || s.Avg > 0.301 {
+	s, ok := summarize(points(t, `[[1,0.1],[2,0.5],[3,0.3]]`))
+	if !ok || s.Last != 0.3 || s.Peak != 0.5 || s.Avg < 0.299 || s.Avg > 0.301 || s.LastAt.Unix() != 3 {
 		t.Errorf("got %+v", s)
 	}
 	if _, ok := summarize(nil); ok {
 		t.Error("no points, no summary")
+	}
+}
+
+// A gap is not a zero: it pulls nothing down, and the last value is the last
+// one measured, with its own time.
+func TestSummarizeSkipsGaps(t *testing.T) {
+	s, ok := summarize(points(t, `[[1,null],[2,100],[3,null]]`))
+	if !ok || s.Last != 100 || s.Avg != 100 || s.Peak != 100 || s.LastAt.Unix() != 2 {
+		t.Errorf("got %+v", s)
+	}
+	if _, ok := summarize(points(t, `[[1,null]]`)); ok {
+		t.Error("nothing measured, no summary")
+	}
+}
+
+// Zero means none; something small is never written as zero.
+func TestSmallFiguresAreNotZero(t *testing.T) {
+	for _, c := range []struct {
+		v    float64
+		u    metricsUnit
+		want string
+	}{
+		{0.004, unitCores, "<0.01"},
+		{0.0004, unitFraction, "<0.1%"},
+		{0, unitFraction, "0%"},
+		{0.9996, unitSeconds, "1 s"},
+		{0.142, unitSeconds, "142 ms"},
+	} {
+		if got := fmtMetric(c.v, c.u); got != c.want {
+			t.Errorf("fmtMetric(%v) = %q, want %q", c.v, got, c.want)
+		}
 	}
 }
 
@@ -113,7 +154,7 @@ func TestMetricsServiceSummaryPrintsLimitsAndPeakShare(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	for _, want := range []string{"shop/api, last 24h", "cpu", "0.25", "0.4", "80%", "768 MiB", "200 ms"} {
+	for _, want := range []string{"shop/api, last 24h", "cpu", "0.25", "0.4", "80%", "768.0 MB", "200 ms", "LAST", "TAKEN"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}

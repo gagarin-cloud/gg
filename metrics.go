@@ -6,18 +6,19 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 )
 
 // gg metrics reads what the engine measures about a project's services.
 //
 // With a project it is one row per service: how much of its CPU, memory and
 // disk it uses now, and for the ones with a public address how much traffic
-// they get. With a service it is the window summarised — the last value, the
-// average and the peak of each series, against the limit where there is one —
-// not the points themselves.
+// they get. With a service it is the window summarised — the last value and
+// when it was taken, the average and the peak of each series, against the
+// limit where there is one — not the points themselves.
 //
 // Any figure may be null on the wire: it was not measured, which is not zero.
-// It prints as "-".
+// It prints as "-", and a figure too small to show prints as "<0.01", never 0.
 
 type usage struct {
 	Used  *float64 `json:"used"`
@@ -44,12 +45,15 @@ type metricsResp struct {
 }
 
 type metricsRangeResp struct {
-	Service string                  `json:"service"`
-	Window  string                  `json:"window"`
-	Step    int                     `json:"step"`
-	Limits  map[string]*float64     `json:"limits"`
-	Series  map[string][][2]float64 `json:"series"`
+	Service string                    `json:"service"`
+	Window  string                    `json:"window"`
+	Step    int                       `json:"step"`
+	Limits  map[string]*float64       `json:"limits"`
+	Series  map[string][]metricsPoint `json:"series"`
 }
+
+// metricsPoint is [unix seconds, value]; a null value is a gap, not a zero.
+type metricsPoint [2]*float64
 
 // metricsUnit says how a figure is written. Series are shown in the order the
 // engine's units are most useful to read, not alphabetically.
@@ -131,25 +135,26 @@ func cmdMetrics(ref, window string) error {
 
 // --- formatting ------------------------------------------------------------
 
+// trimFloat writes v to prec decimals without trailing zeros. Something that
+// is not zero never prints as 0: "-" is not measured and 0 is none at all, so
+// a small error rate written as 0 would say there were no errors.
 func trimFloat(v float64, prec int) string {
 	s := fmt.Sprintf("%.*f", prec, v)
 	if strings.Contains(s, ".") {
 		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
 	}
+	if (s == "0" || s == "-0") && v != 0 {
+		return "<" + trimFloat(1/pow10(prec), prec)
+	}
 	return s
 }
 
-func fmtBytes(v float64) string {
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
-	i := 0
-	for v >= 1024 && i < len(units)-1 {
-		v /= 1024
-		i++
+func pow10(n int) float64 {
+	f := 1.0
+	for range n {
+		f *= 10
 	}
-	if i == 0 {
-		return trimFloat(v, 0) + " B"
-	}
-	return trimFloat(v, 1) + " " + units[i]
+	return f
 }
 
 func fmtMetric(v float64, u metricsUnit) string {
@@ -157,15 +162,16 @@ func fmtMetric(v float64, u metricsUnit) string {
 	case unitCores:
 		return trimFloat(v, 2)
 	case unitBytes:
-		return fmtBytes(v)
+		return sizeHuman(int64(v))
 	case unitFraction:
 		return trimFloat(v*100, 1) + "%"
 	case unitBytesPerSec:
-		return fmtBytes(v) + "/s"
+		return sizeHuman(int64(v)) + "/s"
 	case unitReqPerSec:
 		return trimFloat(v, 2) + "/s"
 	case unitSeconds:
-		if v < 1 {
+		// Below what rounds to a whole second, so 0.9996 is not "1000 ms".
+		if v < 0.9995 {
 			return trimFloat(v*1000, 0) + " ms"
 		}
 		return trimFloat(v, 2) + " s"
@@ -197,6 +203,14 @@ func fmtOpt(v *float64, u metricsUnit) string {
 	return fmtMetric(*v, u)
 }
 
+// fmtNet is "in / out", or "-" when neither was measured.
+func fmtNet(in, out *float64) string {
+	if in == nil && out == nil {
+		return "-"
+	}
+	return fmtOpt(in, unitBytesPerSec) + " / " + fmtOpt(out, unitBytesPerSec)
+}
+
 func printMetricsTable(project string, m metricsResp) {
 	fmt.Printf("\nproject %s\n\n", project)
 	if len(m.Services) == 0 {
@@ -208,17 +222,19 @@ func printMetricsTable(project string, m metricsResp) {
 	for _, s := range m.Services {
 		if s.Requests != nil || s.Errors != nil || s.LatencyP95 != nil {
 			anyHTTP = true
+			break
 		}
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	head := "  SERVICE\tCPU\tMEMORY\tDISK"
+	head := "  SERVICE\tKIND\tCPU\tMEMORY\tDISK\tTHROTTLED\tNET IN/OUT"
 	if anyHTTP {
 		head += "\tREQ/S\t5XX\tP95"
 	}
 	fmt.Fprintln(tw, head)
 	for _, s := range m.Services {
-		row := fmt.Sprintf("  %s\t%s\t%s\t%s", s.Service,
-			fmtUsage(s.CPU, unitCores), fmtUsage(s.Memory, unitBytes), fmtUsage(s.Disk, unitBytes))
+		row := fmt.Sprintf("  %s\t%s\t%s\t%s\t%s\t%s\t%s", s.Service, s.Kind,
+			fmtUsage(s.CPU, unitCores), fmtUsage(s.Memory, unitBytes), fmtUsage(s.Disk, unitBytes),
+			fmtOpt(s.Throttled, unitFraction), fmtNet(s.NetIn, s.NetOut))
 		if anyHTTP {
 			row += fmt.Sprintf("\t%s\t%s\t%s", fmtOpt(s.Requests, unitReqPerSec),
 				fmtOpt(s.Errors, unitFraction), fmtOpt(s.LatencyP95, unitSeconds))
@@ -230,23 +246,33 @@ func printMetricsTable(project string, m metricsResp) {
 }
 
 // seriesSummary is one series reduced to what a person reads off a graph.
+// LastAt is when Last was measured: a service that stopped reporting hours ago
+// still has a last value, and it is not "now".
 type seriesSummary struct {
 	Last, Avg, Peak float64
+	LastAt          time.Time
 }
 
-func summarize(points [][2]float64) (seriesSummary, bool) {
-	if len(points) == 0 {
+// summarize skips gaps; a series with nothing measured has no summary.
+func summarize(points []metricsPoint) (seriesSummary, bool) {
+	var s seriesSummary
+	n, sum := 0, 0.0
+	for _, p := range points {
+		if p[0] == nil || p[1] == nil {
+			continue
+		}
+		v := *p[1]
+		if n == 0 || v > s.Peak {
+			s.Peak = v
+		}
+		s.Last, s.LastAt = v, time.Unix(int64(*p[0]), 0)
+		sum += v
+		n++
+	}
+	if n == 0 {
 		return seriesSummary{}, false
 	}
-	s := seriesSummary{Last: points[len(points)-1][1], Peak: points[0][1]}
-	sum := 0.0
-	for _, p := range points {
-		sum += p[1]
-		if p[1] > s.Peak {
-			s.Peak = p[1]
-		}
-	}
-	s.Avg = sum / float64(len(points))
+	s.Avg = sum / float64(n)
 	return s, true
 }
 
@@ -258,7 +284,7 @@ func printMetricsSummary(project string, m metricsRangeResp) {
 	fmt.Printf("\n%s/%s, last %s (%ds steps)\n\n", project, m.Service, window, m.Step)
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(tw, "  \tNOW\tAVG\tPEAK\tLIMIT\tPEAK/LIMIT")
+	fmt.Fprintln(tw, "  \tLAST\tTAKEN\tAVG\tPEAK\tLIMIT\tPEAK/LIMIT")
 	rows := 0
 	for _, d := range metricsSeriesOrder {
 		s, ok := summarize(m.Series[d.key])
@@ -270,8 +296,8 @@ func printMetricsSummary(project string, m metricsRangeResp) {
 			limit = fmtMetric(*l, d.unit)
 			peakPct = fmt.Sprintf("%d%%", pct(s.Peak, *l))
 		}
-		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\n", d.label,
-			fmtMetric(s.Last, d.unit), fmtMetric(s.Avg, d.unit), fmtMetric(s.Peak, d.unit), limit, peakPct)
+		fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\n", d.label,
+			fmtMetric(s.Last, d.unit), ago(s.LastAt), fmtMetric(s.Avg, d.unit), fmtMetric(s.Peak, d.unit), limit, peakPct)
 		rows++
 	}
 	if rows == 0 {
