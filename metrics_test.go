@@ -39,8 +39,8 @@ func TestMetricsTableRendersNullsAsDashes(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	for _, want := range []string{"SERVICE", "REQ/S", "5XX", "P95", "0.12/0.5 (24%)", "512.0 MB/1.00 GB (50%)", "1.00 GB/4.00 GB (25%)", "3.2/s", "142 ms",
-		"KIND", "resource:postgres", "THROTTLED", "1%", "NET IN/OUT", "1.2 KB/s / 99 B/s"} {
+	for _, want := range []string{"SERVICE", "REQ/S", "5XX", "P95", "0.12/0.5 (24%)", "512.0 MiB/1.00 GiB (50%)", "1.00 GiB/4.00 GiB (25%)", "3.2/s", "142 ms",
+		"KIND", "resource:postgres", "THROTTLED", "1%", "NET IN/OUT", "1.2 KiB/s / 99 B/s"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}
@@ -154,7 +154,7 @@ func TestMetricsServiceSummaryPrintsLimitsAndPeakShare(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	for _, want := range []string{"shop/api, last 24h", "cpu", "0.25", "0.4", "80%", "768.0 MB", "200 ms", "LAST", "TAKEN"} {
+	for _, want := range []string{"shop/api, last 24h", "cpu", "0.25", "0.4", "80%", "768.0 MiB", "200 ms", "LAST", "TAKEN"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)
 		}

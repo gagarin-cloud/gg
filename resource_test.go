@@ -1030,3 +1030,21 @@ func TestRestoreOfAnIggyBackup(t *testing.T) {
 		t.Errorf("the restored type was not announced:\n%s", out)
 	}
 }
+
+// The divisor is 1024, so the unit has to say so: the volume an alert calls
+// "973.42 MiB" must not be "973.4 MB" here.
+func TestSizeHumanSaysBinaryUnits(t *testing.T) {
+	for _, c := range []struct {
+		b    int64
+		want string
+	}{
+		{999, "999 B"},
+		{1536, "1.5 KiB"},
+		{1020703000, "973.4 MiB"},
+		{1 << 30, "1.00 GiB"},
+	} {
+		if got := sizeHuman(c.b); got != c.want {
+			t.Errorf("sizeHuman(%d) = %q, want %q", c.b, got, c.want)
+		}
+	}
+}
