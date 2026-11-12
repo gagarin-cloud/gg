@@ -133,6 +133,8 @@ gg domain add shop/web         # put it on the internet, at an address Gagarin g
 gg status shop                 # what Gagarin intends, and what the cluster is actually doing
 gg logs shop/web               # the latest 200 lines; a week is kept, crashed containers included
 gg logs shop/web --since 2h --grep "panic:"
+gg metrics shop                # CPU, memory, disk and traffic per service
+gg metrics shop/web --window 7d  # one service over time: now, average, peak, against its limit
 
 gg resource add shop/db postgres    # a database; you choose the name and the size, nothing else
 gg resource add shop/db postgres --ext vector --ext postgis   # and the postgres extensions it has: the whole set
