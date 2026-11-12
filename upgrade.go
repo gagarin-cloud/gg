@@ -323,14 +323,34 @@ func replaceExecutable(exe string, data []byte) error {
 	}
 	old := exe + ".old"
 	_ = os.Remove(old)
-	if err := os.Rename(exe, old); err != nil {
+	if err := renamePatiently(exe, old); err != nil {
 		return fmt.Errorf("cannot replace %s: %w", exe, err)
 	}
-	if err := os.Rename(tmp.Name(), exe); err != nil {
+	if err := renamePatiently(tmp.Name(), exe); err != nil {
 		_ = os.Rename(old, exe)
 		return fmt.Errorf("cannot replace %s: %w", exe, err)
 	}
 	return nil
+}
+
+// rename is os.Rename, and a variable so renamePatiently's tests can make it
+// fail.
+var rename = os.Rename
+
+// renamePatiently retries a rename for a few seconds. On Windows a file that
+// was just written or just run is often held open for a moment by something
+// else — the virus scanner, the search indexer — and the rename fails with a
+// sharing violation that is gone a second later. Seen in CI on 2026-11-09
+// and 2026-11-12; a user's machine has the same scanner.
+func renamePatiently(from, to string) error {
+	var err error
+	for wait := 50 * time.Millisecond; wait <= 2*time.Second; wait *= 2 {
+		if err = rename(from, to); err == nil {
+			return nil
+		}
+		time.Sleep(wait)
+	}
+	return err
 }
 
 // removeReplacedBinary deletes the gg.exe.old an upgrade on Windows leaves
