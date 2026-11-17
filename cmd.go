@@ -976,7 +976,7 @@ other decision is the platform's.
   --size l   2 vCPU / 4 GB, dedicated.
 
 A postgres is tuned to its size when it is created or resized: at most
-75, 140 or 150 connections at s, m or l, and a quarter of its memory as
+60, 105 or 119 connections at s, m or l, and a quarter of its memory as
 shared buffers at m and l. Those settings are the platform's; a query that
 needs more sort memory can SET work_mem for its own session.
 
