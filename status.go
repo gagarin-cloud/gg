@@ -69,7 +69,12 @@ func state(s serviceStatus) string {
 	// which is what a zero replica count looks like to every test above.
 	case s.Actual.Desired == 0:
 		return "stopped"
-	case s.Actual.Ready < s.Actual.Desired, !s.InSync:
+	case !s.InSync:
+		return "starting"
+	// Inside a range, a copy the autoscaler just asked for is not up yet as
+	// a matter of course, and the service is serving on the rest; the control
+	// plane already reads that as in sync, and READY says how many are up.
+	case s.Actual.Ready < s.Actual.Desired && s.MaxReplicas <= max(s.MinReplicas, 1):
 		return "starting"
 	default:
 		return "running"
@@ -263,32 +268,31 @@ func printStatusTable(st statusResp) {
 		if anyKind {
 			row = append(row, kindLabel(s.Kind))
 		}
+		// Each kind fills the same cells, and the row is put together once, so
+		// an optional column is added in one place and cannot shift the rest.
+		size, ready, replicas, port, image := "—", "—", "—", "—", "—"
 		switch {
 		case runsNothing(s):
 			// Size, readiness, port and image are all facts about a container.
 			// A dash says "not applicable" where a zero would say "zero" and
 			// send somebody looking for the pod that is not listening on it.
-			row = append(row, "—", "—")
-			if anyReplicas {
-				row = append(row, "—")
-			}
-			row = append(row, "—", reaches, "—")
 		case isJobKind(s.Kind):
 			// A job has a run where a service has replicas, so the READY cell
 			// says how the latest run stands — and the port is a dash for the
 			// same reason an external's is: there is no listener to name.
-			row = append(row, sizeLabel(s.Size), runPhase(s))
-			if anyReplicas {
-				row = append(row, "—")
-			}
-			row = append(row, "—", reaches, shortImage(s.Image, st.ProjectID))
+			size, ready, image = sizeLabel(s.Size), runPhase(s), shortImage(s.Image, st.ProjectID)
 		default:
-			row = append(row, sizeLabel(s.Size), fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired))
-			if anyReplicas {
-				row = append(row, replicasLabel(s))
-			}
-			row = append(row, fmt.Sprintf("%d", s.Port), reaches, shortImage(s.Image, st.ProjectID))
+			size = sizeLabel(s.Size)
+			ready = fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired)
+			replicas = replicasLabel(s.MinReplicas, s.MaxReplicas)
+			port = fmt.Sprintf("%d", s.Port)
+			image = shortImage(s.Image, st.ProjectID)
 		}
+		row = append(row, size, ready)
+		if anyReplicas {
+			row = append(row, replicas)
+		}
+		row = append(row, port, reaches, image)
 		if anyVolume {
 			v := "—"
 			// A service's mount path is the deployer's own choice and worth
@@ -689,11 +693,11 @@ func domainLine(d domainStatus) string {
 	return out
 }
 
-// replicasLabel is a service's replica setting as it reads in a table: "2"
+// replicasLabel is a replica setting as it reads anywhere gg prints one: "2"
 // for a fixed count, "1-5" for a range, and "1" for anything an older control
-// plane did not say, which ran one.
-func replicasLabel(s serviceStatus) string {
-	lo, hi := max(s.MinReplicas, 1), max(s.MaxReplicas, 1)
+// plane or manifest did not say, which runs one.
+func replicasLabel(minimum, maximum int) string {
+	lo, hi := max(minimum, 1), max(maximum, 1)
 	if hi <= lo {
 		return fmt.Sprintf("%d", lo)
 	}

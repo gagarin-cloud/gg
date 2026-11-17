@@ -465,12 +465,8 @@ func printRecipe(r recipeResp) {
 				parts = append(parts, fmt.Sprintf(":%d", s.Port))
 			}
 			parts = sized(parts, s.Size)
-			if lo, hi := max(s.MinReplicas, 1), max(s.MaxReplicas, 1); hi > 1 {
-				if hi > lo {
-					parts = append(parts, fmt.Sprintf("replicas %d-%d", lo, hi))
-				} else {
-					parts = append(parts, fmt.Sprintf("replicas %d", lo))
-				}
+			if max(s.MaxReplicas, 1) > 1 {
+				parts = append(parts, "replicas "+replicasLabel(s.MinReplicas, s.MaxReplicas))
 			}
 			if s.Public {
 				parts = append(parts, "public")

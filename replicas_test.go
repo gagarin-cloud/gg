@@ -6,19 +6,20 @@ import (
 )
 
 func TestReplicasReadsACountOrARange(t *testing.T) {
-	for in, want := range map[string][2]int{"2": {2, 2}, "1-5": {1, 5}, " 3-3 ": {3, 3}} {
-		lo, hi, err := parseReplicas(in)
-		if err != nil {
+	for in, want := range map[string]replicaRange{"2": {2, 2}, "1-5": {1, 5}, " 3-3 ": {3, 3}} {
+		var r replicaRange
+		if err := r.Set(in); err != nil {
 			t.Errorf("%q: %v", in, err)
 			continue
 		}
-		if [2]int{lo, hi} != want {
-			t.Errorf("%q = %d-%d, want %d-%d", in, lo, hi, want[0], want[1])
+		if r != want {
+			t.Errorf("%q = %v, want %v", in, r, want)
 		}
 	}
-	for _, in := range []string{"", "0", "-1", "5-1", "two", "1-", "1-x", "1-2-3"} {
-		if _, _, err := parseReplicas(in); err == nil {
-			t.Errorf("%q was accepted", in)
+	for _, in := range []string{"", "0", "-1", "5-1", "two", "1-", "1-x", "x-3", "1-2-3", "+2", "1--5", "+1-+3"} {
+		var r replicaRange
+		if err := r.Set(in); err == nil {
+			t.Errorf("%q was accepted as %v", in, r)
 		}
 	}
 }
@@ -56,9 +57,41 @@ func TestDeployWithoutReplicasOmitsThem(t *testing.T) {
 	}
 }
 
+// Refused while the flags are parsed, before a build and before any request:
+// nothing is declared, so nothing is billed.
 func TestABadReplicaCountFailsBeforeAnythingIsSent(t *testing.T) {
-	if _, err := parseDeploy([]string{"--replicas", "4-2"}); err == nil {
-		t.Error("a backwards range was accepted")
+	for _, args := range [][]string{
+		{"--replicas", "4-2"},
+		{"--replicas", "2", "--volume", "/data"},
+		{"--replicas", "1-3", "--volume", "/data"},
+	} {
+		if _, err := parseDeploy(args); err == nil {
+			t.Errorf("%v was accepted", args)
+		}
+	}
+	if _, err := parseDeploy([]string{"--replicas", "1", "--volume", "/data"}); err != nil {
+		t.Errorf("one copy with a volume is what every volume service is: %v", err)
+	}
+}
+
+// A copy the autoscaler asked for and that is not up yet is not a rollout:
+// the service is running on the rest.
+func TestAScaleUpIsNotStarting(t *testing.T) {
+	web := svc("web")
+	web.MinReplicas, web.MaxReplicas = 1, 5
+	web.Actual.Ready, web.Actual.Desired = 2, 3
+	if got := state(web); got != "running" {
+		t.Errorf("a range adding a copy reads %q", got)
+	}
+	fixed := svc("api")
+	fixed.MinReplicas, fixed.MaxReplicas = 3, 3
+	fixed.Actual.Ready, fixed.Actual.Desired = 2, 3
+	if got := state(fixed); got != "starting" {
+		t.Errorf("a fixed count short a copy reads %q", got)
+	}
+	web.InSync = false
+	if got := state(web); got != "starting" {
+		t.Errorf("a range the control plane calls out of sync reads %q", got)
 	}
 }
 
@@ -85,9 +118,38 @@ func TestStatusShowsReplicasOnlyWhenSomethingHasMore(t *testing.T) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
+	// By column, not by substring: every row must put its REPLICAS cell under
+	// the header, a job's and an external's included, or every column after it
+	// is shifted.
+	job := svc("nightly")
+	job.Kind = "job"
+	ext := svc("openai")
+	ext.Kind, ext.Image = "resource:external", ""
+	many.Services = append(many.Services, job, ext)
+	out = capture(t, func() { printStatusTable(many) })
+	col := -1
+	want := map[string]string{"api": "2", "web": "1-5", "nightly": "—", "openai": "—"}
 	for _, l := range strings.Split(out, "\n") {
-		if strings.Contains(l, "api") && !strings.Contains(l, " 2 ") {
-			t.Errorf("a fixed count of two did not read as 2: %q", l)
+		f := strings.Fields(l)
+		if col < 0 {
+			for i, h := range f {
+				if h == "REPLICAS" {
+					col = i + 1 // the state mark has no header
+				}
+			}
+			continue
 		}
+		if len(f) < 2 {
+			continue
+		}
+		if w, ok := want[f[1]]; ok {
+			if len(f) <= col || f[col] != w {
+				t.Errorf("%s: REPLICAS cell is not %q: %q", f[1], w, l)
+			}
+			delete(want, f[1])
+		}
+	}
+	if len(want) > 0 {
+		t.Errorf("rows not found: %v\n%s", want, out)
 	}
 }
