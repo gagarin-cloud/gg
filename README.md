@@ -229,6 +229,24 @@ into the service's stored environment, so they cannot go stale and no redeploy
 can forget them. `gg resource secrets` prints the values for anything outside the
 project that needs them.
 
+## Replicas
+
+A service runs one copy unless it says otherwise. `--replicas` on `gg deploy` or
+`gg ship` gives it a fixed count, or a range the platform scales within as its
+CPU load moves:
+
+```
+gg deploy shop/web:8080 web:v3 --replicas 3     # always three copies
+gg ship   shop/api:4000 --replicas 1-5          # one to five, by CPU
+gg deploy shop/web:8080 web:v4 --replicas 1     # back to one
+```
+
+The setting survives a deploy that omits it, like `--size`. Every copy is billed
+at its size's rate while it runs, so a range bills its minimum all the time and
+each extra copy only while it is up. At most five copies. A service with a volume
+always runs one, and resources and jobs have no replicas. `gg status` shows a
+REPLICAS column once anything in the project may run more than one.
+
 ## Postgres extensions
 
 A postgres's extensions are a set you restate, not a type you add. `--ext` on

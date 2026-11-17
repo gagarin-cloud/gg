@@ -177,6 +177,8 @@ func printStatusTable(st statusResp) {
 	// Likewise a kind column: it only earns its place once a project has
 	// something in it that is not a service — a resource, or a job.
 	anyKind := false
+	// And a replicas column once something may run more than one copy.
+	anyReplicas := false
 	// Which names in this project are externals, so an edge pointing at one can
 	// be marked where the edges are listed. Two edges in the same cell do not
 	// mean the same thing — reaching `pg` is enforced by a NetworkPolicy,
@@ -201,6 +203,9 @@ func printStatusTable(st statusResp) {
 		if runsNothing(s) && !isExternalKind(s.Kind) {
 			inert[s.Name] = true
 		}
+		if s.MaxReplicas > 1 {
+			anyReplicas = true
+		}
 	}
 
 	head := []string{"", "SERVICE"}
@@ -213,7 +218,15 @@ func printStatusTable(st statusResp) {
 	// the thing was running at, and needing a second command to find out is
 	// friction at the worst moment. It is also a price, and the total at the
 	// bottom of this page is unexplainable without it.
-	head = append(head, "SIZE", "READY", "PORT", "REACHES", "IMAGE")
+	head = append(head, "SIZE", "READY")
+	// REPLICAS only once something runs more than one copy, like VOLUME: in a
+	// project where everything is one copy it would be a column of ones. READY
+	// already says how many are up; this says how many there may be, which is
+	// the other half of the bill.
+	if anyReplicas {
+		head = append(head, "REPLICAS")
+	}
+	head = append(head, "PORT", "REACHES", "IMAGE")
 	if anyVolume {
 		head = append(head, "VOLUME")
 	}
@@ -255,22 +268,26 @@ func printStatusTable(st statusResp) {
 			// Size, readiness, port and image are all facts about a container.
 			// A dash says "not applicable" where a zero would say "zero" and
 			// send somebody looking for the pod that is not listening on it.
-			row = append(row, "—", "—", "—", reaches, "—")
+			row = append(row, "—", "—")
+			if anyReplicas {
+				row = append(row, "—")
+			}
+			row = append(row, "—", reaches, "—")
 		case isJobKind(s.Kind):
 			// A job has a run where a service has replicas, so the READY cell
 			// says how the latest run stands — and the port is a dash for the
 			// same reason an external's is: there is no listener to name.
-			row = append(row,
-				sizeLabel(s.Size), runPhase(s), "—",
-				reaches, shortImage(s.Image, st.ProjectID),
-			)
+			row = append(row, sizeLabel(s.Size), runPhase(s))
+			if anyReplicas {
+				row = append(row, "—")
+			}
+			row = append(row, "—", reaches, shortImage(s.Image, st.ProjectID))
 		default:
-			row = append(row,
-				sizeLabel(s.Size),
-				fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired),
-				fmt.Sprintf("%d", s.Port),
-				reaches, shortImage(s.Image, st.ProjectID),
-			)
+			row = append(row, sizeLabel(s.Size), fmt.Sprintf("%d/%d", s.Actual.Ready, s.Actual.Desired))
+			if anyReplicas {
+				row = append(row, replicasLabel(s))
+			}
+			row = append(row, fmt.Sprintf("%d", s.Port), reaches, shortImage(s.Image, st.ProjectID))
 		}
 		if anyVolume {
 			v := "—"
@@ -670,6 +687,17 @@ func domainLine(d domainStatus) string {
 		out += "   " + describeDomainState(d.State, d.BlockedOn)
 	}
 	return out
+}
+
+// replicasLabel is a service's replica setting as it reads in a table: "2"
+// for a fixed count, "1-5" for a range, and "1" for anything an older control
+// plane did not say, which ran one.
+func replicasLabel(s serviceStatus) string {
+	lo, hi := max(s.MinReplicas, 1), max(s.MaxReplicas, 1)
+	if hi <= lo {
+		return fmt.Sprintf("%d", lo)
+	}
+	return fmt.Sprintf("%d-%d", lo, hi)
 }
 
 // sizeLabel is the size as it should read in a table. An older control plane

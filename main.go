@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,6 +317,13 @@ type deployFlags struct {
 	// service already has, and a new service gets the default. Absent and
 	// "small" are different requests.
 	size string
+	// replicas is how many copies run, as typed: "2" for exactly two, "1-5"
+	// for the cluster to choose between one and five from CPU. minReplicas and
+	// maxReplicas are what it parsed to, and zero means unchanged, for size's
+	// reason: a redeploy that forgets --replicas must not take a service with
+	// three copies down to one.
+	replicas                 string
+	minReplicas, maxReplicas int
 	// deps is edges to add to the dependency graph, and the one field here that
 	// is not part of the artifact.
 	//
@@ -427,6 +435,11 @@ func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
 	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
 		"m (1 vCPU / 2 GB, dedicated) or l (2 vCPU / 4 GB,\n"+
 		"dedicated). Omit to keep the current size")
+	// `N` for the same reason `NAME` is on --deps: it is the placeholder.
+	fs.StringVar(&v.f.replicas, "replicas", "", "run `N` copies, or a range like 1-5 for the platform to\n"+
+		"add and remove copies with CPU load. Each copy is billed\n"+
+		"at the size's rate while it runs. Not for a service with\n"+
+		"a volume. Omit to keep the current count")
 	// Additive, and the help says so because a reader who used --needs will
 	// assume it replaces. Declaring a dependency is also what hands this service
 	// that resource's connection variables, which is worth saying here: it is
@@ -448,6 +461,15 @@ func (v *deployFlagVars) finish() (*deployFlags, error) {
 		return nil, err
 	}
 	v.f.env = env
+	// Checked before the command body for the reason dependency names are,
+	// below: a typo should not wait behind a build.
+	if v.f.replicas != "" {
+		lo, hi, err := parseReplicas(v.f.replicas)
+		if err != nil {
+			return nil, err
+		}
+		v.f.minReplicas, v.f.maxReplicas = lo, hi
+	}
 	// Dependency names are checked here rather than in deployImage, and the
 	// difference is paid for by `gg ship`: this runs before the command body, so
 	// a typo costs nothing, where a check inside deployImage would sit behind a
@@ -542,6 +564,11 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	// all rather than sent as "".
 	if f.size != "" {
 		body["size"] = f.size
+	}
+	// The pair or nothing, by the same rule.
+	if f.minReplicas > 0 {
+		body["min_replicas"] = f.minReplicas
+		body["max_replicas"] = f.maxReplicas
 	}
 	// Only when asked for, and for a sharper reason than the others: the server
 	// unions what arrives here, so an empty list would be a no-op — but sending
@@ -659,6 +686,10 @@ type serviceStatus struct {
 	Size  string `json:"size"`
 	Image string `json:"image"`
 	Port  int    `json:"port"`
+	// MinReplicas and MaxReplicas are how many copies it may run; equal for
+	// a fixed count. Zero from an older control plane, which ran one.
+	MinReplicas int `json:"min_replicas"`
+	MaxReplicas int `json:"max_replicas"`
 	// What this service is allowed to reach. Server-side truth: it is the same
 	// list that decides whether the packets arrive, not a description of it.
 	Needs        []string `json:"needs"`
@@ -1112,4 +1143,29 @@ func parseDigest(pushOutput string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// parseReplicas reads --replicas: "N" is exactly N copies, "N-M" a range the
+// platform scales within. The ceiling is the platform's to say, and it does,
+// naming it; this only refuses what could never be a count.
+func parseReplicas(s string) (lo, hi int, err error) {
+	bad := fmt.Errorf("--replicas %q: give a count like 2, or a range like 1-5", s)
+	a, b, isRange := strings.Cut(strings.TrimSpace(s), "-")
+	lo, err = strconv.Atoi(a)
+	if err != nil {
+		return 0, 0, bad
+	}
+	hi = lo
+	if isRange {
+		if hi, err = strconv.Atoi(b); err != nil {
+			return 0, 0, bad
+		}
+	}
+	if lo < 1 {
+		return 0, 0, fmt.Errorf("--replicas %q: a service runs at least one copy", s)
+	}
+	if hi < lo {
+		return 0, 0, fmt.Errorf("--replicas %q: the smaller number goes first, like %d-%d", s, hi, lo)
+	}
+	return lo, hi, nil
 }
