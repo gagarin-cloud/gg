@@ -975,6 +975,11 @@ other decision is the platform's.
   --size m   1 vCPU / 2 GB, dedicated. What a real database wants.
   --size l   2 vCPU / 4 GB, dedicated.
 
+A postgres is tuned to its size when it is created or resized: at most
+75, 140 or 150 connections at s, m or l, and a quarter of its memory as
+shared buffers at m and l. Those settings are the platform's; a query that
+needs more sort memory can SET work_mem for its own session.
+
 One instance, one volume, no failover. Postgres, qdrant and iggy are backed
 up nightly and kept fourteen days — ` + "`gg resource backups`" + ` lists them,
 and ` + "`gg resource restore`" + ` puts one back into a NEW resource. An iggy
