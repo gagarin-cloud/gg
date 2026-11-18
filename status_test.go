@@ -223,7 +223,7 @@ func TestUsageTodayIsIntegerMicroDollarsNotAFloat(t *testing.T) {
 			Services:   []serviceStatus{svc("web")},
 			UsageToday: usageToday{MicroUSD: 12_050_000}})
 	})
-	if !strings.Contains(out, "$12.0500 today so far") {
+	if !strings.Contains(out, "$12.0500 today so far (UTC)") {
 		t.Errorf("expected today's usage on screen:\n%s", out)
 	}
 }
@@ -236,7 +236,7 @@ func TestUsageTodayStaysLegibleBelowACent(t *testing.T) {
 			Services:   []serviceStatus{svc("web")},
 			UsageToday: usageToday{MicroUSD: 14_000}})
 	})
-	if !strings.Contains(out, "$0.0140 today so far") {
+	if !strings.Contains(out, "$0.0140 today so far (UTC)") {
 		t.Errorf("an hour of one service should read as $0.0140:\n%s", out)
 	}
 }
