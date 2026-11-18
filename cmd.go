@@ -1869,8 +1869,8 @@ func newUpgradeCmd() *cobra.Command {
 		Short: "upgrade gg to the latest release, the way it was installed",
 		Long: `Upgrade gg to the latest release.
 
-gg upgrades itself the way it was installed: with brew, scoop, winget or
-go install when one of those put it there, and by downloading the release
+gg upgrades itself the way it was installed: with brew, scoop or go install
+when one of those put it there, and by downloading the release
 when the install script or an archive did. A download is checked against the
 release's checksums.txt, and nothing is replaced unless it matches.
 

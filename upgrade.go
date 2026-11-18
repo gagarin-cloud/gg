@@ -57,8 +57,6 @@ func detectInstall(exe string, goInstalled bool, owner, latest string) installMe
 		return installMethod{name: "Homebrew", run: []string{"brew", "upgrade", "--cask", "gagarin-cloud/tap/gg"}}
 	case strings.Contains(p, "/scoop/apps/gg/"):
 		return installMethod{name: "Scoop", run: []string{"scoop", "update", "gg"}}
-	case strings.Contains(p, "/winget/packages/gagarin.gg"):
-		return installMethod{name: "winget", run: []string{"winget", "upgrade", "--id", "Gagarin.gg", "--exact"}}
 	case goInstalled:
 		// The tag rather than @latest: the module proxy can take a while to
 		// notice a new tag, and @latest would quietly install the old one.

@@ -36,7 +36,6 @@ the line to add. Read it first if you like:
 brew install --cask gagarin-cloud/tap/gg        # macOS
 scoop bucket add gagarin https://github.com/gagarin-cloud/scoop-bucket
 scoop install gagarin/gg                        # Windows
-winget install Gagarin.gg                       # Windows
 go install github.com/gagarin-cloud/gg@latest   # anywhere with Go
 ```
 
@@ -68,8 +67,8 @@ sha256sum --ignore-missing -c checksums.txt
 gg upgrade
 ```
 
-It upgrades the way you installed. Brew, scoop, winget and `go install` installs
-are handed to that tool. A `gg` from the install script or an archive downloads
+It upgrades the way you installed. Brew, scoop and `go install` installs are
+handed to that tool. A `gg` from the install script or an archive downloads
 the new release and checks it against `checksums.txt` before replacing itself.
 For a `.deb`, `.rpm` or `.apk`, which need root, it prints the command to run.
 `gg upgrade --dry-run` says what it would do.

@@ -183,7 +183,9 @@ func TestDetectInstall(t *testing.T) {
 		{"/opt/homebrew/Caskroom/gg/0.53.0/gg", false, "", "brew upgrade --cask gagarin-cloud/tap/gg"},
 		{"/usr/local/Caskroom/gg/0.53.0/gg", false, "", "brew upgrade --cask gagarin-cloud/tap/gg"},
 		{`C:\Users\a\scoop\apps\gg\current\gg.exe`, false, "", "scoop update gg"},
-		{`C:\Users\a\AppData\Local\Microsoft\WinGet\Packages\Gagarin.gg_Microsoft.Winget.Source_8wekyb3d8bbwe\gg.exe`, false, "", "winget upgrade --id Gagarin.gg --exact"},
+		// gg is no longer published to winget, where 0.34.1 is the newest, so
+		// `winget upgrade` would find nothing: a gg there replaces itself.
+		{`C:\Users\a\AppData\Local\Microsoft\WinGet\Packages\Gagarin.gg_Microsoft.Winget.Source_8wekyb3d8bbwe\gg.exe`, false, "", ""},
 		{"/home/a/go/bin/gg", true, "", "go install github.com/gagarin-cloud/gg@v0.54.0"},
 		{"/usr/bin/gg", false, "deb", "curl -fsSLO https://example.test/releases/download/v0.54.0/gg_0.54.0_linux_" + runtime.GOARCH + ".deb && sudo dpkg -i gg_0.54.0_linux_" + runtime.GOARCH + ".deb"},
 		{"/usr/bin/gg", false, "rpm", "sudo rpm -U https://example.test/releases/download/v0.54.0/gg_0.54.0_linux_" + runtime.GOARCH + ".rpm"},
