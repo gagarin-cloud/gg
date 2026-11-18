@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,6 +317,11 @@ type deployFlags struct {
 	// service already has, and a new service gets the default. Absent and
 	// "small" are different requests.
 	size string
+	// replicas is how many copies run: exactly two, or between one and five
+	// as the cluster chooses from CPU. Unset means unchanged, for size's
+	// reason: a redeploy that forgets --replicas must not take a service with
+	// three copies down to one.
+	replicas replicaRange
 	// deps is edges to add to the dependency graph, and the one field here that
 	// is not part of the artifact.
 	//
@@ -427,6 +433,11 @@ func bindDeployFlags(fs *pflag.FlagSet) *deployFlagVars {
 	fs.StringVar(&v.f.size, "size", "", "how much CPU and memory: s (0.5 vCPU / 1 GB, shared),\n"+
 		"m (1 vCPU / 2 GB, dedicated) or l (2 vCPU / 4 GB,\n"+
 		"dedicated). Omit to keep the current size")
+	// `N` for the same reason `NAME` is on --deps: it is the placeholder.
+	fs.Var(&v.f.replicas, "replicas", "run `N` copies, or a range like 1-5 for the platform to\n"+
+		"add and remove copies with CPU load. Each copy is billed\n"+
+		"at the size's rate while it runs. Not for a service with\n"+
+		"a volume. Omit to keep the current count")
 	// Additive, and the help says so because a reader who used --needs will
 	// assume it replaces. Declaring a dependency is also what hands this service
 	// that resource's connection variables, which is worth saying here: it is
@@ -448,6 +459,12 @@ func (v *deployFlagVars) finish() (*deployFlags, error) {
 		return nil, err
 	}
 	v.f.env = env
+	// The count itself was checked as it was parsed. This is the conflict
+	// the flags alone can show, refused here for the reason dependency names
+	// are, below: it should not wait behind a build to be told.
+	if v.f.replicas.hi > 1 && v.f.volumePath != "" {
+		return nil, fmt.Errorf("--replicas %s with --volume: a service with a volume runs one copy, because a volume can be mounted by one copy at a time", v.f.replicas.String())
+	}
 	// Dependency names are checked here rather than in deployImage, and the
 	// difference is paid for by `gg ship`: this runs before the command body, so
 	// a typo costs nothing, where a check inside deployImage would sit behind a
@@ -542,6 +559,11 @@ func deployImage(project, service string, port int, t *registryTarget, f *deploy
 	// all rather than sent as "".
 	if f.size != "" {
 		body["size"] = f.size
+	}
+	// The pair or nothing, by the same rule.
+	if f.replicas.lo > 0 {
+		body["min_replicas"] = f.replicas.lo
+		body["max_replicas"] = f.replicas.hi
 	}
 	// Only when asked for, and for a sharper reason than the others: the server
 	// unions what arrives here, so an empty list would be a no-op — but sending
@@ -659,6 +681,10 @@ type serviceStatus struct {
 	Size  string `json:"size"`
 	Image string `json:"image"`
 	Port  int    `json:"port"`
+	// MinReplicas and MaxReplicas are how many copies it may run; equal for
+	// a fixed count. Zero from an older control plane, which ran one.
+	MinReplicas int `json:"min_replicas"`
+	MaxReplicas int `json:"max_replicas"`
 	// What this service is allowed to reach. Server-side truth: it is the same
 	// list that decides whether the packets arrive, not a description of it.
 	Needs        []string `json:"needs"`
@@ -1112,4 +1138,52 @@ func parseDigest(pushOutput string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// replicaRange is --replicas: "N" is exactly N copies, "N-M" a range the
+// platform scales within. Zero is unset, and a deploy without it sends
+// nothing. A flag value rather than a string parsed later, so there is one
+// copy of the setting and a typo fails before a build. The ceiling is the
+// platform's to say, and it does, naming it; this refuses only what could
+// never be a count.
+type replicaRange struct{ lo, hi int }
+
+func (r *replicaRange) Set(s string) error {
+	bad := fmt.Errorf("--replicas %q: give a count like 2, or a range like 1-5", s)
+	a, b, isRange := strings.Cut(strings.TrimSpace(s), "-")
+	lo, ok := count(a)
+	hi, okHi := lo, true
+	if isRange {
+		hi, okHi = count(b)
+	}
+	if !ok || !okHi {
+		return bad
+	}
+	if lo < 1 {
+		return fmt.Errorf("--replicas %q: a service runs at least one copy", s)
+	}
+	if hi < lo {
+		return fmt.Errorf("--replicas %q: the smaller number goes first, like %d-%d", s, hi, lo)
+	}
+	r.lo, r.hi = lo, hi
+	return nil
+}
+
+func (r *replicaRange) String() string {
+	if r.lo == 0 {
+		return ""
+	}
+	return replicasLabel(r.lo, r.hi)
+}
+
+func (r *replicaRange) Type() string { return "N" }
+
+// count is a whole number written in digits only: strconv.Atoi would take
+// "+2", and "1--5" would read as one to minus five.
+func count(s string) (int, bool) {
+	if s == "" || strings.Trim(s, "0123456789") != "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
 }
