@@ -98,6 +98,9 @@ type recipeManifest struct {
 		VolumeSizeGB int      `json:"volume_size_gb"`
 		Deps         []string `json:"deps"`
 		Public       bool     `json:"public"`
+		// Absent is one copy, and a manifest only says otherwise when it is.
+		MinReplicas int `json:"min_replicas"`
+		MaxReplicas int `json:"max_replicas"`
 	} `json:"services"`
 	Jobs []struct {
 		Name     string   `json:"name"`
@@ -462,6 +465,9 @@ func printRecipe(r recipeResp) {
 				parts = append(parts, fmt.Sprintf(":%d", s.Port))
 			}
 			parts = sized(parts, s.Size)
+			if max(s.MaxReplicas, 1) > 1 {
+				parts = append(parts, "replicas "+replicasLabel(s.MinReplicas, s.MaxReplicas))
+			}
 			if s.Public {
 				parts = append(parts, "public")
 			}
