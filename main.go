@@ -639,7 +639,7 @@ type platformState struct {
 	Converging bool `json:"converging"`
 }
 
-// usageToday is today's accrued cost so far, folded server-side from the same
+// usageToday is the UTC day's accrued cost so far, folded server-side from the same
 // billing log a real invoice will fold from — see the API's internal/api/usage.go.
 // An estimate, not a bill: the minute a service is currently in is still
 // running, so this total only grows across a single day.

@@ -439,7 +439,7 @@ func printStatusTable(st statusResp) {
 		}
 		fmt.Printf("  %s %s: %s\n", g, s.Name, s.Actual.Message)
 	}
-	fmt.Printf("  %s today so far\n", money(st.UsageToday.MicroUSD))
+	fmt.Printf("  %s today so far (UTC)\n", money(st.UsageToday.MicroUSD))
 	fmt.Println()
 }
 
