@@ -97,8 +97,9 @@ In Claude Code, the plugin brings the skill, the MCP server, and the `setup`,
 /plugin install gagarin@gagarin-cloud
 ```
 
-The same plugin is in the Plugins Directory that ChatGPT and Codex share
-(search for Gagarin Cloud), or from the Codex CLI:
+The same plugin is in the
+[Plugins Directory](https://chatgpt.com/plugins/plugin_asdk_app_6af236f4f560819194b7c812c0dbfb41)
+that ChatGPT and Codex share, or from the Codex CLI:
 
 ```
 codex plugin marketplace add gagarin-cloud/plugin
